@@ -1,137 +1,481 @@
-## GateFlow CLI Architecture (v1)
+## GateFlow CLI Architecture (v2)
 
 This document explains how the GateFlow CLI is structured so you can extend it safely.
 
-## High-level flow
+## High-level Flow
 
-1. `src/cli/main.ts` parses CLI args (Commander), loads `.env`, and dispatches to a command.
-2. `src/cli/commands.ts` builds a `CommandContext`:
-   - detects `projectRoot`
-   - creates a single `EventBus`
-   - starts a renderer (unless `--json`)
-   - creates `PolicyEngine`, tools, indexer, diff engine, Verilator wrapper
-3. `GateFlowAgent` (Vercel AI SDK) runs a tool-calling loop:
-   - streams tokens
-   - calls tools through strongly-typed executors
-   - emits all UX output via the event bus
-4. For `fix`, a `FixLoop` orchestrates:
-   - lint → propose edits → approval → re-lint
-   - stops on success, attempt limits, or thrashing detection
+```
+┌─────────────────────────────────────────────────────────────┐
+│                     User Query                               │
+└─────────────────────────────────────────────────────────────┘
+                           │
+                           ▼
+┌─────────────────────────────────────────────────────────────┐
+│              Complexity Detection (AI SDK)                   │
+│         generateObject() with ComplexityDetectionSchema      │
+└─────────────────────────────────────────────────────────────┘
+                           │
+          ┌────────────────┴────────────────┐
+          ▼                                 ▼
+   ┌──────────────┐                ┌──────────────────┐
+   │ Simple Query │                │  Complex Query   │
+   │ Single Agent │                │   Orchestrator   │
+   └──────────────┘                └──────────────────┘
+          │                                 │
+          ▼                                 ▼
+┌─────────────────┐           ┌─────────────────────────┐
+│   streamText()  │           │   Planning Agent        │
+│   with tools    │           │   Creates ExecutionPlan │
+└─────────────────┘           └─────────────────────────┘
+                                            │
+                                            ▼
+                              ┌─────────────────────────┐
+                              │   Worker Agents         │
+                              │   Execute tasks in      │
+                              │   dependency order      │
+                              └─────────────────────────┘
+```
 
-## Modules
+## Core Components
 
-### Events: `src/events/*`
+### 1. Entry Point: `src/cli/main.ts`
 
-- **`UiEvent`**: the single renderer contract (typed union).
-- **`EventBus`**: simple pub/sub for events.
-- **Exit codes** live here as `ExitCodes` so commands can be scripted reliably.
+- Parses CLI args (Commander)
+- Loads `.env` from multiple locations
+- Dispatches to commands
 
-Design intent: core logic should not print directly; it should emit events.
+### 2. Command Context: `src/cli/commands.ts`
 
-### UI Renderer: `src/ui/renderer.ts`
+Creates a unified context including:
+- `EventBus` for all UI events
+- `PolicyEngine` for safety checks
+- `FileTools` and `EditTools`
+- `ProjectIndexer` for module discovery
+- `DiffEngine` for previews
+- `Verilator` wrapper
 
-- Responsible for:
-  - rendering status/spinners
-  - showing tool calls/results
-  - diff previews
-  - approval prompts and input handling
-- Approval input currently supports:
-  - `y/yes` (approve once)
-  - `a/all` (approve for session)
-  - `n/no` (reject)
-  - `s/skip` (reject/skip)
+### 3. Agent System: `src/agent/`
 
-If you add new UI features, prefer adding a new `UiEvent` variant rather than printing from the core.
+#### Core Agent: `src/agent/core.ts`
 
-### Policy: `src/policy/*`
+`GateFlowAgent` orchestrates the AI interaction:
 
-`PolicyEngine` enforces “hard contracts”:
+```typescript
+class GateFlowAgent {
+    private orchestrator: Orchestrator;
+    private session: AgentSession;
+    
+    async run(userMessage: string): Promise<string> {
+        // 1. Detect complexity using AI
+        const { object: complexity } = await generateObject({
+            schema: ComplexityDetectionSchema,
+            prompt: `Does this need multi-agent coordination?`
+        });
+        
+        // 2. Route to orchestrator or single-agent flow
+        if (complexity.needsMultiAgent) {
+            return this.orchestrator.executeWithPlan(userMessage);
+        }
+        
+        // 3. Single-agent: streamText with tools
+        return streamText({ ... });
+    }
+}
+```
 
-- **path safety** (project root by default; blocks dangerous paths)
-- **glob approval** (optional)
-- **tool approvals** (read-only vs. write operations)
+#### Orchestrator: `src/agent/orchestrator/Orchestrator.ts`
 
-Tools call `policy.checkTool(...)` before performing sensitive operations.
+Coordinates multiple specialized agents:
 
-### Tools: `src/tools/*`
+1. **Simple routing**: Uses `generateObject()` with `AgentRoutingSchema` to pick the best agent
+2. **Complex planning**: Creates an `ExecutionPlan` via Planning Agent
+3. **Task execution**: Runs tasks in dependency order with worker agents
 
-These are the “capability surface” the agent can use:
+```typescript
+class Orchestrator {
+    private workers: Map<string, GateFlowAgent>;
+    
+    async execute(userRequest: string): Promise<string> {
+        // AI-powered routing to best agent
+        const routing = await generateObject({ schema: AgentRoutingSchema });
+        const worker = this.workers.get(routing.selectedAgent);
+        return worker.run(routing.taskDescription);
+    }
+    
+    async executeWithPlan(userRequest: string): Promise<string> {
+        // Multi-step execution with planning
+        const plan = await createPlan(userRequest);
+        for (const task of sortByDependencies(plan.tasks)) {
+            await this.workers.get(task.agent).run(task.description);
+        }
+    }
+}
+```
 
-- `FileTools`:
-  - read/write files
-  - scan project (SV-focused globbing)
-  - search code
-  - safe path resolution relative to `projectRoot`
-- `EditTools`:
-  - line edits (`edit_lines`)
-  - search/replace
-  - diff generation for preview
+#### Worker Agents: `src/agent/workers/`
 
-If you add a new tool:
+Specialized agents created via factory pattern:
 
-- add implementation in `src/tools/`
-- add schema + executor in `src/agent/tools.ts`
-- add policy entry in `src/policy/types.ts` / overrides as needed
-- emit `tool_call`, `tool_result`, and optionally `diff_preview` / `approval_request`
+| Agent | Role | Tools Focus |
+|-------|------|-------------|
+| `understanding` | Code analysis | `read_file`, `find_module`, `search_code` |
+| `codegen` | New RTL creation | `write_file`, `lint_file` |
+| `testbench` | Verification code | `write_file`, `read_file`, `run_simulation` |
+| `debug` | Failure diagnosis | `read_file`, `lint_file`, `run_simulation` |
+| `refactoring` | Code modification | `edit_lines`, `search_replace` |
 
-### Agent: `src/agent/*`
+#### Agent Factory: `src/agent/workers/agentFactory.ts`
 
-- Uses **Vercel AI SDK** (`ai`) with the **Anthropic provider** (`@ai-sdk/anthropic`).
-- Runs a multi-step tool calling loop (`streamText` with `maxSteps`).
-- Maintains an in-memory session (no raw file content persistence by default).
+```typescript
+function createAgent(config: AgentConfig): GateFlowAgent {
+    return {
+        name: config.name,
+        system: new PromptBuilder()
+            .addRole(config.role)
+            .addExpertise(config.expertise)
+            .addConstraints(config.constraints)
+            .build(),
+        tools: config.tools,
+        maxSteps: config.maxSteps || 10,
+        toolChoice: 'auto'
+    };
+}
+```
 
-The system prompt is SV-oriented and encourages:
+### 4. Prompt System: `src/agent/prompts/`
 
-- file discovery via `find_all_sv_files`
-- targeted edits over full rewrites
-- lint after edits
+#### PromptBuilder: Composable Prompts
 
-### Project Index: `src/context/*`
+```typescript
+const prompt = new PromptBuilder()
+    .addBase('You are GateFlow...')
+    .addRole('SystemVerilog expert')
+    .addConstraint('Never invent file contents')
+    .addTask('Generate a counter module')
+    .build();
+```
 
-`ProjectIndexer` builds a pragmatic regex-based index for v1:
+#### Presets: `src/agent/prompts/presets/`
 
-- modules
-- packages
-- interfaces
-- basic imports/includes (best-effort)
+- `general.prompt.ts` - Exploration mode
+- `lintFix.prompt.ts` - Error fixing
+- `testbench.prompt.ts` - TB generation
 
-It’s designed to be “good enough” for navigation and prompting, not a full compiler.
+### 5. Thinking Chain: `src/agent/reasoning/ThinkingChain.ts`
 
-### Diff/Patch: `src/diff/*`
+Tracks agent reasoning for visibility:
 
-Used to:
+```typescript
+class ThinkingChain {
+    // Hooks into AI SDK's onStepFinish callback
+    onStepFinish(step: StepResult): void {
+        const category = this.categorizeStep(step);
+        this.bus.emit({
+            type: 'thought',
+            category,
+            thought: step.text
+        });
+    }
+}
+```
 
-- generate unified diffs for previews
-- apply patches safely (and optionally via git when available)
+Categories: `analyzing`, `planning`, `generating`, `verifying`, `fixing`, `decomposing`, `coordinating`
 
-### Verification: `src/verification/*`
+## Event System: `src/events/`
 
-- `Verilator`:
-  - lint
-  - optional WSL execution on Windows when `VERILATOR_PATH` looks like a Unix path
-  - parses errors and maps WSL paths back to Windows paths
-- `FixLoop`:
-  - lint/fix retry strategy
-  - attempt memory + thrashing detection
+### Event Types
 
-### Watch mode: `src/watch/*`
+```typescript
+type UiEvent =
+    // Streaming
+    | TokenEvent | TokenDoneEvent
+    // Status
+    | StatusEvent
+    // Tools
+    | ToolCallEvent | ToolResultEvent
+    // Approvals
+    | DiffPreviewEvent | ApprovalRequestEvent | ApprovalResponseEvent
+    // Multi-agent
+    | AgentStartEvent | AgentCompleteEvent | DelegationEvent
+    // Thinking
+    | ThinkingStepEvent
+    // ...more
+```
 
-`WatchManager` uses `chokidar` to watch patterns and re-run lint/index updates.
+### EventBus
 
-## Where to add features safely
+Simple pub/sub for decoupling:
 
-- **New SV-aware operation** (format, include graph, module rename):
-  - implement in `src/tools/`
-  - register in `src/agent/tools.ts`
-  - update policy rules
-  - add renderer events if the UX needs it
+```typescript
+bus.emit({ type: 'agent_start', agentName: 'codegen', task: '...' });
+bus.subscribe(event => renderer.handle(event));
+```
 
-- **More accurate parsing**:
-  - extend `src/context/parser.ts`
-  - keep it fast and tolerant; v1 is intentionally regex-based
+## Tool System: `src/agent/tools.ts`
 
-- **Non-interactive automation**:
-  - extend JSON outputs for commands
-  - preserve exit code semantics
+### Tool Catalog
 
+All tools defined with AI SDK's `tool()` helper:
 
+```typescript
+const tools = {
+    read_file: tool({
+        description: 'Read a SystemVerilog file',
+        parameters: z.object({ path: z.string() }),
+        execute: async ({ path }) => ctx.fileTools.readFile(path)
+    }),
+    // ... 9 tools total
+};
+```
+
+### Available Tools
+
+| Tool | Purpose | Returns |
+|------|---------|---------|
+| `read_file` | Read file contents | `{ content, lines }` |
+| `write_file` | Create/overwrite file | `{ path, created }` |
+| `edit_lines` | Line-based edits | `{ applied, stats }` |
+| `search_replace` | Pattern replacement | `{ replacements }` |
+| `list_files` | Directory listing | `{ files[] }` |
+| `search_code` | Regex search | `{ matches[] }` |
+| `find_module` | Module lookup | `{ name, file, ports }` |
+| `get_dependencies` | Dependency graph | `{ compilationOrder }` |
+| `lint_file` | Verilator lint | `{ errors, warnings }` |
+| `run_simulation` | Simulate design | `{ success, stdout }` |
+
+## File Operations: `src/fileops/`
+
+### FileTools: `src/fileops/file.ts`
+
+- Safe path resolution (project root enforcement)
+- SV-focused file scanning
+- Code search with regex sanitization
+
+### EditTools: `src/fileops/edit.ts`
+
+- Line-based editing
+- Search/replace with diff preview
+- Policy-aware (requires approval for writes)
+
+## Policy System: `src/approval/`
+
+### PolicyEngine
+
+Enforces safety contracts:
+
+```typescript
+class PolicyEngine {
+    async checkTool(toolName: string, args: any): Promise<ApprovalResult> {
+        // Path safety (inside project root)
+        // Tool-specific rules (read vs write)
+        // User approval if required
+    }
+}
+```
+
+### Approval Flow
+
+1. Tool requests approval via `PolicyEngine`
+2. `DiffPreviewEvent` emitted for visual diff
+3. `ApprovalRequestEvent` prompts user
+4. User responds: `Y` (once), `A` (all), `N` (reject), `S` (skip)
+
+## Project Indexer: `src/indexer/`
+
+### ProjectIndexer
+
+Regex-based index for fast module discovery:
+
+```typescript
+interface ModuleInfo {
+    name: string;
+    file: string;
+    line: number;
+    ports: Port[];
+    parameters: Parameter[];
+    instantiates: string[];
+}
+```
+
+Features:
+- Incremental updates on file changes
+- Dependency graph building
+- Include path resolution
+
+## Verification: `src/verification/`
+
+### Verilator Integration
+
+```typescript
+class Verilator {
+    async lint(file: string): Promise<LintResult>;
+    async simulate(top: string, options): Promise<SimResult>;
+}
+```
+
+- WSL support on Windows (auto-detects Unix paths)
+- Error parsing with file/line extraction
+- VCD file generation for waveforms
+
+### Fix Loop: `src/verification/fix-loop.ts`
+
+Iterative lint-fix cycle:
+
+1. Lint file
+2. Ask agent to propose fixes
+3. Show diff, require approval
+4. Apply changes
+5. Re-lint until clean or thrashing detected
+
+## UI Renderer: `src/ui/renderer.ts`
+
+Handles all visual output:
+
+- Token streaming (60fps buffered)
+- Spinner management
+- Diff previews (colorized)
+- Approval prompts
+- Agent lifecycle events
+- Thinking step display
+
+## Type System: `src/types/agent-shared.ts`
+
+### Zod Schemas
+
+```typescript
+// AI routing decisions
+const AgentRoutingSchema = z.object({
+    selectedAgent: z.enum(['understanding', 'codegen', 'testbench', 'debug', 'refactoring']),
+    taskDescription: z.string(),
+    reasoning: z.string()
+});
+
+// Execution planning
+const ExecutionPlanSchema = z.object({
+    planType: z.enum(['single_file', 'multi_file', 'analysis_only']),
+    tasks: z.array(TaskSchema),
+    estimatedSteps: z.number(),
+    confidence: z.number()
+});
+```
+
+## Configuration: `src/config/`
+
+### ConfigManager
+
+Loads from multiple locations:
+
+1. `~/.gateflowrc.json` (user global)
+2. `.gaterc.json` (project root)
+3. Environment variables
+
+```typescript
+interface GateFlowConfig {
+    llm: { model, maxTokens, temperature };
+    tools: { safeMode, autoApprove };
+    project: { includePaths, excludePaths };
+    ux: { showThinking, streamTokens };
+}
+```
+
+## Directory Structure
+
+```
+cli/src/
+├── agent/                 # AI agent system
+│   ├── orchestrator/      # Multi-agent coordination
+│   ├── workers/           # Specialized agents
+│   ├── prompts/           # PromptBuilder & presets
+│   ├── reasoning/         # ThinkingChain
+│   ├── core.ts            # GateFlowAgent
+│   └── tools.ts           # Tool definitions
+├── approval/              # Policy & approval system
+├── cli/                   # CLI commands & entry
+├── config/                # Configuration management
+├── diff/                  # Diff generation
+├── error/                 # Error recovery
+├── events/                # Event bus & types
+├── fileops/               # File operations
+├── indexer/               # Project indexing
+├── memory/                # Session memory
+├── types/                 # Shared TypeScript types
+├── ui/                    # Terminal renderer
+├── verification/          # Verilator integration
+└── watch/                 # File watching
+```
+
+## Extending GateFlow
+
+### Adding a New Tool
+
+1. Add schema in `src/agent/tools.ts`:
+```typescript
+const myToolSchema = z.object({ param: z.string() });
+```
+
+2. Add executor:
+```typescript
+my_tool: tool({
+    description: '...',
+    parameters: myToolSchema,
+    execute: async (args) => { ... }
+})
+```
+
+3. Add policy rules in `src/approval/types.ts`
+
+4. Add event types if needed in `src/events/types.ts`
+
+### Adding a New Worker Agent
+
+1. Create `src/agent/workers/MyAgent.ts`:
+```typescript
+export function createMyAgent(tools: ToolSet): GateFlowAgent {
+    return createAgent({
+        name: 'myagent',
+        role: 'Expert in ...',
+        expertise: '...',
+        constraints: ['...'],
+        tools: filterTools(tools, ['read_file', 'write_file'])
+    });
+}
+```
+
+2. Register in `src/agent/core.ts`:
+```typescript
+this.orchestrator.registerWorker('myagent', createMyAgent(tools));
+```
+
+3. Add to `AgentRoutingSchema` enum in `src/types/agent-shared.ts`
+
+### Adding a New Event Type
+
+1. Define in `src/events/types.ts`:
+```typescript
+export interface MyEvent extends BaseEvent {
+    type: 'my_event';
+    data: string;
+}
+```
+
+2. Add to `UiEvent` union
+
+3. Handle in `src/ui/renderer.ts`:
+```typescript
+case 'my_event':
+    this.handleMyEvent(event.data);
+    break;
+```
+
+## Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | Success |
+| 1 | Lint failed |
+| 2 | User rejected change |
+| 3 | Tool error |
+| 4 | Config error |
+| 5 | Network error |
+| 6 | Timeout |
+| 7 | Watch error |
