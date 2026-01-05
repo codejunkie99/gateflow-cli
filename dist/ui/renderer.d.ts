@@ -65,14 +65,25 @@ export declare class TerminalRenderer {
     private handleFileChange;
     private handleSimStage;
     private handleSimProgress;
+    /**
+     * Handle thinking step events (verbose mode only)
+     */
     private handleThought;
+    /**
+     * Handle agent start events
+     */
     private handleAgentStart;
+    /**
+     * Handle agent completion events
+     */
     private handleAgentComplete;
+    /**
+     * Handle task delegation events
+     */
     private handleDelegation;
-    private getAgentColor;
-    private handleJsonMode;
     private formatDuration;
     private makeProgressBar;
+    private handleJsonMode;
 }
 /**
  * Create and start a renderer for the given event bus

@@ -339,63 +339,58 @@ export class TerminalRenderer {
         }
     }
     // ========================================================================
-    // Thinking/Agent Events
+    // Multi-Agent Events
     // ========================================================================
+    /**
+     * Handle thinking step events (verbose mode only)
+     */
     handleThought(stepNumber, category, thought, confidence) {
-        const icons = {
-            analyzing: '🔍',
-            planning: '📋',
-            decomposing: '🔨',
-            coordinating: '🤝',
-            generating: '⚡',
-            validating: '✓',
-            fixing: '🔧'
+        // Only show thinking in verbose mode
+        if (!this.options.verbose)
+            return;
+        const prefixes = {
+            analyzing: '[ANALYZING]',
+            planning: '[PLANNING]',
+            decomposing: '[DECOMPOSING]',
+            coordinating: '[COORDINATING]',
+            generating: '[GENERATING]',
+            validating: '[VALIDATING]',
+            fixing: '[FIXING]'
         };
-        const icon = icons[category] || '•';
-        const confStr = confidence !== undefined ? chalk.gray(` (${Math.round(confidence * 100)}%)`) : '';
-        console.log(chalk.gray(`  ${icon} [${stepNumber}] ${thought}${confStr}`));
+        const prefix = prefixes[category] || '[THINKING]';
+        const confStr = confidence !== undefined ? chalk.gray(` ${Math.round(confidence * 100)}%`) : '';
+        console.log(chalk.gray(`  ${prefix} ${thought}${confStr}`));
     }
+    /**
+     * Handle agent start events
+     */
     handleAgentStart(agentName, task) {
         this.stopSpinner();
-        const agentColor = this.getAgentColor(agentName);
         console.log(chalk.cyan('[') +
-            agentColor.bold(agentName) +
+            chalk.white.bold(agentName) +
             chalk.cyan('] ') +
-            chalk.white(`Starting: ${task}`));
+            chalk.white(task));
     }
+    /**
+     * Handle agent completion events
+     */
     handleAgentComplete(agentName, success, durationMs) {
-        const agentColor = this.getAgentColor(agentName);
-        const statusIcon = success ? '✓' : '✗';
+        const statusIcon = success ? '[OK]' : '[FAIL]';
+        const statusColor = success ? chalk.green : chalk.red;
         const durationStr = this.formatDuration(durationMs);
-        console.log(chalk.gray('  │ ') +
-            (success ? chalk.green : chalk.red)(`${statusIcon} Completed`) +
-            chalk.gray(` (${durationStr})`));
+        console.log(chalk.gray('  ') +
+            statusColor(statusIcon) +
+            chalk.gray(` ${agentName} (${durationStr})`));
     }
+    /**
+     * Handle task delegation events
+     */
     handleDelegation(from, to, taskType) {
-        console.log(chalk.gray(`  └─ `) +
-            chalk.cyan(`${from}`) +
+        console.log(chalk.gray('  └─ ') +
+            chalk.cyan(from) +
             chalk.gray(' → ') +
-            chalk.cyan(`${to}`) +
-            chalk.gray(`: ${taskType}`));
-    }
-    getAgentColor(agentName) {
-        const colors = {
-            'planning': chalk.blue,
-            'understanding': chalk.cyan,
-            'codegen': chalk.green,
-            'refactoring': chalk.yellow,
-            'testbench': chalk.magenta,
-            'debug': chalk.red
-        };
-        return colors[agentName] || chalk.white;
-    }
-    // ========================================================================
-    // JSON Mode
-    // ========================================================================
-    handleJsonMode(event) {
-        // Serialize with BigInt support
-        const json = JSON.stringify(event, (_, value) => typeof value === 'bigint' ? value.toString() : value);
-        console.log(json);
+            chalk.cyan(to) +
+            chalk.gray(` [${taskType}]`));
     }
     // ========================================================================
     // Utilities
@@ -411,6 +406,14 @@ export class TerminalRenderer {
         const filled = Math.round(width * percent / 100);
         const empty = width - filled;
         return '[' + '█'.repeat(filled) + '░'.repeat(empty) + ']';
+    }
+    // ========================================================================
+    // JSON Mode
+    // ========================================================================
+    handleJsonMode(event) {
+        // Serialize with BigInt support
+        const json = JSON.stringify(event, (_, value) => typeof value === 'bigint' ? value.toString() : value);
+        console.log(json);
     }
 }
 // ============================================================================
