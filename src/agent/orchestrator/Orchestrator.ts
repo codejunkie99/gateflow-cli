@@ -10,7 +10,7 @@ import { z } from 'zod';
 import type { EventBus } from '../../events/index.js';
 import type { GateFlowAgent, ExecutionPlan, Task, AgentRouting, ComplexityDetection } from '../../types/agent-shared.js';
 import { AgentRoutingSchema, ComplexityDetectionSchema } from '../../types/agent-shared.js';
-import { createPlan } from '../specialized/PlanningAgent.js';
+import { createPlan } from '../workers/PlanningAgent.js';
 import { ThinkingChain } from '../reasoning/ThinkingChain.js';
 
 export class Orchestrator {

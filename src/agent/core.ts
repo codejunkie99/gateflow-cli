@@ -11,7 +11,7 @@ import type { ToolContext, getToolSpecs } from './tools.js';
 import { createToolExecutors } from './tools.js';
 import { getSystemPrompt, detectMode, type PromptMode, type DetectModeContext } from './prompts.js';
 import { ThinkingChain } from './reasoning/ThinkingChain.js';
-import { Orchestrator } from './coordinator/Orchestrator.js';
+import { Orchestrator } from './orchestrator/Orchestrator.js';
 import { ComplexityDetectionSchema } from '../types/agent-shared.js';
 import {
     createUnderstandingAgent,
@@ -19,7 +19,7 @@ import {
     createTestbenchAgent,
     createDebugAgent,
     createRefactoringAgent
-} from './specialized/index.js';
+} from './workers/index.js';
 
 // ============================================================================
 // Types

@@ -6,7 +6,7 @@
 import chokidar, { type FSWatcher } from 'chokidar';
 import path from 'path';
 import type { EventBus } from '../events/index.js';
-import type { ProjectIndexer } from '../context/index.js';
+import type { ProjectIndexer } from '../indexer/index.js';
 import type { Verilator } from '../verification/index.js';
 
 // ============================================================================

@@ -35,7 +35,7 @@ describe('Integration Tests', () => {
     });
     describe('Agent Creation', () => {
         it('should create all specialized agents', async () => {
-            const { createUnderstandingAgent, createCodeGenAgent, createTestbenchAgent, createDebugAgent, createRefactoringAgent } = await import('../agent/specialized/index.js');
+            const { createUnderstandingAgent, createCodeGenAgent, createTestbenchAgent, createDebugAgent, createRefactoringAgent } = await import('../agent/workers/index.js');
             const mockTools = {};
             const understanding = createUnderstandingAgent(mockTools);
             expect(understanding.name).toBe('understanding');

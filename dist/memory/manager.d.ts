@@ -3,7 +3,7 @@
  * Persistent project context with atomic writes and locking
  */
 import type { EventBus } from '../events/index.js';
-import type { ApprovalGrant } from '../policy/index.js';
+import type { ApprovalGrant } from '../approval/index.js';
 export interface ProjectMemory {
     version: number;
     projectId: string;

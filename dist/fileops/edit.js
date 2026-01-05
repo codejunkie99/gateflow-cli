@@ -2,84 +2,35 @@
  * Edit Tools
  * Line-based and search/replace edits with diff preview
  */
-
 import fs from 'fs/promises';
 import path from 'path';
 import { createTwoFilesPatch } from 'diff';
-import type { EventBus } from '../events/bus.js';
-import type { PolicyEngine } from '../policy/engine.js';
 import { requestApprovalSync, shouldAutoApprove, isApproved } from './approval.js';
-
-// ============================================================================
-// Types
-// ============================================================================
-
-export interface EditLinesResult {
-    success: boolean;
-    path: string;
-    diff?: string;
-    stats?: {
-        added: number;
-        removed: number;
-    };
-    error?: string;
-    applied?: boolean;
-}
-
-export interface SearchReplaceResult {
-    success: boolean;
-    path: string;
-    replacements: number;
-    diff?: string;
-    stats?: {
-        added: number;
-        removed: number;
-    };
-    error?: string;
-    applied?: boolean;
-}
-
-export interface EditOperation {
-    startLine: number;
-    endLine: number;
-    newContent: string;
-}
-
 // ============================================================================
 // Edit Tools Class
 // ============================================================================
-
 export class EditTools {
-    constructor(
-        private bus: EventBus,
-        private policy: PolicyEngine,
-        private projectRoot: string = process.cwd()
-    ) {}
-
-    private resolvePath(filePath: string): string {
+    bus;
+    policy;
+    projectRoot;
+    constructor(bus, policy, projectRoot = process.cwd()) {
+        this.bus = bus;
+        this.policy = policy;
+        this.projectRoot = projectRoot;
+    }
+    resolvePath(filePath) {
         if (path.isAbsolute(filePath)) {
             return filePath;
         }
         return path.resolve(this.projectRoot, filePath);
     }
-
     // ========================================================================
     // Edit Lines
     // ========================================================================
-
-    async editLines(
-        filePath: string,
-        edits: EditOperation[],
-        options?: {
-            skipApproval?: boolean;
-            dryRun?: boolean;
-        }
-    ): Promise<EditLinesResult> {
+    async editLines(filePath, edits, options) {
         const absolutePath = this.resolvePath(filePath);
-
         // Policy check
         const decision = this.policy.checkTool('edit_lines', { filePath: absolutePath });
-
         if (!decision.allowed) {
             return {
                 success: false,
@@ -87,22 +38,18 @@ export class EditTools {
                 error: decision.reason ?? 'Edit not allowed by policy'
             };
         }
-
         this.bus.emit({
             type: 'tool_call',
             tool: 'edit_lines',
             argsSummary: `${path.basename(filePath)} (${edits.length} edit${edits.length === 1 ? '' : 's'})`,
             args: { filePath, editCount: edits.length }
         });
-
         try {
             // Read original file
             const originalContent = await fs.readFile(absolutePath, 'utf-8');
             const originalLines = originalContent.split('\n');
-
             // Sort edits by line number (descending to apply from bottom up)
             const sortedEdits = [...edits].sort((a, b) => b.startLine - a.startLine);
-
             // Validate edits
             for (const edit of sortedEdits) {
                 if (edit.startLine < 1 || edit.endLine > originalLines.length) {
@@ -120,33 +67,17 @@ export class EditTools {
                     };
                 }
             }
-
             // Apply edits
             const newLines = [...originalLines];
             for (const edit of sortedEdits) {
                 const newContentLines = edit.newContent.split('\n');
-                newLines.splice(
-                    edit.startLine - 1,
-                    edit.endLine - edit.startLine + 1,
-                    ...newContentLines
-                );
+                newLines.splice(edit.startLine - 1, edit.endLine - edit.startLine + 1, ...newContentLines);
             }
-
             const newContent = newLines.join('\n');
-
             // Generate diff
-            const diff = createTwoFilesPatch(
-                filePath,
-                filePath,
-                originalContent,
-                newContent,
-                'original',
-                'modified'
-            );
-
+            const diff = createTwoFilesPatch(filePath, filePath, originalContent, newContent, 'original', 'modified');
             // Calculate stats
             const stats = this.calculateDiffStats(originalLines.length, newLines.length, diff);
-
             // Emit diff preview
             this.bus.emit({
                 type: 'diff_preview',
@@ -154,7 +85,6 @@ export class EditTools {
                 unifiedDiff: diff,
                 stats
             });
-
             // Dry run - don't apply
             if (options?.dryRun) {
                 this.bus.emit({
@@ -163,7 +93,6 @@ export class EditTools {
                     ok: true,
                     summary: `Dry run: ${stats.added} added, ${stats.removed} removed`
                 });
-
                 return {
                     success: true,
                     path: absolutePath,
@@ -172,18 +101,11 @@ export class EditTools {
                     applied: false
                 };
             }
-
             // Request approval if required (synchronous to avoid deadlock)
             if (decision.requiresApproval && !options?.skipApproval) {
                 const autoApprove = shouldAutoApprove(filePath) || isApproved('edit_lines');
-                
                 if (!autoApprove) {
-                    const approval = requestApprovalSync(
-                        'edit_lines',
-                        `Edit ${edits.length} region(s) in ${filePath}`,
-                        { diff }
-                    );
-
+                    const approval = requestApprovalSync('edit_lines', `Edit ${edits.length} region(s) in ${filePath}`, { diff });
                     if (!approval.approved) {
                         this.bus.emit({
                             type: 'tool_result',
@@ -191,7 +113,6 @@ export class EditTools {
                             ok: false,
                             summary: 'User rejected'
                         });
-
                         return {
                             success: false,
                             path: absolutePath,
@@ -201,23 +122,19 @@ export class EditTools {
                             applied: false
                         };
                     }
-
                     if (approval.scope === 'session') {
                         this.policy.grantApproval('edit_lines', 'session', filePath);
                     }
                 }
             }
-
             // Apply changes
             await fs.writeFile(absolutePath, newContent, 'utf-8');
-
             this.bus.emit({
                 type: 'tool_result',
                 tool: 'edit_lines',
                 ok: true,
                 summary: `Applied: ${stats.added} added, ${stats.removed} removed`
             });
-
             return {
                 success: true,
                 path: absolutePath,
@@ -225,17 +142,15 @@ export class EditTools {
                 stats,
                 applied: true
             };
-
-        } catch (error) {
+        }
+        catch (error) {
             const errorMsg = error instanceof Error ? error.message : String(error);
-
             this.bus.emit({
                 type: 'tool_result',
                 tool: 'edit_lines',
                 ok: false,
                 summary: `Failed: ${errorMsg}`
             });
-
             return {
                 success: false,
                 path: absolutePath,
@@ -243,28 +158,13 @@ export class EditTools {
             };
         }
     }
-
     // ========================================================================
     // Search and Replace
     // ========================================================================
-
-    async searchReplace(
-        filePath: string,
-        search: string,
-        replace: string,
-        options?: {
-            all?: boolean;
-            isRegex?: boolean;
-            caseSensitive?: boolean;
-            skipApproval?: boolean;
-            dryRun?: boolean;
-        }
-    ): Promise<SearchReplaceResult> {
+    async searchReplace(filePath, search, replace, options) {
         const absolutePath = this.resolvePath(filePath);
-
         // Policy check
         const decision = this.policy.checkTool('search_replace', { filePath: absolutePath });
-
         if (!decision.allowed) {
             return {
                 success: false,
@@ -273,34 +173,30 @@ export class EditTools {
                 error: decision.reason ?? 'Edit not allowed by policy'
             };
         }
-
         this.bus.emit({
             type: 'tool_call',
             tool: 'search_replace',
             argsSummary: `"${search}" → "${replace}" in ${path.basename(filePath)}`,
             args: { filePath, search, replace, all: options?.all }
         });
-
         try {
             // Read original file
             const originalContent = await fs.readFile(absolutePath, 'utf-8');
-
             // Build regex
-            let regex: RegExp;
+            let regex;
             if (options?.isRegex) {
                 const flags = (options?.caseSensitive ? '' : 'i') + (options?.all ? 'g' : '');
                 regex = new RegExp(search, flags);
-            } else {
+            }
+            else {
                 // Escape special characters for literal search
                 const escaped = search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
                 const flags = (options?.caseSensitive ? '' : 'i') + (options?.all ? 'g' : '');
                 regex = new RegExp(escaped, flags);
             }
-
             // Count replacements
             const matches = originalContent.match(new RegExp(regex.source, regex.flags + 'g'));
             const replacementCount = options?.all ? (matches?.length ?? 0) : (matches ? 1 : 0);
-
             if (replacementCount === 0) {
                 this.bus.emit({
                     type: 'tool_result',
@@ -308,7 +204,6 @@ export class EditTools {
                     ok: true,
                     summary: 'No matches found'
                 });
-
                 return {
                     success: true,
                     path: absolutePath,
@@ -316,27 +211,16 @@ export class EditTools {
                     applied: false
                 };
             }
-
             // Apply replacement
             const newContent = options?.all
                 ? originalContent.replace(new RegExp(regex.source, regex.flags), replace)
                 : originalContent.replace(regex, replace);
-
             // Generate diff
-            const diff = createTwoFilesPatch(
-                filePath,
-                filePath,
-                originalContent,
-                newContent,
-                'original',
-                'modified'
-            );
-
+            const diff = createTwoFilesPatch(filePath, filePath, originalContent, newContent, 'original', 'modified');
             // Calculate stats
             const originalLineCount = originalContent.split('\n').length;
             const newLineCount = newContent.split('\n').length;
             const stats = this.calculateDiffStats(originalLineCount, newLineCount, diff);
-
             // Emit diff preview
             this.bus.emit({
                 type: 'diff_preview',
@@ -344,7 +228,6 @@ export class EditTools {
                 unifiedDiff: diff,
                 stats
             });
-
             // Dry run
             if (options?.dryRun) {
                 this.bus.emit({
@@ -353,7 +236,6 @@ export class EditTools {
                     ok: true,
                     summary: `Dry run: ${replacementCount} replacement(s)`
                 });
-
                 return {
                     success: true,
                     path: absolutePath,
@@ -363,18 +245,11 @@ export class EditTools {
                     applied: false
                 };
             }
-
             // Request approval if required (synchronous to avoid deadlock)
             if (decision.requiresApproval && !options?.skipApproval) {
                 const autoApprove = shouldAutoApprove(filePath) || isApproved('search_replace');
-                
                 if (!autoApprove) {
-                    const approval = requestApprovalSync(
-                        'search_replace',
-                        `Replace ${replacementCount} occurrence(s) in ${filePath}`,
-                        { diff }
-                    );
-
+                    const approval = requestApprovalSync('search_replace', `Replace ${replacementCount} occurrence(s) in ${filePath}`, { diff });
                     if (!approval.approved) {
                         this.bus.emit({
                             type: 'tool_result',
@@ -382,7 +257,6 @@ export class EditTools {
                             ok: false,
                             summary: 'User rejected'
                         });
-
                         return {
                             success: false,
                             path: absolutePath,
@@ -393,23 +267,19 @@ export class EditTools {
                             applied: false
                         };
                     }
-
                     if (approval.scope === 'session') {
                         this.policy.grantApproval('search_replace', 'session', filePath);
                     }
                 }
             }
-
             // Apply changes
             await fs.writeFile(absolutePath, newContent, 'utf-8');
-
             this.bus.emit({
                 type: 'tool_result',
                 tool: 'search_replace',
                 ok: true,
                 summary: `Replaced ${replacementCount} occurrence(s)`
             });
-
             return {
                 success: true,
                 path: absolutePath,
@@ -418,17 +288,15 @@ export class EditTools {
                 stats,
                 applied: true
             };
-
-        } catch (error) {
+        }
+        catch (error) {
             const errorMsg = error instanceof Error ? error.message : String(error);
-
             this.bus.emit({
                 type: 'tool_result',
                 tool: 'search_replace',
                 ok: false,
                 summary: `Failed: ${errorMsg}`
             });
-
             return {
                 success: false,
                 path: absolutePath,
@@ -437,83 +305,41 @@ export class EditTools {
             };
         }
     }
-
     // ========================================================================
     // Insert Lines
     // ========================================================================
-
-    async insertLines(
-        filePath: string,
-        afterLine: number,
-        content: string,
-        options?: {
-            skipApproval?: boolean;
-            dryRun?: boolean;
-        }
-    ): Promise<EditLinesResult> {
-        return this.editLines(
-            filePath,
-            [{
+    async insertLines(filePath, afterLine, content, options) {
+        return this.editLines(filePath, [{
                 startLine: afterLine + 1,
                 endLine: afterLine, // Empty range = insert
                 newContent: content
-            }],
-            options
-        );
+            }], options);
     }
-
     // ========================================================================
     // Delete Lines
     // ========================================================================
-
-    async deleteLines(
-        filePath: string,
-        startLine: number,
-        endLine: number,
-        options?: {
-            skipApproval?: boolean;
-            dryRun?: boolean;
-        }
-    ): Promise<EditLinesResult> {
-        return this.editLines(
-            filePath,
-            [{
+    async deleteLines(filePath, startLine, endLine, options) {
+        return this.editLines(filePath, [{
                 startLine,
                 endLine,
                 newContent: '' // Empty content = delete
-            }],
-            options
-        );
+            }], options);
     }
-
     // ========================================================================
     // Replace File Content
     // ========================================================================
-
-    async replaceContent(
-        filePath: string,
-        newContent: string,
-        options?: {
-            skipApproval?: boolean;
-            dryRun?: boolean;
-        }
-    ): Promise<EditLinesResult> {
+    async replaceContent(filePath, newContent, options) {
         const absolutePath = this.resolvePath(filePath);
-
         try {
             const originalContent = await fs.readFile(absolutePath, 'utf-8');
             const lineCount = originalContent.split('\n').length;
-
-            return this.editLines(
-                filePath,
-                [{
+            return this.editLines(filePath, [{
                     startLine: 1,
                     endLine: lineCount,
                     newContent
-                }],
-                options
-            );
-        } catch (error) {
+                }], options);
+        }
+        catch (error) {
             return {
                 success: false,
                 path: absolutePath,
@@ -521,48 +347,28 @@ export class EditTools {
             };
         }
     }
-
     // ========================================================================
     // Helpers
     // ========================================================================
-
-    private calculateDiffStats(
-        originalLines: number,
-        newLines: number,
-        diff: string
-    ): { added: number; removed: number } {
+    calculateDiffStats(originalLines, newLines, diff) {
         // Count +/- lines in diff (excluding header lines)
         const lines = diff.split('\n');
         let added = 0;
         let removed = 0;
-
         for (const line of lines) {
             if (line.startsWith('+') && !line.startsWith('+++')) {
                 added++;
-            } else if (line.startsWith('-') && !line.startsWith('---')) {
+            }
+            else if (line.startsWith('-') && !line.startsWith('---')) {
                 removed++;
             }
         }
-
         return { added, removed };
     }
-
     /**
      * Generate a unified diff between two strings
      */
-    generateDiff(
-        filePath: string,
-        original: string,
-        modified: string
-    ): string {
-        return createTwoFilesPatch(
-            filePath,
-            filePath,
-            original,
-            modified,
-            'original',
-            'modified'
-        );
+    generateDiff(filePath, original, modified) {
+        return createTwoFilesPatch(filePath, filePath, original, modified, 'original', 'modified');
     }
 }
-
