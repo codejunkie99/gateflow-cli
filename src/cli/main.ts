@@ -45,7 +45,6 @@ ${chalk.blue.bold(' ██║   ██║██╔══██║   ██║   
 ${chalk.blue.bold(' ╚██████╔╝██║  ██║   ██║   ███████╗██║     ███████╗╚██████╔╝╚███╔███╔╝')}
 ${chalk.blue.bold('  ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚══════╝╚═╝     ╚══════╝ ╚═════╝  ╚══╝╚══╝')}
 ${chalk.cyan('                AI-powered SystemVerilog Assistant')}
-${chalk.yellow('                (Debug Build: Fixes A, B, C, D, E Applied)')}
 `;
 
 // ============================================================================

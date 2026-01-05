@@ -244,9 +244,6 @@ export class GateFlowAgent {
         }
 
         this.session.turnCount++;
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/a4f00bdc-6d66-4cb0-9b9b-8714458232cc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'core.ts:run-message-push',message:'Pushing user message',data:{role:'user',contentLength:userMessage.trim().length,messageCount:this.session.messages.length},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'D'})}).catch(()=>{});
-        // #endregion
         this.session.messages.push({
             role: 'user',
             content: userMessage.trim()
@@ -285,10 +282,6 @@ Return needsMultiAgent: true only for genuinely complex requests.`
         });
 
         if (complexity.needsMultiAgent && this.orchestrator) {
-            // #region agent log
-            fetch('http://127.0.0.1:7242/ingest/a4f00bdc-6d66-4cb0-9b9b-8714458232cc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'core.ts:run-multiagent',message:'Triggering multi-agent path',data:{needsMultiAgent:complexity.needsMultiAgent,reasoning:complexity.reasoning},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A'})}).catch(()=>{});
-            // #endregion
-            
             this.session.thinkingChain.addCoordinationStep(
                 'Using multi-agent orchestrator',
                 { reasoning: complexity.reasoning },
@@ -417,10 +410,6 @@ Return needsMultiAgent: true only for genuinely complex requests.`
         // Get final result
         const finalResult = await result;
         const textContent = await finalResult.text;
-        
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/a4f00bdc-6d66-4cb0-9b9b-8714458232cc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'core.ts:run-final-result',message:'Final result comparison',data:{streamedLength:fullResponse.length,finalTextLength:textContent?.length||0,willOverwrite:!!(textContent&&textContent.trim())},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'E'})}).catch(()=>{});
-        // #endregion
         
         if (textContent && textContent.trim()) {
             fullResponse = textContent;
