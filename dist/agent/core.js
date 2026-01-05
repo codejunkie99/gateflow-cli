@@ -8,9 +8,9 @@ import { z } from 'zod';
 import { createToolExecutors } from './tools.js';
 import { getSystemPrompt, detectMode } from './prompts.js';
 import { ThinkingChain } from './reasoning/ThinkingChain.js';
-import { Orchestrator } from './coordinator/Orchestrator.js';
+import { Orchestrator } from './orchestrator/Orchestrator.js';
 import { ComplexityDetectionSchema } from '../types/agent-shared.js';
-import { createUnderstandingAgent, createCodeGenAgent, createTestbenchAgent, createDebugAgent, createRefactoringAgent } from './specialized/index.js';
+import { createUnderstandingAgent, createCodeGenAgent, createTestbenchAgent, createDebugAgent, createRefactoringAgent } from './workers/index.js';
 // ============================================================================
 // Default System Prompt (fallback - actual prompts come from prompts.ts)
 // ============================================================================

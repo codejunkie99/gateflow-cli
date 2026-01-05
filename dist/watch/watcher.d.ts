@@ -3,7 +3,7 @@
  * Watch for file changes and trigger actions
  */
 import type { EventBus } from '../events/index.js';
-import type { ProjectIndexer } from '../context/index.js';
+import type { ProjectIndexer } from '../indexer/index.js';
 import type { Verilator } from '../verification/index.js';
 export interface WatchConfig {
     /** Patterns to watch */

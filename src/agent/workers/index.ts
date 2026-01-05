@@ -1,6 +1,6 @@
 /**
- * Specialized Agents
- * Export all agent factories
+ * Worker Agents
+ * Specialized agents for different tasks
  */
 
 export { createAgent } from './agentFactory.js';

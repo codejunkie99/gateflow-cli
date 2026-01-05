@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { createAgent } from '../agent/specialized/agentFactory.js';
+import { createAgent } from '../agent/workers/agentFactory.js';
 import { z } from 'zod';
 
 describe('Agent Factory', () => {

@@ -11,7 +11,7 @@ export * from './approval.js';
 import { FileTools } from './file.js';
 import { EditTools } from './edit.js';
 import type { EventBus } from '../events/bus.js';
-import type { PolicyEngine } from '../policy/engine.js';
+import type { PolicyEngine } from '../approval/engine.js';
 
 /**
  * Create all tool instances with shared dependencies

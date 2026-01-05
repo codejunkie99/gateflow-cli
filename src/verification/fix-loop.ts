@@ -6,7 +6,7 @@
 import type { EventBus } from '../events/index.js';
 import type { Verilator, LintError, LintResult } from './verilator.js';
 import type { GateFlowAgent } from '../agent/core.js';
-import type { FileTools } from '../tools/file.js';
+import type { FileTools } from '../fileops/file.js';
 import { getSystemPrompt } from '../agent/prompts.js';
 
 // ============================================================================
