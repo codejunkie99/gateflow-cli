@@ -154,9 +154,6 @@ export function createToolExecutors(ctx: ToolContext) {
             if (result.path && result.path.endsWith('.sv')) {
                 try {
                     await ctx.indexer.updateFile(result.path, result.created ? 'add' : 'change');
-                    // #region agent log
-                    fetch('http://127.0.0.1:7242/ingest/a4f00bdc-6d66-4cb0-9b9b-8714458232cc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'tools.ts:write_file-reindex',message:'Re-indexed file after write',data:{path:result.path,created:result.created},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'B'})}).catch(()=>{});
-                    // #endregion
                 } catch (indexErr) {
                     // Don't fail write if indexing fails
                     console.error('Failed to re-index file:', indexErr);
@@ -265,9 +262,6 @@ export function createToolExecutors(ctx: ToolContext) {
         search_code: async (args: z.infer<typeof searchCodeSchema>) => {
             // Default to searching only .sv files
             const filePattern = args.filePattern || '**/*.sv';
-            // #region agent log
-            fetch('http://127.0.0.1:7242/ingest/a4f00bdc-6d66-4cb0-9b9b-8714458232cc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'tools.ts:search_code-pattern',message:'Search code pattern received',data:{pattern:args.pattern,filePattern,caseSensitive:args.caseSensitive},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'D'})}).catch(()=>{});
-            // #endregion
             
             const result = await ctx.fileTools.searchCode(args.pattern, {
                 rootPath: ctx.projectRoot,
@@ -277,9 +271,6 @@ export function createToolExecutors(ctx: ToolContext) {
             });
 
             if (!result.success) {
-                // #region agent log
-                fetch('http://127.0.0.1:7242/ingest/a4f00bdc-6d66-4cb0-9b9b-8714458232cc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'tools.ts:search_code-error',message:'Search code failed',data:{pattern:args.pattern,error:result.error},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'D'})}).catch(()=>{});
-                // #endregion
                 return { error: result.error };
             }
 
@@ -298,16 +289,9 @@ export function createToolExecutors(ctx: ToolContext) {
         },
 
         find_module: async (args: z.infer<typeof findModuleSchema>) => {
-            // #region agent log
-            const indexStats = ctx.indexer.getStats();
-            fetch('http://127.0.0.1:7242/ingest/a4f00bdc-6d66-4cb0-9b9b-8714458232cc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'tools.ts:find_module',message:'Looking up module in index',data:{moduleName:args.name,indexedModuleCount:indexStats.modules,indexedFileCount:indexStats.files},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'B'})}).catch(()=>{});
-            // #endregion
             const module = ctx.indexer.findModule(args.name);
             
             if (!module) {
-                // #region agent log
-                fetch('http://127.0.0.1:7242/ingest/a4f00bdc-6d66-4cb0-9b9b-8714458232cc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'tools.ts:find_module-not-found',message:'Module not found in index',data:{moduleName:args.name,indexStats},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'B'})}).catch(()=>{});
-                // #endregion
                 return { error: `Module '${args.name}' not found in index` };
             }
 
@@ -345,9 +329,6 @@ export function createToolExecutors(ctx: ToolContext) {
             });
 
             const result = await ctx.verilator.lint(args.path);
-            // #region agent log
-            fetch('http://127.0.0.1:7242/ingest/a4f00bdc-6d66-4cb0-9b9b-8714458232cc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'tools.ts:lint_file-result',message:'Lint result from verilator',data:{path:args.path,success:result.success,errorCount:result.errors.length,warningCount:result.warnings.length,exitCode:result.exitCode},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'C'})}).catch(()=>{});
-            // #endregion
 
             ctx.bus.emit({
                 type: 'tool_result',
@@ -380,9 +361,6 @@ export function createToolExecutors(ctx: ToolContext) {
                 testbench: args.testbench,
                 timeout: args.timeout
             });
-            // #region agent log
-            fetch('http://127.0.0.1:7242/ingest/a4f00bdc-6d66-4cb0-9b9b-8714458232cc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'tools.ts:run_simulation-result',message:'Simulation result',data:{top:args.top,success:result.success,exitCode:result.exitCode,stderrPreview:result.stderr?.slice(0,500),stdoutPreview:result.stdout?.slice(0,500)},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'E'})}).catch(()=>{});
-            // #endregion
 
             return {
                 success: result.success,

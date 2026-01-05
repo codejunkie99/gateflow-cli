@@ -457,19 +457,9 @@ export class FileTools {
                 nodir: true
             });
             const matches = [];
-            // #region agent log
-            // FIX D: Sanitize pattern - remove inline flags like (?i), (?m), (?s) that JS doesn't support
-            let sanitizedPattern = pattern.replace(/\(\?[imsx]+\)/g, '');
-            fetch('http://127.0.0.1:7242/ingest/a4f00bdc-6d66-4cb0-9b9b-8714458232cc', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'file.ts:searchCode-pattern-sanitized', message: 'Pattern sanitization', data: { original: pattern, sanitized: sanitizedPattern, wasModified: pattern !== sanitizedPattern }, timestamp: Date.now(), sessionId: 'debug-session', hypothesisId: 'D' }) }).catch(() => { });
-            let regex;
-            try {
-                regex = new RegExp(sanitizedPattern, caseSensitive ? 'g' : 'gi');
-            }
-            catch (regexError) {
-                fetch('http://127.0.0.1:7242/ingest/a4f00bdc-6d66-4cb0-9b9b-8714458232cc', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'file.ts:searchCode-regex-error', message: 'Regex creation failed', data: { pattern: sanitizedPattern, caseSensitive, error: regexError.message }, timestamp: Date.now(), sessionId: 'debug-session', hypothesisId: 'D' }) }).catch(() => { });
-                throw regexError;
-            }
-            // #endregion
+            // Sanitize pattern - remove inline flags like (?i), (?m), (?s) that JS doesn't support
+            const sanitizedPattern = pattern.replace(/\(\?[imsx]+\)/g, '');
+            const regex = new RegExp(sanitizedPattern, caseSensitive ? 'g' : 'gi');
             for (const file of files) {
                 if (matches.length >= maxResults)
                     break;

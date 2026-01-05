@@ -2,9 +2,15 @@
  * GateFlow Agent Prompt Library
  * Task-specific system prompts for different modes of operation
  *
- * @deprecated The prompt strings below are deprecated in favor of PromptBuilder.
- * This file is kept for getSystemPrompt() and detectMode() functions which are still used.
- * The old prompt strings will be removed once all code is migrated to PromptBuilder presets.
+ * ## Status
+ * - getSystemPrompt() and detectMode() are ACTIVE and used by core.ts and fix-loop.ts
+ * - The monolithic prompt strings below are DEPRECATED in favor of PromptBuilder
+ * - New development should use: cli/src/agent/prompts/presets/*.ts
+ *
+ * ## Migration Path
+ * Once core.ts single-agent flow is updated to use PromptBuilder presets,
+ * the SYSTEM_PROMPTS registry and mode-specific prompts can be removed.
+ * Keep only: PromptMode type, detectMode(), and getSystemPrompt() delegating to presets.
  */
 // ============================================================================
 // Shared Rules (included in all modes)
