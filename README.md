@@ -257,10 +257,66 @@ cd cli
 npm run dev
 ```
 
+## Multi-Agent Architecture
+
+GateFlow uses a sophisticated multi-agent system that automatically coordinates specialized agents for complex tasks.
+
+### Specialized Agents
+
+| Agent | Role | Use Cases |
+|-------|------|-----------|
+| **Understanding** | Reads and analyzes code | "What does this module do?", dependency tracing |
+| **CodeGen** | Creates new SystemVerilog | "Create a UART module", spec-to-RTL |
+| **Testbench** | Generates verification code | "Write a testbench for counter", stimulus generation |
+| **Debug** | Diagnoses failures | "Why does simulation hang?", root cause analysis |
+| **Refactoring** | Modifies existing code | "Rename signal", "Add parameter" |
+
+### Orchestrator
+
+The Orchestrator automatically routes requests:
+
+1. **Complexity Detection** - Analyzes if request needs multiple agents
+2. **Intelligent Routing** - Uses AI to select the best agent for simple tasks
+3. **Plan Generation** - Creates execution plans for complex multi-step tasks
+4. **Dependency Ordering** - Executes tasks in correct order
+
+### Thinking Visibility
+
+All agent reasoning is visible during execution:
+
+- Step-by-step progress updates
+- Tool calls and their results
+- Agent transitions for multi-agent tasks
+- Confidence indicators
+
+### Configuration Options
+
+Create a `.gaterc.json` file in your project root:
+
+```json
+{
+  "ux": {
+    "showThinking": true,
+    "showThinkingConfidence": false,
+    "showToolCalls": true,
+    "streamTokens": true,
+    "maxHistory": 50
+  },
+  "llm": {
+    "model": "claude-sonnet-4-20250514",
+    "maxTokens": 8192,
+    "temperature": 0
+  }
+}
+```
+
 ## Architecture notes
 
 If you want to extend GateFlow (new tools, new renderers, stricter policies), see:
 
 - `cli/docs/ARCHITECTURE.md`
+- `cli/src/agent/README.md` - Agent system overview
+- `cli/src/indexer/README.md` - Project indexing
+- `cli/src/verification/README.md` - Verilator integration
 
 

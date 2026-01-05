@@ -68,9 +68,6 @@ Select the most appropriate agent and describe the task.`
 
         // Step 2: Execute with selected worker
         const worker = this.workers.get(routing.selectedAgent);
-        // #region agent log
-        fetch('http://127.0.0.1:7242/ingest/a4f00bdc-6d66-4cb0-9b9b-8714458232cc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'Orchestrator.ts:execute',message:'Agent selection',data:{selectedAgent:routing.selectedAgent,workerFound:!!worker,registeredAgents:Array.from(this.workers.keys())},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A'})}).catch(()=>{});
-        // #endregion
         if (!worker) {
             throw new Error(`Unknown agent: ${routing.selectedAgent}`);
         }
@@ -180,14 +177,8 @@ Select the most appropriate agent and describe the task.`
         // Step 3: Execute tasks in dependency order
         const results: string[] = [];
         for (const task of sortedTasks) {
-            // #region agent log
-            fetch('http://127.0.0.1:7242/ingest/a4f00bdc-6d66-4cb0-9b9b-8714458232cc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'Orchestrator.ts:executeWithPlan-task',message:'Looking up worker for task',data:{taskId:task.id,taskAgent:task.agent,registeredWorkers:Array.from(this.workers.keys())},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A'})}).catch(()=>{});
-            // #endregion
             const worker = this.workers.get(task.agent);
             if (!worker) {
-                // #region agent log
-                fetch('http://127.0.0.1:7242/ingest/a4f00bdc-6d66-4cb0-9b9b-8714458232cc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'Orchestrator.ts:executeWithPlan-unknown-agent',message:'Unknown agent - skipping task',data:{taskId:task.id,taskAgent:task.agent,availableWorkers:Array.from(this.workers.keys())},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'A'})}).catch(()=>{});
-                // #endregion
                 this.thinkingChain.addFixingStep(
                     `Unknown agent ${task.agent} for task ${task.id}, skipping`,
                     { task },
