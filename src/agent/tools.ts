@@ -5,9 +5,9 @@
 
 import { z } from 'zod';
 import type { EventBus } from '../events/index.js';
-import type { PolicyEngine } from '../policy/index.js';
-import type { FileTools, EditTools } from '../tools/index.js';
-import type { ProjectIndexer } from '../context/index.js';
+import type { PolicyEngine } from '../approval/index.js';
+import type { FileTools, EditTools } from '../fileops/index.js';
+import type { ProjectIndexer } from '../indexer/index.js';
 import type { DiffEngine } from '../diff/index.js';
 import type { Verilator } from '../verification/verilator.js';
 

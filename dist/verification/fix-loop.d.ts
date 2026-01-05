@@ -5,7 +5,7 @@
 import type { EventBus } from '../events/index.js';
 import type { Verilator, LintError } from './verilator.js';
 import type { GateFlowAgent } from '../agent/core.js';
-import type { FileTools } from '../tools/file.js';
+import type { FileTools } from '../fileops/file.js';
 export interface FixLoopConfig {
     /** Maximum fix attempts */
     maxAttempts: number;

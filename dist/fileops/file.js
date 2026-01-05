@@ -2,102 +2,23 @@
  * File Tools
  * File operations with policy enforcement and event emission
  */
-
 import fs from 'fs/promises';
 import path from 'path';
 import { glob } from 'glob';
-import type { EventBus } from '../events/bus.js';
-import type { PolicyEngine } from '../policy/engine.js';
 import { requestApprovalSync, shouldAutoApprove, isApproved } from './approval.js';
-
-// ============================================================================
-// Types
-// ============================================================================
-
-export interface FileReadResult {
-    success: boolean;
-    path: string;
-    content?: string;
-    lines?: number;
-    error?: string;
-}
-
-export interface FileWriteResult {
-    success: boolean;
-    path: string;
-    bytesWritten?: number;
-    created?: boolean;
-    error?: string;
-}
-
-export interface FileListResult {
-    success: boolean;
-    directory: string;
-    files: FileEntry[];
-    count: number;
-    error?: string;
-}
-
-export interface FileEntry {
-    name: string;
-    path: string;
-    type: 'file' | 'directory';
-    size?: number;
-    modified?: Date;
-}
-
-export interface ProjectScanResult {
-    success: boolean;
-    rootPath: string;
-    summary: {
-        totalFiles: number;
-        modules: number;
-        testbenches: number;
-        packages: number;
-        includes: number;
-    };
-    files: ScannedFile[];
-    error?: string;
-}
-
-export interface ScannedFile {
-    path: string;
-    name: string;
-    type: 'module' | 'testbench' | 'package' | 'include' | 'other';
-    relativePath: string;
-}
-
-export interface SearchResult {
-    success: boolean;
-    pattern: string;
-    matches: SearchMatch[];
-    totalMatches: number;
-    error?: string;
-}
-
-export interface SearchMatch {
-    file: string;
-    line: number;
-    column: number;
-    content: string;
-    context?: {
-        before: string[];
-        after: string[];
-    };
-}
-
 // ============================================================================
 // File Tools Class
 // ============================================================================
-
 export class FileTools {
-    constructor(
-        private bus: EventBus,
-        private policy: PolicyEngine,
-        private projectRoot: string = process.cwd()
-    ) {}
-
-    private resolvePath(filePath: string): string {
+    bus;
+    policy;
+    projectRoot;
+    constructor(bus, policy, projectRoot = process.cwd()) {
+        this.bus = bus;
+        this.policy = policy;
+        this.projectRoot = projectRoot;
+    }
+    resolvePath(filePath) {
         // If already absolute, use as-is
         if (path.isAbsolute(filePath)) {
             return filePath;
@@ -105,53 +26,39 @@ export class FileTools {
         // Resolve relative to project root
         return path.resolve(this.projectRoot, filePath);
     }
-
     // ========================================================================
     // Read File
     // ========================================================================
-
-    async readFile(
-        filePath: string,
-        options?: {
-            startLine?: number;
-            endLine?: number;
-            includeLineNumbers?: boolean;
-        }
-    ): Promise<FileReadResult> {
+    async readFile(filePath, options) {
         const absolutePath = this.resolvePath(filePath);
-        
         this.bus.emit({
             type: 'tool_call',
             tool: 'read_file',
             argsSummary: path.basename(filePath),
             args: { filePath, ...options }
         });
-
         const startTime = Date.now();
-
         try {
             const content = await fs.readFile(absolutePath, 'utf-8');
             let lines = content.split('\n');
             const totalLines = lines.length;
-
             // Apply line range if specified
             if (options?.startLine || options?.endLine) {
                 const start = (options.startLine ?? 1) - 1;
                 const end = options.endLine ?? lines.length;
                 lines = lines.slice(start, end);
             }
-
             // Add line numbers if requested
-            let outputContent: string;
+            let outputContent;
             if (options?.includeLineNumbers) {
                 const startNum = options?.startLine ?? 1;
                 outputContent = lines
                     .map((line, i) => `${(startNum + i).toString().padStart(6)}| ${line}`)
                     .join('\n');
-            } else {
+            }
+            else {
                 outputContent = lines.join('\n');
             }
-
             this.bus.emit({
                 type: 'tool_result',
                 tool: 'read_file',
@@ -159,17 +66,15 @@ export class FileTools {
                 summary: `Read ${totalLines} lines from ${path.basename(filePath)}`,
                 duration: Date.now() - startTime
             });
-
             return {
                 success: true,
                 path: absolutePath,
                 content: outputContent,
                 lines: totalLines
             };
-
-        } catch (error) {
+        }
+        catch (error) {
             const errorMsg = error instanceof Error ? error.message : String(error);
-            
             this.bus.emit({
                 type: 'tool_result',
                 tool: 'read_file',
@@ -177,7 +82,6 @@ export class FileTools {
                 summary: `Failed: ${errorMsg}`,
                 duration: Date.now() - startTime
             });
-
             return {
                 success: false,
                 path: absolutePath,
@@ -185,43 +89,29 @@ export class FileTools {
             };
         }
     }
-
     // ========================================================================
     // Write File
     // ========================================================================
-
-    async writeFile(
-        filePath: string,
-        content: string,
-        options?: {
-            createDirs?: boolean;
-            skipApproval?: boolean;
-        }
-    ): Promise<FileWriteResult> {
+    async writeFile(filePath, content, options) {
         const absolutePath = this.resolvePath(filePath);
-
         // Policy check
         const decision = this.policy.checkTool('write_file', { filePath: absolutePath });
-
         if (!decision.allowed) {
             this.bus.emit({
                 type: 'error',
                 message: decision.reason ?? 'Write not allowed',
                 code: 3
             });
-
             return {
                 success: false,
                 path: absolutePath,
                 error: decision.reason ?? 'Write not allowed by policy'
             };
         }
-
         // Request approval if required (using synchronous prompt to avoid deadlock)
         if (decision.requiresApproval && !options?.skipApproval) {
             // Auto-approve SystemVerilog files
             const autoApprove = shouldAutoApprove(filePath) || isApproved('write_file');
-            
             if (!autoApprove) {
                 this.bus.emit({
                     type: 'tool_call',
@@ -229,13 +119,8 @@ export class FileTools {
                     argsSummary: `${path.basename(filePath)} (${content.length} bytes)`,
                     args: { filePath, contentLength: content.length }
                 });
-
                 // Use synchronous approval to avoid readline deadlock
-                const approval = requestApprovalSync(
-                    'write_file',
-                    `Write ${content.length} bytes to ${filePath}`
-                );
-
+                const approval = requestApprovalSync('write_file', `Write ${content.length} bytes to ${filePath}`);
                 if (!approval.approved) {
                     this.bus.emit({
                         type: 'tool_result',
@@ -243,40 +128,34 @@ export class FileTools {
                         ok: false,
                         summary: 'User rejected'
                     });
-
                     return {
                         success: false,
                         path: absolutePath,
                         error: 'User rejected write operation'
                     };
                 }
-
                 // Store approval if session scope
                 if (approval.scope === 'session') {
                     this.policy.grantApproval('write_file', 'session', filePath);
                 }
             }
         }
-
         const startTime = Date.now();
-
         try {
             // Check if file exists
             let created = false;
             try {
                 await fs.access(absolutePath);
-            } catch {
+            }
+            catch {
                 created = true;
             }
-
             // Create directories if needed
             if (options?.createDirs ?? true) {
                 await fs.mkdir(path.dirname(absolutePath), { recursive: true });
             }
-
             // Write file
             await fs.writeFile(absolutePath, content, 'utf-8');
-
             this.bus.emit({
                 type: 'tool_result',
                 tool: 'write_file',
@@ -284,17 +163,15 @@ export class FileTools {
                 summary: `${created ? 'Created' : 'Updated'} ${path.basename(filePath)}`,
                 duration: Date.now() - startTime
             });
-
             return {
                 success: true,
                 path: absolutePath,
                 bytesWritten: content.length,
                 created
             };
-
-        } catch (error) {
+        }
+        catch (error) {
             const errorMsg = error instanceof Error ? error.message : String(error);
-
             this.bus.emit({
                 type: 'tool_result',
                 tool: 'write_file',
@@ -302,7 +179,6 @@ export class FileTools {
                 summary: `Failed: ${errorMsg}`,
                 duration: Date.now() - startTime
             });
-
             return {
                 success: false,
                 path: absolutePath,
@@ -310,13 +186,11 @@ export class FileTools {
             };
         }
     }
-
     // ========================================================================
     // List Files
     // ========================================================================
-
     // Directories to always exclude from listing
-    private static readonly EXCLUDED_DIRS = new Set([
+    static EXCLUDED_DIRS = new Set([
         'node_modules',
         'dist',
         'dist-electron',
@@ -328,50 +202,34 @@ export class FileTools {
         '.cache',
         'coverage'
     ]);
-
-    async listFiles(
-        dirPath: string,
-        options?: {
-            extensions?: string[];
-            recursive?: boolean;
-            includeHidden?: boolean;
-        }
-    ): Promise<FileListResult> {
+    async listFiles(dirPath, options) {
         const absolutePath = path.resolve(dirPath);
-
         this.bus.emit({
             type: 'tool_call',
             tool: 'list_files',
             argsSummary: dirPath,
             args: { dirPath, ...options }
         });
-
         const startTime = Date.now();
-
         try {
             const entries = await fs.readdir(absolutePath, { withFileTypes: true });
-            const files: FileEntry[] = [];
-
+            const files = [];
             for (const entry of entries) {
                 // Skip hidden files unless requested
                 if (!options?.includeHidden && entry.name.startsWith('.')) {
                     continue;
                 }
-
                 // Skip excluded directories (node_modules, dist, etc.)
                 if (entry.isDirectory() && FileTools.EXCLUDED_DIRS.has(entry.name)) {
                     continue;
                 }
-
                 const fullPath = path.join(absolutePath, entry.name);
-
                 if (entry.isDirectory()) {
                     files.push({
                         name: entry.name,
                         path: fullPath,
                         type: 'directory'
                     });
-
                     // Recurse if requested
                     if (options?.recursive) {
                         const subResult = await this.listFiles(fullPath, options);
@@ -379,7 +237,8 @@ export class FileTools {
                             files.push(...subResult.files);
                         }
                     }
-                } else if (entry.isFile()) {
+                }
+                else if (entry.isFile()) {
                     // Filter by extension if specified
                     if (options?.extensions && options.extensions.length > 0) {
                         const ext = path.extname(entry.name).toLowerCase();
@@ -387,7 +246,6 @@ export class FileTools {
                             continue;
                         }
                     }
-
                     const stats = await fs.stat(fullPath);
                     files.push({
                         name: entry.name,
@@ -398,7 +256,6 @@ export class FileTools {
                     });
                 }
             }
-
             this.bus.emit({
                 type: 'tool_result',
                 tool: 'list_files',
@@ -406,17 +263,15 @@ export class FileTools {
                 summary: `Found ${files.length} items in ${path.basename(dirPath)}`,
                 duration: Date.now() - startTime
             });
-
             return {
                 success: true,
                 directory: absolutePath,
                 files,
                 count: files.length
             };
-
-        } catch (error) {
+        }
+        catch (error) {
             const errorMsg = error instanceof Error ? error.message : String(error);
-
             this.bus.emit({
                 type: 'tool_result',
                 tool: 'list_files',
@@ -424,7 +279,6 @@ export class FileTools {
                 summary: `Failed: ${errorMsg}`,
                 duration: Date.now() - startTime
             });
-
             return {
                 success: false,
                 directory: absolutePath,
@@ -434,19 +288,10 @@ export class FileTools {
             };
         }
     }
-
     // ========================================================================
     // Find Files (Glob)
     // ========================================================================
-
-    async findFiles(
-        pattern: string,
-        options?: {
-            cwd?: string;
-            ignore?: string[];
-            maxDepth?: number;
-        }
-    ): Promise<string[]> {
+    async findFiles(pattern, options) {
         const cwd = options?.cwd ? path.resolve(options.cwd) : process.cwd();
         const ignore = options?.ignore || [
             '**/node_modules/**',
@@ -456,10 +301,8 @@ export class FileTools {
             '**/.git/**',
             '**/target/**'
         ];
-        
         // Ensure pattern is glob-friendly (forward slashes)
         const globPattern = pattern.replace(/\\/g, '/');
-        
         try {
             const files = await glob(globPattern, {
                 cwd,
@@ -469,22 +312,15 @@ export class FileTools {
                 windowsPathsNoEscape: true
             });
             return files;
-        } catch (error) {
+        }
+        catch (error) {
             return [];
         }
     }
-
     // ========================================================================
     // Scan Project
     // ========================================================================
-
-    async scanProject(
-        rootPath: string,
-        options?: {
-            maxDepth?: number;
-            excludePatterns?: string[];
-        }
-    ): Promise<ProjectScanResult> {
+    async scanProject(rootPath, options) {
         const absolutePath = path.resolve(rootPath);
         const maxDepth = options?.maxDepth ?? 10;
         const excludePatterns = options?.excludePatterns ?? [
@@ -493,22 +329,18 @@ export class FileTools {
             '**/.git/**',
             '**/dist/**'
         ];
-
         this.bus.emit({
             type: 'tool_call',
             tool: 'scan_project',
             argsSummary: rootPath,
             args: { rootPath, maxDepth }
         });
-
         this.bus.emit({
             type: 'status',
             phase: 'indexing',
             label: `Scanning ${rootPath}...`
         });
-
         const startTime = Date.now();
-
         try {
             // Find all SV files
             const pattern = '**/*.{sv,svh,v,vh}';
@@ -518,35 +350,33 @@ export class FileTools {
                 maxDepth,
                 nodir: true
             });
-
-            const scannedFiles: ScannedFile[] = [];
+            const scannedFiles = [];
             let modules = 0;
             let testbenches = 0;
             let packages = 0;
             let includes = 0;
-
             for (const file of files) {
                 const fullPath = path.join(absolutePath, file);
                 const baseName = path.basename(file);
                 const ext = path.extname(file).toLowerCase();
-
                 // Classify file
-                let type: ScannedFile['type'] = 'other';
-
+                let type = 'other';
                 if (ext === '.svh' || ext === '.vh') {
                     type = 'include';
                     includes++;
-                } else if (baseName.startsWith('tb_') || baseName.endsWith('_tb.sv') || baseName.includes('test')) {
+                }
+                else if (baseName.startsWith('tb_') || baseName.endsWith('_tb.sv') || baseName.includes('test')) {
                     type = 'testbench';
                     testbenches++;
-                } else if (baseName.endsWith('_pkg.sv') || baseName.includes('package')) {
+                }
+                else if (baseName.endsWith('_pkg.sv') || baseName.includes('package')) {
                     type = 'package';
                     packages++;
-                } else {
+                }
+                else {
                     type = 'module';
                     modules++;
                 }
-
                 scannedFiles.push({
                     path: fullPath,
                     name: baseName,
@@ -554,7 +384,6 @@ export class FileTools {
                     relativePath: file
                 });
             }
-
             this.bus.emit({
                 type: 'tool_result',
                 tool: 'scan_project',
@@ -562,14 +391,12 @@ export class FileTools {
                 summary: `Found ${files.length} files (${modules} modules, ${testbenches} TBs)`,
                 duration: Date.now() - startTime
             });
-
             this.bus.emit({
                 type: 'index_update',
                 added: files.length,
                 removed: 0,
                 modified: 0
             });
-
             return {
                 success: true,
                 rootPath: absolutePath,
@@ -582,10 +409,9 @@ export class FileTools {
                 },
                 files: scannedFiles
             };
-
-        } catch (error) {
+        }
+        catch (error) {
             const errorMsg = error instanceof Error ? error.message : String(error);
-
             this.bus.emit({
                 type: 'tool_result',
                 tool: 'scan_project',
@@ -593,7 +419,6 @@ export class FileTools {
                 summary: `Failed: ${errorMsg}`,
                 duration: Date.now() - startTime
             });
-
             return {
                 success: false,
                 rootPath: absolutePath,
@@ -609,80 +434,61 @@ export class FileTools {
             };
         }
     }
-
     // ========================================================================
     // Search Code
     // ========================================================================
-
-    async searchCode(
-        pattern: string,
-        options?: {
-            rootPath?: string;
-            filePattern?: string;
-            maxResults?: number;
-            contextLines?: number;
-            caseSensitive?: boolean;
-        }
-    ): Promise<SearchResult> {
+    async searchCode(pattern, options) {
         const rootPath = path.resolve(options?.rootPath ?? this.policy.getProjectRoot());
         const filePattern = options?.filePattern ?? '**/*.{sv,svh,v,vh}';
         const maxResults = options?.maxResults ?? 100;
         const contextLines = options?.contextLines ?? 2;
         const caseSensitive = options?.caseSensitive ?? false;
-
         this.bus.emit({
             type: 'tool_call',
             tool: 'search_code',
             argsSummary: pattern,
             args: { pattern, rootPath, filePattern }
         });
-
         const startTime = Date.now();
-
         try {
             const files = await glob(filePattern, {
                 cwd: rootPath,
                 ignore: ['**/node_modules/**', '**/obj_dir/**', '**/.git/**'],
                 nodir: true
             });
-
-            const matches: SearchMatch[] = [];
+            const matches = [];
             // #region agent log
             // FIX D: Sanitize pattern - remove inline flags like (?i), (?m), (?s) that JS doesn't support
             let sanitizedPattern = pattern.replace(/\(\?[imsx]+\)/g, '');
-            fetch('http://127.0.0.1:7242/ingest/a4f00bdc-6d66-4cb0-9b9b-8714458232cc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'file.ts:searchCode-pattern-sanitized',message:'Pattern sanitization',data:{original:pattern,sanitized:sanitizedPattern,wasModified:pattern!==sanitizedPattern},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'D'})}).catch(()=>{});
-            let regex: RegExp;
+            fetch('http://127.0.0.1:7242/ingest/a4f00bdc-6d66-4cb0-9b9b-8714458232cc', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'file.ts:searchCode-pattern-sanitized', message: 'Pattern sanitization', data: { original: pattern, sanitized: sanitizedPattern, wasModified: pattern !== sanitizedPattern }, timestamp: Date.now(), sessionId: 'debug-session', hypothesisId: 'D' }) }).catch(() => { });
+            let regex;
             try {
                 regex = new RegExp(sanitizedPattern, caseSensitive ? 'g' : 'gi');
-            } catch (regexError: any) {
-                fetch('http://127.0.0.1:7242/ingest/a4f00bdc-6d66-4cb0-9b9b-8714458232cc',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'file.ts:searchCode-regex-error',message:'Regex creation failed',data:{pattern:sanitizedPattern,caseSensitive,error:regexError.message},timestamp:Date.now(),sessionId:'debug-session',hypothesisId:'D'})}).catch(()=>{});
+            }
+            catch (regexError) {
+                fetch('http://127.0.0.1:7242/ingest/a4f00bdc-6d66-4cb0-9b9b-8714458232cc', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ location: 'file.ts:searchCode-regex-error', message: 'Regex creation failed', data: { pattern: sanitizedPattern, caseSensitive, error: regexError.message }, timestamp: Date.now(), sessionId: 'debug-session', hypothesisId: 'D' }) }).catch(() => { });
                 throw regexError;
             }
             // #endregion
-
             for (const file of files) {
-                if (matches.length >= maxResults) break;
-
+                if (matches.length >= maxResults)
+                    break;
                 const fullPath = path.join(rootPath, file);
                 const content = await fs.readFile(fullPath, 'utf-8');
                 const lines = content.split('\n');
-
                 for (let i = 0; i < lines.length; i++) {
-                    if (matches.length >= maxResults) break;
-
+                    if (matches.length >= maxResults)
+                        break;
                     const line = lines[i];
-                    let match: RegExpExecArray | null;
-
+                    let match;
                     // Reset regex lastIndex for global flag
                     regex.lastIndex = 0;
-
                     while ((match = regex.exec(line)) !== null) {
-                        if (matches.length >= maxResults) break;
-
+                        if (matches.length >= maxResults)
+                            break;
                         // Get context
                         const beforeStart = Math.max(0, i - contextLines);
                         const afterEnd = Math.min(lines.length, i + contextLines + 1);
-
                         matches.push({
                             file: fullPath,
                             line: i + 1,
@@ -696,7 +502,6 @@ export class FileTools {
                     }
                 }
             }
-
             this.bus.emit({
                 type: 'tool_result',
                 tool: 'search_code',
@@ -704,17 +509,15 @@ export class FileTools {
                 summary: `Found ${matches.length} matches for "${pattern}"`,
                 duration: Date.now() - startTime
             });
-
             return {
                 success: true,
                 pattern,
                 matches,
                 totalMatches: matches.length
             };
-
-        } catch (error) {
+        }
+        catch (error) {
             const errorMsg = error instanceof Error ? error.message : String(error);
-
             this.bus.emit({
                 type: 'tool_result',
                 tool: 'search_code',
@@ -722,7 +525,6 @@ export class FileTools {
                 summary: `Failed: ${errorMsg}`,
                 duration: Date.now() - startTime
             });
-
             return {
                 success: false,
                 pattern,
@@ -732,31 +534,22 @@ export class FileTools {
             };
         }
     }
-
     // ========================================================================
     // Utility: Check File Exists
     // ========================================================================
-
-    async exists(filePath: string): Promise<boolean> {
+    async exists(filePath) {
         try {
             await fs.access(this.resolvePath(filePath));
             return true;
-        } catch {
+        }
+        catch {
             return false;
         }
     }
-
     // ========================================================================
     // Utility: Get File Info
     // ========================================================================
-
-    async getFileInfo(filePath: string): Promise<{
-        exists: boolean;
-        isFile?: boolean;
-        isDirectory?: boolean;
-        size?: number;
-        modified?: Date;
-    }> {
+    async getFileInfo(filePath) {
         try {
             const stats = await fs.stat(this.resolvePath(filePath));
             return {
@@ -766,9 +559,9 @@ export class FileTools {
                 size: stats.size,
                 modified: stats.mtime
             };
-        } catch {
+        }
+        catch {
             return { exists: false };
         }
     }
 }
-

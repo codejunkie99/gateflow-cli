@@ -2,7 +2,7 @@
  * Agent Factory Unit Tests
  */
 import { describe, it, expect } from 'vitest';
-import { createAgent } from '../agent/specialized/agentFactory.js';
+import { createAgent } from '../agent/workers/agentFactory.js';
 describe('Agent Factory', () => {
     it('should create agent with required fields', () => {
         const agent = createAgent({

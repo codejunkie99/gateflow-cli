@@ -8,7 +8,7 @@ import path from 'path';
 import crypto from 'crypto';
 import os from 'os';
 import type { EventBus } from '../events/index.js';
-import type { ApprovalGrant } from '../policy/index.js';
+import type { ApprovalGrant } from '../approval/index.js';
 
 // ============================================================================
 // Types

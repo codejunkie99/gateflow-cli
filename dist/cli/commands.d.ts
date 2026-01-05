@@ -3,10 +3,10 @@
  * Command implementations for GateFlow CLI
  */
 import { EventBus, type ExitCode } from '../events/index.js';
-import { PolicyEngine } from '../policy/index.js';
-import { createTools } from '../tools/index.js';
+import { PolicyEngine } from '../approval/index.js';
+import { createTools } from '../fileops/index.js';
 import { DiffEngine } from '../diff/index.js';
-import { ProjectIndexer } from '../context/index.js';
+import { ProjectIndexer } from '../indexer/index.js';
 import { Verilator } from '../verification/index.js';
 import { TerminalRenderer } from '../ui/index.js';
 export interface GlobalOptions {
