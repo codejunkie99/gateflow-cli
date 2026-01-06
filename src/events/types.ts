@@ -277,6 +277,14 @@ export function isErrorEvent(event: UiEvent): event is ErrorEvent {
     return event.type === 'error';
 }
 
+export function isWaveformEvent(event: UiEvent): event is WaveformLoadedEvent | WaveformAnalysisEvent {
+    return event.type === 'waveform_loaded' || event.type === 'waveform_analysis';
+}
+
+export function isSimEvent(event: UiEvent): event is SimStageEvent | SimProgressEvent {
+    return event.type === 'sim_stage' || event.type === 'sim_progress';
+}
+
 // ============================================================================
 // Exit Codes
 // ============================================================================

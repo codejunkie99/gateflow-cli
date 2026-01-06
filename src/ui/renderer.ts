@@ -167,6 +167,14 @@ export class TerminalRenderer {
                 this.handleSimProgress(event.stage, event.percent, event.message);
                 break;
 
+            case 'waveform_loaded':
+                this.handleWaveformLoaded(event.path, event.signalCount, event.timeRange);
+                break;
+
+            case 'waveform_analysis':
+                this.handleWaveformAnalysis(event.clocks, event.anomalies, event.coverage, event.summary);
+                break;
+
             case 'thought':
                 this.handleThought(event.stepNumber, event.category, event.thought, event.confidence);
                 break;
@@ -497,6 +505,69 @@ export class TerminalRenderer {
                 spinner: this.options.unicode ? 'dots' : 'line'
             }).start();
         }
+    }
+
+    // ========================================================================
+    // Waveform Events
+    // ========================================================================
+
+    private handleWaveformLoaded(
+        path: string,
+        signalCount: number,
+        timeRange: { start: bigint; end: bigint }
+    ): void {
+        this.stopSpinner();
+        const fileName = path.split(/[/\\]/).pop() ?? path;
+        const duration = timeRange.end - timeRange.start;
+
+        console.log(
+            chalk.cyan('⎍ ') +
+            chalk.white.bold('Waveform loaded: ') +
+            chalk.cyan(fileName)
+        );
+        console.log(
+            chalk.gray(`  ${signalCount} signals, ${duration.toString()} time units`)
+        );
+    }
+
+    private handleWaveformAnalysis(
+        clocks: Array<{ signal: string; frequency: number }>,
+        anomalies: Array<{ type: string; signal: string; time: bigint }>,
+        coverage: { percentage: number },
+        summary: string
+    ): void {
+        this.stopSpinner();
+
+        console.log(chalk.cyan('⎍ ') + chalk.white.bold('Waveform Analysis'));
+
+        // Clocks
+        if (clocks.length > 0) {
+            console.log(chalk.green(`  ✓ Detected ${clocks.length} clock(s):`));
+            for (const clk of clocks.slice(0, 5)) {
+                console.log(chalk.gray(`    • ${clk.signal} @ ${clk.frequency.toFixed(4)} MHz`));
+            }
+        }
+
+        // Anomalies
+        if (anomalies.length > 0) {
+            console.log(chalk.yellow(`  ! Found ${anomalies.length} anomaly(s):`));
+            for (const a of anomalies.slice(0, 5)) {
+                console.log(chalk.gray(`    • ${a.type} on ${a.signal} @ t=${a.time.toString()}`));
+            }
+            if (anomalies.length > 5) {
+                console.log(chalk.gray(`    ... and ${anomalies.length - 5} more`));
+            }
+        } else {
+            console.log(chalk.green('  ✓ No anomalies detected'));
+        }
+
+        // Coverage
+        const coverageColor = coverage.percentage >= 90 ? chalk.green :
+            coverage.percentage >= 70 ? chalk.yellow : chalk.red;
+        console.log(coverageColor(`  Coverage: ${coverage.percentage.toFixed(1)}%`));
+
+        // Summary
+        console.log(chalk.gray(`  ${summary}`));
     }
 
     // ========================================================================

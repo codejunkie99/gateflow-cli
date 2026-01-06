@@ -114,16 +114,11 @@ export async function setupContext(options: GlobalOptions): Promise<CommandConte
     };
 }
 
-// ============================================================================
-// Chat Command (REPL)
-// ============================================================================
-
-export async function chatCommand(
-    ctx: CommandContext,
-    initialQuery?: string
-): Promise<ExitCode> {
-    // Build tool context
-    const toolContext: ToolContext = {
+/**
+ * Build ToolContext from CommandContext
+ */
+function buildToolContext(ctx: CommandContext): ToolContext {
+    return {
         bus: ctx.bus,
         policy: ctx.policy,
         fileTools: ctx.tools.file,
@@ -135,6 +130,17 @@ export async function chatCommand(
         dryRun: ctx.options.dryRun,
         autoApprove: ctx.options.yes
     };
+}
+
+// ============================================================================
+// Chat Command (REPL)
+// ============================================================================
+
+export async function chatCommand(
+    ctx: CommandContext,
+    initialQuery?: string
+): Promise<ExitCode> {
+    const toolContext = buildToolContext(ctx);
 
     // Create agent
     const agent = new GateFlowAgent(ctx.bus, toolContext);
@@ -146,15 +152,24 @@ export async function chatCommand(
         label: 'Building project index...'
     });
 
+    let indexingFailed = false;
     try {
         await ctx.indexer.buildIndex();
     } catch (error) {
-        console.error('Indexing failed:', error);
+        indexingFailed = true;
+        ctx.bus.emit({
+            type: 'error',
+            message: `Indexing failed: ${error}`
+        });
     }
-    
+
     const stats = ctx.indexer.getStats();
-    agent.addContext(`Project indexed: ${stats.modules} modules, ${stats.packages} packages in ${stats.files} files.`);
-    
+    if (indexingFailed) {
+        agent.addContext('Warning: Project indexing failed. Some features may not work correctly.');
+    } else {
+        agent.addContext(`Project indexed: ${stats.modules} modules, ${stats.packages} packages in ${stats.files} files.`);
+    }
+
     // Stop spinner
     ctx.bus.emit({ type: 'token_done' });
 
@@ -181,63 +196,73 @@ export async function chatCommand(
     });
 
     console.log('\n' + chalk.blue.bold('GateFlow') + ' - AI-powered SystemVerilog Assistant');
-    console.log(`   Indexed ${stats.modules} modules in ${stats.files} files.`);
+    if (indexingFailed) {
+        console.log(chalk.yellow('   Warning: Indexing failed. Some features may be limited.'));
+    } else {
+        console.log(`   Indexed ${stats.modules} modules in ${stats.files} files.`);
+    }
     console.log('   Type your questions or commands. Type "exit" to quit.\n');
 
     const promptUser = () => {
         // Simple prompt with dotted border
         const border = chalk.blue('─'.repeat(60));
         console.log(border);
-        rl.question(chalk.blue('> '), async (input) => {
-            console.log(border);
-            console.log('');
-            const trimmed = input.trim();
+        rl.question(chalk.blue('> '), (input) => {
+            // Wrap async logic to properly handle rejections
+            (async () => {
+                console.log(border);
+                console.log('');
+                const trimmed = input.trim();
 
-            if (!trimmed) {
-                promptUser();
-                return;
-            }
+                if (!trimmed) {
+                    promptUser();
+                    return;
+                }
 
-            if (trimmed.toLowerCase() === 'exit' || trimmed.toLowerCase() === 'quit') {
-                rl.close();
-                return;
-            }
+                if (trimmed.toLowerCase() === 'exit' || trimmed.toLowerCase() === 'quit') {
+                    rl.close();
+                    return;
+                }
 
-            if (trimmed.toLowerCase() === '/clear') {
-                agent.resetSession();
-                console.log('Session cleared.\n');
-                promptUser();
-                return;
-            }
+                if (trimmed.toLowerCase() === '/clear') {
+                    agent.resetSession();
+                    console.log('Session cleared.\n');
+                    promptUser();
+                    return;
+                }
 
-            if (trimmed.toLowerCase() === '/stats') {
-                const sessionStats = agent.getSessionStats();
-                const indexStats = ctx.indexer.getStats();
-                console.log('\nSession:', sessionStats);
-                console.log('Index:', indexStats);
+                if (trimmed.toLowerCase() === '/stats') {
+                    const sessionStats = agent.getSessionStats();
+                    const indexStats = ctx.indexer.getStats();
+                    console.log('\nSession:', sessionStats);
+                    console.log('Index:', indexStats);
+                    console.log('');
+                    promptUser();
+                    return;
+                }
+
+                // Check if waiting for approval
+                if (ctx.renderer.isWaitingForApproval()) {
+                    ctx.renderer.processApprovalInput(trimmed);
+                    promptUser();
+                    return;
+                }
+
+                try {
+                    await agent.run(trimmed);
+                } catch (error) {
+                    ctx.bus.emit({
+                        type: 'error',
+                        message: String(error)
+                    });
+                }
+
                 console.log('');
                 promptUser();
-                return;
-            }
-
-            // Check if waiting for approval
-            if (ctx.renderer.isWaitingForApproval()) {
-                ctx.renderer.processApprovalInput(trimmed);
+            })().catch(error => {
+                ctx.bus.emit({ type: 'error', message: String(error) });
                 promptUser();
-                return;
-            }
-
-            try {
-                await agent.run(trimmed);
-            } catch (error) {
-                ctx.bus.emit({
-                    type: 'error',
-                    message: String(error)
-                });
-            }
-
-            console.log('');
-            promptUser();
+            });
         });
     };
 
@@ -256,7 +281,7 @@ export async function chatCommand(
 
 export async function scanCommand(ctx: CommandContext): Promise<ExitCode> {
     try {
-        const index = await ctx.indexer.buildIndex();
+        await ctx.indexer.buildIndex();
         const stats = ctx.indexer.getStats();
 
         if (ctx.options.json) {
@@ -334,20 +359,7 @@ export async function fixCommand(
     ctx: CommandContext,
     file: string
 ): Promise<ExitCode> {
-    // Build tool context
-    const toolContext: ToolContext = {
-        bus: ctx.bus,
-        policy: ctx.policy,
-        fileTools: ctx.tools.file,
-        editTools: ctx.tools.edit,
-        indexer: ctx.indexer,
-        diffEngine: ctx.diffEngine,
-        verilator: ctx.verilator,
-        projectRoot: ctx.projectRoot,
-        dryRun: ctx.options.dryRun,
-        autoApprove: ctx.options.yes
-    };
-
+    const toolContext = buildToolContext(ctx);
     const agent = new GateFlowAgent(ctx.bus, toolContext);
     const fixLoop = new FixLoop(ctx.bus, ctx.verilator, agent, ctx.tools.file, {
         requireApproval: !ctx.options.yes
@@ -386,11 +398,15 @@ export async function watchCommand(
 
     // Keep running until interrupted
     return new Promise((resolve) => {
-        process.on('SIGINT', async () => {
+        const cleanup = async () => {
             console.log('\n\nStopping watch...');
             await watcher.stop();
             resolve(ExitCodes.SUCCESS);
-        });
+        };
+
+        // Use 'once' to avoid handler leak, handle both SIGINT and SIGTERM
+        process.once('SIGINT', cleanup);
+        process.once('SIGTERM', cleanup);
     });
 }
 
@@ -404,20 +420,7 @@ export async function generateCommand(
     name: string,
     options: { output?: string }
 ): Promise<ExitCode> {
-    // Build tool context
-    const toolContext: ToolContext = {
-        bus: ctx.bus,
-        policy: ctx.policy,
-        fileTools: ctx.tools.file,
-        editTools: ctx.tools.edit,
-        indexer: ctx.indexer,
-        diffEngine: ctx.diffEngine,
-        verilator: ctx.verilator,
-        projectRoot: ctx.projectRoot,
-        dryRun: ctx.options.dryRun,
-        autoApprove: ctx.options.yes
-    };
-
+    const toolContext = buildToolContext(ctx);
     const agent = new GateFlowAgent(ctx.bus, toolContext);
 
     // Build generation prompt and select mode
@@ -720,14 +723,22 @@ export async function waveWebCommand(ctx: CommandContext, vcdPath: string, port:
             stdio: 'ignore'
         }).unref();
 
-        // Keep process running
-        await new Promise(() => {});
+        // Keep process running until interrupted
+        await new Promise<void>((resolve) => {
+            process.once('SIGINT', () => {
+                console.log('\nShutting down...');
+                resolve();
+            });
+            process.once('SIGTERM', () => {
+                resolve();
+            });
+        });
+
+        return ExitCodes.SUCCESS;
 
     } catch (error) {
         console.error(chalk.red(`Failed to start viewer: ${error}`));
         return ExitCodes.TOOL_ERROR;
     }
-
-    return ExitCodes.SUCCESS;
 }
 
