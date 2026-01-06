@@ -1,8 +1,7 @@
 ## GateFlow CLI
 
 GateFlow is a **natural-language CLI assistant for SystemVerilog**. You can ask it to read/understand a codebase, edit `.sv` files with an approval gate, and run **Verilator lint** (including an iterative “lint → fix → re-lint” loop).
-
-This repo also contains an Electron IDE; this README is **only for the CLI**.
+.
 
 ## What it does in v1
 
