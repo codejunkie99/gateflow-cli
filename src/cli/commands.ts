@@ -10,7 +10,7 @@ import chalk from 'chalk';
 import { glob } from 'glob';
 import { EventBus, ExitCodes, type ExitCode } from '../events/index.js';
 import { PolicyEngine, initPolicyEngine } from '../approval/index.js';
-import { FileTools, EditTools, createTools } from '../fileops/index.js';
+import { createTools } from '../fileops/index.js';
 import { DiffEngine } from '../diff/index.js';
 import { ProjectIndexer } from '../indexer/index.js';
 import { GateFlowAgent, type ToolContext, type PromptMode } from '../agent/index.js';
@@ -215,7 +215,7 @@ export async function chatCommand(
                 const trimmed = input.trim();
 
                 if (!trimmed) {
-                    promptUser();
+                    setImmediate(promptUser); // Prevent stack overflow
                     return;
                 }
 
@@ -227,7 +227,7 @@ export async function chatCommand(
                 if (trimmed.toLowerCase() === '/clear') {
                     agent.resetSession();
                     console.log('Session cleared.\n');
-                    promptUser();
+                    setImmediate(promptUser);
                     return;
                 }
 
@@ -237,14 +237,14 @@ export async function chatCommand(
                     console.log('\nSession:', sessionStats);
                     console.log('Index:', indexStats);
                     console.log('');
-                    promptUser();
+                    setImmediate(promptUser);
                     return;
                 }
 
                 // Check if waiting for approval
                 if (ctx.renderer.isWaitingForApproval()) {
                     ctx.renderer.processApprovalInput(trimmed);
-                    promptUser();
+                    setImmediate(promptUser);
                     return;
                 }
 
@@ -258,10 +258,10 @@ export async function chatCommand(
                 }
 
                 console.log('');
-                promptUser();
+                setImmediate(promptUser);
             })().catch(error => {
                 ctx.bus.emit({ type: 'error', message: String(error) });
-                promptUser();
+                setImmediate(promptUser);
             });
         });
     };
@@ -333,14 +333,19 @@ export async function lintCommand(
             warnings: result.warnings.length
         });
 
+        if (!ctx.options.json) {
+            // Display errors
+            for (const err of result.errors) {
+                console.log(chalk.red(`${err.file}:${err.line}: error: ${err.message}`));
+            }
+            // Display warnings
+            for (const warn of result.warnings) {
+                console.log(chalk.yellow(`${warn.file}:${warn.line}: warning: ${warn.message}`));
+            }
+        }
+
         if (!result.success) {
             hasErrors = true;
-
-            if (!ctx.options.json) {
-                for (const err of result.errors) {
-                    console.log(`${err.file}:${err.line}: error: ${err.message}`);
-                }
-            }
         }
     }
 
@@ -614,55 +619,61 @@ export async function waveCommand(ctx: CommandContext, vcdPath: string): Promise
         console.log(chalk.yellow('Not in interactive terminal - opening in new window...'));
 
         return new Promise((resolve) => {
-            let child;
+            (async () => {
+                let child: ReturnType<typeof spawn> | undefined;
 
-            if (process.platform === 'win32') {
-                // Windows: open new cmd window that stays open
-                // Use array args to avoid shell injection - each arg is passed separately
-                child = spawn('cmd', [
-                    '/c', 'start', '', 'cmd', '/k',
-                    'node', cliPath, 'wave', resolvedPath
-                ], {
-                    detached: true,
-                    stdio: 'ignore'
-                });
-            } else if (process.platform === 'darwin') {
-                // macOS: open new Terminal window
-                // Escape paths for AppleScript to prevent injection
-                const escapeAppleScript = (s: string) => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-                const safeCliPath = escapeAppleScript(cliPath);
-                const safeResolvedPath = escapeAppleScript(resolvedPath);
-                child = spawn('osascript', ['-e',
-                    `tell app "Terminal" to do script "node \\"${safeCliPath}\\" wave \\"${safeResolvedPath}\\""`
-                ], {
-                    detached: true,
-                    stdio: 'ignore'
-                });
-            } else {
-                // Linux: try common terminal emulators
-                const terminals = ['gnome-terminal', 'xterm', 'konsole'];
-                for (const term of terminals) {
-                    try {
+                if (process.platform === 'win32') {
+                    // Windows: open new cmd window that stays open
+                    // Use array args to avoid shell injection - each arg is passed separately
+                    child = spawn('cmd', [
+                        '/c', 'start', '', 'cmd', '/k',
+                        'node', cliPath, 'wave', resolvedPath
+                    ], {
+                        detached: true,
+                        stdio: 'ignore'
+                    });
+                } else if (process.platform === 'darwin') {
+                    // macOS: open new Terminal window
+                    // Escape paths for AppleScript to prevent injection
+                    const escapeAppleScript = (s: string) => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+                    const safeCliPath = escapeAppleScript(cliPath);
+                    const safeResolvedPath = escapeAppleScript(resolvedPath);
+                    child = spawn('osascript', ['-e',
+                        `tell app "Terminal" to do script "node \\"${safeCliPath}\\" wave \\"${safeResolvedPath}\\""`
+                    ], {
+                        detached: true,
+                        stdio: 'ignore'
+                    });
+                } else {
+                    // Linux: try common terminal emulators
+                    const terminals = ['gnome-terminal', 'xterm', 'konsole'];
+                    for (const term of terminals) {
                         child = spawn(term, ['--', 'node', cliPath, 'wave', resolvedPath], {
                             detached: true,
                             stdio: 'ignore'
                         });
-                        break;
-                    } catch {
-                        continue;
+                        // Check if spawn succeeded by waiting briefly for error event
+                        const spawnError = await new Promise<Error | null>((res) => {
+                            child!.once('error', (err) => res(err));
+                            setTimeout(() => res(null), 100);
+                        });
+                        if (!spawnError) {
+                            break; // Terminal found and spawned successfully
+                        }
+                        child = undefined; // Reset and try next terminal
                     }
                 }
-            }
 
-            if (child) {
-                child.unref();
-                console.log(chalk.green('Waveform viewer opened in new terminal window.'));
-                resolve(ExitCodes.SUCCESS);
-            } else {
-                console.error(chalk.red('Could not open terminal window.'));
-                console.log(chalk.dim(`Run manually: node ${cliPath} wave "${resolvedPath}"`));
-                resolve(ExitCodes.TOOL_ERROR);
-            }
+                if (child) {
+                    child.unref();
+                    console.log(chalk.green('Waveform viewer opened in new terminal window.'));
+                    resolve(ExitCodes.SUCCESS);
+                } else {
+                    console.error(chalk.red('Could not open terminal window.'));
+                    console.log(chalk.dim(`Run manually: node "${cliPath}" wave "${resolvedPath}"`));
+                    resolve(ExitCodes.TOOL_ERROR);
+                }
+            })();
         });
     }
 }
