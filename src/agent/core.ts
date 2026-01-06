@@ -249,6 +249,13 @@ export class GateFlowAgent {
             content: userMessage.trim()
         });
 
+        // Emit status immediately so spinner shows during processing
+        this.bus.emit({
+            type: 'status',
+            phase: 'thinking',
+            label: 'Thinking...'
+        });
+
         // Detect mode for this query
         const modeContext: DetectModeContext = {
             hasErrors: this.session.hasErrors,
@@ -287,7 +294,14 @@ Return needsMultiAgent: true only for genuinely complex requests.`
                 { reasoning: complexity.reasoning },
                 0.9
             );
-            
+
+            // Update spinner for multi-agent mode
+            this.bus.emit({
+                type: 'status',
+                phase: 'thinking',
+                label: 'Planning multi-agent execution...'
+            });
+
             // Use orchestrator for complex requests
             return this.orchestrator.executeWithPlan(userMessage);
         }
@@ -295,10 +309,11 @@ Return needsMultiAgent: true only for genuinely complex requests.`
         // Simple requests: continue with single-agent flow
         const systemPrompt = getSystemPrompt(mode);
 
+        // Update spinner with detected mode
         this.bus.emit({
             type: 'status',
             phase: 'thinking',
-            label: `[${mode}] Processing...`
+            label: `[${mode}] Generating response...`
         });
 
         // AI SDK 6: Use stopWhen instead of maxSteps
