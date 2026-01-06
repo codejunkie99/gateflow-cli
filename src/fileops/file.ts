@@ -97,13 +97,46 @@ export class FileTools {
         private projectRoot: string = process.cwd()
     ) {}
 
+    /**
+     * Resolve a file path and validate it's within project root
+     * @throws Error if path escapes project root
+     */
     private resolvePath(filePath: string): string {
-        // If already absolute, use as-is
-        if (path.isAbsolute(filePath)) {
-            return filePath;
+        // Resolve the path (handles both absolute and relative)
+        const resolved = path.isAbsolute(filePath)
+            ? path.normalize(filePath)
+            : path.resolve(this.projectRoot, filePath);
+
+        // Normalize both paths for comparison
+        const normalizedResolved = path.normalize(resolved);
+        const normalizedRoot = path.normalize(this.projectRoot);
+
+        // Security check: ensure path is within project root
+        // Allow exact match or path within root (with path separator)
+        if (
+            normalizedResolved !== normalizedRoot &&
+            !normalizedResolved.startsWith(normalizedRoot + path.sep)
+        ) {
+            throw new Error(
+                `Path traversal detected: "${filePath}" resolves outside project root`
+            );
         }
-        // Resolve relative to project root
-        return path.resolve(this.projectRoot, filePath);
+
+        return resolved;
+    }
+
+    /**
+     * Safely resolve path, returning error result instead of throwing
+     */
+    private safeResolvePath(filePath: string): { path: string; error?: string } {
+        try {
+            return { path: this.resolvePath(filePath) };
+        } catch (error) {
+            return {
+                path: filePath,
+                error: error instanceof Error ? error.message : 'Invalid path'
+            };
+        }
     }
 
     // ========================================================================
@@ -118,8 +151,17 @@ export class FileTools {
             includeLineNumbers?: boolean;
         }
     ): Promise<FileReadResult> {
-        const absolutePath = this.resolvePath(filePath);
-        
+        // Safely resolve path with traversal check
+        const resolved = this.safeResolvePath(filePath);
+        if (resolved.error) {
+            return {
+                success: false,
+                path: filePath,
+                error: resolved.error
+            };
+        }
+        const absolutePath = resolved.path;
+
         this.bus.emit({
             type: 'tool_call',
             tool: 'read_file',
@@ -198,7 +240,16 @@ export class FileTools {
             skipApproval?: boolean;
         }
     ): Promise<FileWriteResult> {
-        const absolutePath = this.resolvePath(filePath);
+        // Safely resolve path with traversal check
+        const resolved = this.safeResolvePath(filePath);
+        if (resolved.error) {
+            return {
+                success: false,
+                path: filePath,
+                error: resolved.error
+            };
+        }
+        const absolutePath = resolved.path;
 
         // Policy check
         const decision = this.policy.checkTool('write_file', { filePath: absolutePath });

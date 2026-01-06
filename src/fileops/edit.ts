@@ -56,11 +56,46 @@ export class EditTools {
         private projectRoot: string = process.cwd()
     ) {}
 
+    /**
+     * Resolve a file path and validate it's within project root
+     * @throws Error if path escapes project root
+     */
     private resolvePath(filePath: string): string {
-        if (path.isAbsolute(filePath)) {
-            return filePath;
+        // Resolve the path (handles both absolute and relative)
+        const resolved = path.isAbsolute(filePath)
+            ? path.normalize(filePath)
+            : path.resolve(this.projectRoot, filePath);
+
+        // Normalize both paths for comparison
+        const normalizedResolved = path.normalize(resolved);
+        const normalizedRoot = path.normalize(this.projectRoot);
+
+        // Security check: ensure path is within project root
+        // Allow exact match or path within root (with path separator)
+        if (
+            normalizedResolved !== normalizedRoot &&
+            !normalizedResolved.startsWith(normalizedRoot + path.sep)
+        ) {
+            throw new Error(
+                `Path traversal detected: "${filePath}" resolves outside project root`
+            );
         }
-        return path.resolve(this.projectRoot, filePath);
+
+        return resolved;
+    }
+
+    /**
+     * Safely resolve path, returning error result instead of throwing
+     */
+    private safeResolvePath(filePath: string): { path: string; error?: string } {
+        try {
+            return { path: this.resolvePath(filePath) };
+        } catch (error) {
+            return {
+                path: filePath,
+                error: error instanceof Error ? error.message : 'Invalid path'
+            };
+        }
     }
 
     // ========================================================================
@@ -75,7 +110,16 @@ export class EditTools {
             dryRun?: boolean;
         }
     ): Promise<EditLinesResult> {
-        const absolutePath = this.resolvePath(filePath);
+        // Safely resolve path with traversal check
+        const resolved = this.safeResolvePath(filePath);
+        if (resolved.error) {
+            return {
+                success: false,
+                path: filePath,
+                error: resolved.error
+            };
+        }
+        const absolutePath = resolved.path;
 
         // Policy check
         const decision = this.policy.checkTool('edit_lines', { filePath: absolutePath });
@@ -260,7 +304,17 @@ export class EditTools {
             dryRun?: boolean;
         }
     ): Promise<SearchReplaceResult> {
-        const absolutePath = this.resolvePath(filePath);
+        // Safely resolve path with traversal check
+        const resolved = this.safeResolvePath(filePath);
+        if (resolved.error) {
+            return {
+                success: false,
+                path: filePath,
+                replacements: 0,
+                error: resolved.error
+            };
+        }
+        const absolutePath = resolved.path;
 
         // Policy check
         const decision = this.policy.checkTool('search_replace', { filePath: absolutePath });
@@ -498,7 +552,16 @@ export class EditTools {
             dryRun?: boolean;
         }
     ): Promise<EditLinesResult> {
-        const absolutePath = this.resolvePath(filePath);
+        // Safely resolve path with traversal check
+        const resolved = this.safeResolvePath(filePath);
+        if (resolved.error) {
+            return {
+                success: false,
+                path: filePath,
+                error: resolved.error
+            };
+        }
+        const absolutePath = resolved.path;
 
         try {
             const originalContent = await fs.readFile(absolutePath, 'utf-8');

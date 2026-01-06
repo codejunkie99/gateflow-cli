@@ -7,11 +7,45 @@ import { createTwoFilesPatch, parsePatch, applyPatch as applyPatchLib } from 'di
 import type { ParsedDiff, Hunk } from 'diff';
 import fs from 'fs/promises';
 import path from 'path';
-import { exec } from 'child_process';
-import { promisify } from 'util';
+import { spawn } from 'child_process';
 import os from 'os';
 
-const execAsync = promisify(exec);
+/**
+ * Execute a command using spawn (safe from shell injection)
+ * Returns a promise with stdout/stderr
+ */
+function spawnAsync(
+    command: string,
+    args: string[],
+    options?: { cwd?: string }
+): Promise<{ stdout: string; stderr: string; code: number }> {
+    return new Promise((resolve, reject) => {
+        let stdout = '';
+        let stderr = '';
+
+        const proc = spawn(command, args, {
+            cwd: options?.cwd,
+            shell: false, // Explicitly disable shell for security
+            windowsHide: true
+        });
+
+        proc.stdout.on('data', (data) => {
+            stdout += data.toString();
+        });
+
+        proc.stderr.on('data', (data) => {
+            stderr += data.toString();
+        });
+
+        proc.on('close', (code) => {
+            resolve({ stdout, stderr, code: code ?? 0 });
+        });
+
+        proc.on('error', (error) => {
+            reject(error);
+        });
+    });
+}
 
 // ============================================================================
 // Types
@@ -162,20 +196,24 @@ export class DiffEngine {
      */
     private async applyWithGit(patch: PatchOperation): Promise<ApplyResult> {
         const absolutePath = path.resolve(patch.path);
-        
+
         // Ensure temp directory exists
         await fs.mkdir(this.tempDir, { recursive: true });
-        
+
         const patchFile = path.join(this.tempDir, `patch-${Date.now()}.patch`);
 
         try {
             // Write patch file
             await fs.writeFile(patchFile, patch.unifiedDiff, 'utf-8');
 
-            // Apply with git
-            await execAsync(`git apply "${patchFile}"`, {
+            // Apply with git using spawn (safe from shell injection)
+            const result = await spawnAsync('git', ['apply', patchFile], {
                 cwd: this.projectRoot
             });
+
+            if (result.code !== 0) {
+                throw new Error(result.stderr || `git apply failed with code ${result.code}`);
+            }
 
             return {
                 success: true,
@@ -196,7 +234,9 @@ export class DiffEngine {
             // Clean up patch file
             try {
                 await fs.unlink(patchFile);
-            } catch {}
+            } catch {
+                // Ignore cleanup errors
+            }
         }
     }
 
@@ -302,15 +342,20 @@ export class DiffEngine {
             try {
                 // Ensure temp directory exists
                 await fs.mkdir(this.tempDir, { recursive: true });
-                
+
                 const patchFile = path.join(this.tempDir, `revert-${Date.now()}.patch`);
                 await fs.writeFile(patchFile, patch.unifiedDiff, 'utf-8');
 
-                await execAsync(`git apply -R "${patchFile}"`, {
+                // Use spawn with args array (safe from shell injection)
+                const result = await spawnAsync('git', ['apply', '-R', patchFile], {
                     cwd: this.projectRoot
                 });
 
                 await fs.unlink(patchFile);
+
+                if (result.code !== 0) {
+                    throw new Error(result.stderr || `git apply -R failed with code ${result.code}`);
+                }
 
                 return {
                     success: true,
@@ -319,7 +364,7 @@ export class DiffEngine {
                     revertable: false
                 };
             } catch {
-                // Fall through
+                // Fall through to direct restore
             }
         }
 
@@ -411,10 +456,11 @@ export class DiffEngine {
         }
 
         try {
-            await execAsync('git rev-parse --git-dir', {
+            // Use spawn with args array (safe from shell injection)
+            const result = await spawnAsync('git', ['rev-parse', '--git-dir'], {
                 cwd: this.projectRoot
             });
-            this.isGitRepo = true;
+            this.isGitRepo = result.code === 0;
         } catch {
             this.isGitRepo = false;
         }
@@ -431,11 +477,12 @@ export class DiffEngine {
         }
 
         try {
-            const { stdout } = await execAsync(`git status --porcelain "${filePath}"`, {
+            // Use spawn with args array (safe from shell injection)
+            const result = await spawnAsync('git', ['status', '--porcelain', filePath], {
                 cwd: this.projectRoot
             });
 
-            const status = stdout.trim();
+            const status = result.stdout.trim();
             if (!status) return 'unchanged';
             if (status.startsWith('??')) return 'untracked';
             if (status.startsWith(' M') || status.startsWith('M ')) return 'modified';

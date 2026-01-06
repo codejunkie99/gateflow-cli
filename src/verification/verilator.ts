@@ -3,14 +3,70 @@
  * Lint, compile, and simulate SystemVerilog with Verilator
  */
 
-import { exec, spawn } from 'child_process';
-import { promisify } from 'util';
+import { spawn } from 'child_process';
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
 import type { EventBus } from '../events/index.js';
 
-const execAsync = promisify(exec);
+/**
+ * Execute a command using spawn (safe from shell injection)
+ * Returns a promise with stdout/stderr
+ */
+function spawnAsync(
+    command: string,
+    args: string[],
+    options?: { timeout?: number; cwd?: string }
+): Promise<{ stdout: string; stderr: string; code: number }> {
+    return new Promise((resolve, reject) => {
+        let stdout = '';
+        let stderr = '';
+        let timeoutId: NodeJS.Timeout | undefined;
+
+        const proc = spawn(command, args, {
+            cwd: options?.cwd,
+            shell: false, // Explicitly disable shell for security
+            windowsHide: true
+        });
+
+        if (options?.timeout) {
+            timeoutId = setTimeout(() => {
+                proc.kill();
+                reject(new Error(`Command timed out after ${options.timeout}ms`));
+            }, options.timeout);
+        }
+
+        proc.stdout.on('data', (data) => {
+            stdout += data.toString();
+        });
+
+        proc.stderr.on('data', (data) => {
+            stderr += data.toString();
+        });
+
+        proc.on('close', (code) => {
+            if (timeoutId) clearTimeout(timeoutId);
+            resolve({ stdout, stderr, code: code ?? 0 });
+        });
+
+        proc.on('error', (error) => {
+            if (timeoutId) clearTimeout(timeoutId);
+            reject(error);
+        });
+    });
+}
+
+/**
+ * Execute a command in WSL using spawn (safe from shell injection)
+ */
+function spawnWslAsync(
+    command: string,
+    args: string[],
+    options?: { timeout?: number; cwd?: string }
+): Promise<{ stdout: string; stderr: string; code: number }> {
+    // Use wsl.exe with command and args passed separately
+    return spawnAsync('wsl', [command, ...args], options);
+}
 
 // ============================================================================
 // Types
@@ -199,29 +255,27 @@ export class Verilator {
         error?: string;
     }> {
         try {
-            const cmd = this.useWsl 
-                ? `wsl ${this.wslPath} --version`
-                : `${this.config.binary} --version`;
-            
-            const { stdout } = await execAsync(cmd);
-            const match = stdout.match(/Verilator (\d+\.\d+(?:\.\d+)?)/);
-            
-            // Get path
-            let whichCmd: string;
-            if (this.useWsl) {
-                whichCmd = `wsl which ${this.wslPath}`;
-            } else {
-                whichCmd = process.platform === 'win32'
-                    ? `where ${this.config.binary}`
-                    : `which ${this.config.binary}`;
-            }
+            // Get version using spawn (safe from shell injection)
+            const versionResult = this.useWsl
+                ? await spawnWslAsync(this.wslPath, ['--version'])
+                : await spawnAsync(this.config.binary, ['--version']);
 
-            const { stdout: whichOutput } = await execAsync(whichCmd);
+            const match = versionResult.stdout.match(/Verilator (\d+\.\d+(?:\.\d+)?)/);
+
+            // Get path using which/where
+            let whichResult: { stdout: string };
+            if (this.useWsl) {
+                whichResult = await spawnWslAsync('which', [this.wslPath]);
+            } else if (process.platform === 'win32') {
+                whichResult = await spawnAsync('where', [this.config.binary]);
+            } else {
+                whichResult = await spawnAsync('which', [this.config.binary]);
+            }
 
             return {
                 installed: true,
                 version: match ? match[1] : 'unknown',
-                path: whichOutput.trim().split('\n')[0]
+                path: whichResult.stdout.trim().split('\n')[0]
             };
         } catch (error) {
             return {
@@ -287,40 +341,34 @@ export class Verilator {
         });
 
         try {
-            const binaryCmd = this.useWsl ? this.wslPath : this.config.binary;
-            const fullCmd = this.useWsl 
-                ? `wsl ${binaryCmd} ${args.join(' ')}`
-                : `${binaryCmd} ${args.join(' ')}`;
-            
-            const { stdout, stderr } = await execAsync(
-                fullCmd,
-                { timeout: this.config.timeout }
-            );
+            // Use spawn with args array (safe from shell injection)
+            const result = this.useWsl
+                ? await spawnWslAsync(this.wslPath, args, { timeout: this.config.timeout })
+                : await spawnAsync(this.config.binary, args, { timeout: this.config.timeout });
 
-            const allOutput = stdout + stderr;
-            const parsed = this.parseVerilatorOutput(allOutput);
-
-            return {
-                success: parsed.filter(e => e.type === 'error').length === 0,
-                errors: parsed.filter(e => e.type === 'error'),
-                warnings: parsed.filter(e => e.type === 'warning'),
-                exitCode: 0,
-                duration: Date.now() - startTime
-            };
-
-        } catch (error: any) {
-            const stdout = error.stdout || '';
-            const stderr = error.stderr || error.message || '';
-            const allOutput = stdout + stderr;
+            const allOutput = result.stdout + result.stderr;
             const parsed = this.parseVerilatorOutput(allOutput);
             const errors = parsed.filter(e => e.type === 'error');
 
-            // FIX C: Verilator may exit non-zero with only warnings. Success should be based on error count, not exit code.
+            // Verilator may exit non-zero with only warnings. Success should be based on error count, not exit code.
             return {
                 success: errors.length === 0,
-                errors: errors,
+                errors,
                 warnings: parsed.filter(e => e.type === 'warning'),
-                exitCode: error.code ?? 1,
+                exitCode: result.code,
+                duration: Date.now() - startTime
+            };
+
+        } catch (error) {
+            const errorMsg = error instanceof Error ? error.message : String(error);
+            const parsed = this.parseVerilatorOutput(errorMsg);
+            const errors = parsed.filter(e => e.type === 'error');
+
+            return {
+                success: errors.length === 0,
+                errors,
+                warnings: parsed.filter(e => e.type === 'warning'),
+                exitCode: 1,
                 duration: Date.now() - startTime
             };
         }
@@ -403,15 +451,18 @@ export class Verilator {
         });
 
         try {
-            const { stdout, stderr } = await execAsync(
-                `${this.config.binary} ${args.join(' ')}`,
-                {
-                    timeout: this.config.timeout * 2,  // Compilation takes longer
+            // Use spawn with args array (safe from shell injection)
+            const result = this.useWsl
+                ? await spawnWslAsync(this.wslPath, args, {
+                    timeout: this.config.timeout * 2,
                     cwd: outputDir
-                }
-            );
+                })
+                : await spawnAsync(this.config.binary, args, {
+                    timeout: this.config.timeout * 2,
+                    cwd: outputDir
+                });
 
-            const allOutput = stdout + stderr;
+            const allOutput = result.stdout + result.stderr;
             const parsed = this.parseVerilatorOutput(allOutput);
             const errors = parsed.filter(e => e.type === 'error');
 
@@ -420,12 +471,14 @@ export class Verilator {
                 ? `V${topModule}.exe`
                 : `V${topModule}`;
             const exePath = path.join(outputDir, exeName);
-            
+
             let executable: string | undefined;
             try {
                 await fs.access(exePath);
                 executable = exePath;
-            } catch {}
+            } catch {
+                // Executable not found, that's fine if there were errors
+            }
 
             this.bus.emit({
                 type: 'sim_stage',
@@ -445,9 +498,9 @@ export class Verilator {
                 duration: Date.now() - startTime
             };
 
-        } catch (error: any) {
-            const stderr = error.stderr || error.message || '';
-            const parsed = this.parseVerilatorOutput(stderr);
+        } catch (error) {
+            const errorMsg = error instanceof Error ? error.message : String(error);
+            const parsed = this.parseVerilatorOutput(errorMsg);
 
             this.bus.emit({
                 type: 'sim_stage',
@@ -557,7 +610,9 @@ export class Verilator {
                 try {
                     await fs.access(vcdPath);
                     vcdExists = true;
-                } catch {}
+                } catch {
+                    // VCD file wasn't generated - simulation may not have tracing enabled
+                }
 
                 this.bus.emit({
                     type: 'sim_stage',
@@ -599,7 +654,9 @@ export class Verilator {
     async clean(): Promise<void> {
         try {
             await fs.rm(this.config.workDir, { recursive: true, force: true });
-        } catch {}
+        } catch {
+            // Work directory may not exist or already cleaned - safe to ignore
+        }
     }
 
     /**

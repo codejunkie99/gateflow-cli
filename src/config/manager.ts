@@ -98,15 +98,15 @@ export class ConfigManager {
     /**
      * Get configuration value with default
      */
-    get<T = any>(key: string, defaultValue?: T): T {
+    get<T = unknown>(key: string, defaultValue?: T): T | undefined {
         const keys = key.split('.');
-        let value: any = this.config;
+        let value: unknown = this.config;
 
         for (const k of keys) {
             if (value && typeof value === 'object' && k in value) {
-                value = value[k];
+                value = (value as Record<string, unknown>)[k];
             } else {
-                return defaultValue as T;
+                return defaultValue;
             }
         }
 
@@ -116,16 +116,16 @@ export class ConfigManager {
     /**
      * Set configuration value
      */
-    set(key: string, value: any): void {
+    set(key: string, value: unknown): void {
         const keys = key.split('.');
-        let target: any = this.config;
+        let target: Record<string, unknown> = this.config as Record<string, unknown>;
 
         for (let i = 0; i < keys.length - 1; i++) {
             const k = keys[i];
             if (!target[k] || typeof target[k] !== 'object') {
                 target[k] = {};
             }
-            target = target[k];
+            target = target[k] as Record<string, unknown>;
         }
 
         target[keys[keys.length - 1]] = value;
@@ -169,24 +169,54 @@ export class ConfigManager {
      * Merge two config objects (deep merge)
      */
     private mergeConfig(defaults: GateFlowConfig, overrides: Partial<GateFlowConfig>): GateFlowConfig {
-        const merged: GateFlowConfig = { ...defaults };
+        const merged = { ...defaults } as Record<string, unknown>;
         const overrideKeys = Object.keys(overrides) as (keyof GateFlowConfig)[];
 
         for (const key of overrideKeys) {
             const overrideValue = overrides[key];
             const defaultValue = defaults[key];
-            
+
             if (overrideValue && typeof overrideValue === 'object' && !Array.isArray(overrideValue)) {
                 // Recursive merge for nested objects
-                const nestedDefault = (defaultValue as Partial<GateFlowConfig>) || {};
-                const nestedOverride = overrideValue as Partial<GateFlowConfig>;
-                (merged[key] as any) = this.mergeConfig(
-                    nestedDefault as GateFlowConfig,
-                    nestedOverride
+                const nestedDefault = (defaultValue || {}) as Record<string, unknown>;
+                const nestedOverride = overrideValue as Record<string, unknown>;
+                merged[key] = this.mergeNested(nestedDefault, nestedOverride);
+            } else if (overrideValue !== undefined) {
+                // Direct assignment for primitives and arrays
+                merged[key] = overrideValue;
+            }
+        }
+
+        return merged as GateFlowConfig;
+    }
+
+    /**
+     * Merge nested objects
+     */
+    private mergeNested(
+        defaults: Record<string, unknown>,
+        overrides: Record<string, unknown>
+    ): Record<string, unknown> {
+        const merged = { ...defaults };
+
+        for (const key of Object.keys(overrides)) {
+            const overrideValue = overrides[key];
+            const defaultValue = defaults[key];
+
+            if (
+                overrideValue &&
+                typeof overrideValue === 'object' &&
+                !Array.isArray(overrideValue) &&
+                defaultValue &&
+                typeof defaultValue === 'object' &&
+                !Array.isArray(defaultValue)
+            ) {
+                merged[key] = this.mergeNested(
+                    defaultValue as Record<string, unknown>,
+                    overrideValue as Record<string, unknown>
                 );
             } else if (overrideValue !== undefined) {
-                // Direct assignment for primitives
-                (merged[key] as any) = overrideValue;
+                merged[key] = overrideValue;
             }
         }
 
