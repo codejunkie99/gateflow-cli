@@ -5,7 +5,7 @@
 
 import chalk from 'chalk';
 import ora, { Ora } from 'ora';
-import type { EventBus, UiEvent } from '../events/index.js';
+import type { EventBus, UiEvent, Subscription } from '../events/index.js';
 import { DiffPreview, colorizeDiff } from '../diff/preview.js';
 
 // ============================================================================
@@ -47,9 +47,11 @@ export class TerminalRenderer {
     private bufferTimer: NodeJS.Timeout | null = null;
     private isStreaming: boolean = false;
     private currentPhase: string = '';
+    private currentLabel: string = '';
     private pendingApproval: PendingApproval | null = null;
     private diffPreview: DiffPreview;
     private startTime: number = 0;
+    private subscription: Subscription | null = null;
 
     constructor(
         private bus: EventBus,
@@ -80,17 +82,25 @@ export class TerminalRenderer {
      */
     start(): void {
         this.startTime = Date.now();
-        this.bus.subscribe(this.handleEvent.bind(this));
+        this.subscription = this.bus.subscribe(this.handleEvent.bind(this));
     }
 
     /**
      * Stop renderer and cleanup
      */
     stop(): void {
+        // Unsubscribe from event bus
+        if (this.subscription) {
+            this.subscription.unsubscribe();
+            this.subscription = null;
+        }
+
         this.flushBuffer();
         this.stopSpinner();
+
         if (this.bufferTimer) {
             clearTimeout(this.bufferTimer);
+            this.bufferTimer = null;
         }
     }
 
@@ -226,6 +236,7 @@ export class TerminalRenderer {
 
     private handleStatus(phase: string, label: string): void {
         this.currentPhase = phase;
+        this.currentLabel = label;
 
         // Flush any pending tokens
         this.flushBuffer();
@@ -238,6 +249,20 @@ export class TerminalRenderer {
             this.spinner = ora({
                 text: `${icon} ${label}`,
                 color: this.getPhaseColor(phase) as any,
+                spinner: this.options.unicode ? 'dots' : 'line'
+            }).start();
+        }
+    }
+
+    /**
+     * Restart spinner with current phase/label (after tool output)
+     */
+    private restartSpinner(): void {
+        if (!this.spinner && this.currentPhase) {
+            const icon = this.getPhaseIcon(this.currentPhase);
+            this.spinner = ora({
+                text: `${icon} ${this.currentLabel}`,
+                color: this.getPhaseColor(this.currentPhase) as any,
                 spinner: this.options.unicode ? 'dots' : 'line'
             }).start();
         }
@@ -273,9 +298,9 @@ export class TerminalRenderer {
 
     private handleToolCall(tool: string, argsSummary: string): void {
         this.stopSpinner();
-        
-        console.log(
-            chalk.cyan('•') + ' ' + 
+
+        this.log(
+            chalk.cyan('•') + ' ' +
             chalk.blue.bold(tool) +
             chalk.gray(` ${argsSummary}`)
         );
@@ -286,7 +311,10 @@ export class TerminalRenderer {
         const durationStr = duration ? chalk.gray(` (${duration}ms)`) : '';
 
         // Dotted connection line for tool results
-        console.log(chalk.gray('  │ ') + color(summary) + durationStr);
+        this.log(chalk.gray('  │ ') + color(summary) + durationStr);
+
+        // Restart spinner to show work is continuing
+        this.restartSpinner();
     }
 
     // ========================================================================
@@ -337,7 +365,7 @@ export class TerminalRenderer {
 
         const key = input.toLowerCase().trim();
         let approved = false;
-        let scope: 'once' | 'session' | 'project' | undefined;
+        let scope: 'once' | 'session' | 'project' = 'once';
 
         switch (key) {
             case 'y':
@@ -353,10 +381,12 @@ export class TerminalRenderer {
             case 'n':
             case 'no':
                 approved = false;
+                scope = 'once';
                 break;
             case 's':
             case 'skip':
                 approved = false;
+                scope = 'once';
                 break;
             default:
                 return false; // Invalid input
@@ -387,9 +417,9 @@ export class TerminalRenderer {
     private handleError(message: string, code?: number): void {
         this.stopSpinner();
         console.log('');
-        console.log(chalk.red(`ERROR: ${message}`));
+        this.log(chalk.red(`ERROR: ${message}`));
         if (code !== undefined) {
-            console.log(chalk.gray(`   Exit code: ${code}`));
+            this.log(chalk.gray(`   Exit code: ${code}`));
         }
     }
 
@@ -454,9 +484,18 @@ export class TerminalRenderer {
     }
 
     private handleSimProgress(stage: string, percent: number, message: string): void {
+        const bar = this.makeProgressBar(percent);
+        const text = `${stage} ${bar} ${message}`;
+
         if (this.spinner) {
-            const bar = this.makeProgressBar(percent);
-            this.spinner.text = `${stage} ${bar} ${message}`;
+            this.spinner.text = text;
+        } else {
+            // Start a spinner if none exists
+            this.spinner = ora({
+                text,
+                color: 'cyan',
+                spinner: this.options.unicode ? 'dots' : 'line'
+            }).start();
         }
     }
 
@@ -536,6 +575,23 @@ export class TerminalRenderer {
         if (ms < 1000) return `${ms}ms`;
         if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
         return `${Math.floor(ms / 60000)}m ${Math.floor((ms % 60000) / 1000)}s`;
+    }
+
+    /**
+     * Get timestamp prefix if timestamps are enabled
+     */
+    private getTimestamp(): string {
+        if (!this.options.timestamps) return '';
+        const now = new Date();
+        const time = now.toLocaleTimeString('en-US', { hour12: false });
+        return chalk.gray(`[${time}] `);
+    }
+
+    /**
+     * Log with optional timestamp
+     */
+    private log(message: string): void {
+        console.log(this.getTimestamp() + message);
     }
 
     private makeProgressBar(percent: number, width: number = 20): string {
