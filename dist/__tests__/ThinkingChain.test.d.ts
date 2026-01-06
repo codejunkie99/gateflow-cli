@@ -1,4 +1,0 @@
-/**
- * ThinkingChain Unit Tests
- */
-export {};

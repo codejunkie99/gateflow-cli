@@ -1,4 +1,0 @@
-/**
- * PromptBuilder Unit Tests
- */
-export {};
