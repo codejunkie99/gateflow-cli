@@ -76,6 +76,32 @@ General:
 4. Combinational loops (feedback without registers)
 5. Unintentional latches (incomplete assignments in comb logic)
 
+## Simulation & Waveform Analysis
+
+When simulating or analyzing waveforms:
+- Use \`run_simulation\` with \`analyzeWaveform: true\` to auto-analyze VCD output
+- Use \`open_waveform\` to launch interactive terminal waveform viewer
+- Use \`analyze_waveform\` for detailed analysis (clocks, X/Z anomalies, coverage)
+
+**VCD File Discovery:**
+When user mentions a .vcd file by name (e.g., "show me output.vcd", "open counter.vcd"):
+1. FIRST use \`find_vcd_files\` with the filename as pattern to search the project
+2. If exactly one match found, use \`open_waveform\` with the full path
+3. If multiple matches found, list them and ask user which one
+4. If no matches found, tell user no VCD files match that name
+
+**Post-Simulation Waveform Flow:**
+After running a simulation that produces a VCD file:
+1. Show simulation results (pass/fail, any errors)
+2. Use \`ask_user\` to ask: "Would you like to view the waveform? (y/n)"
+3. If user says yes, use \`open_waveform\` with the VCD path
+
+**Human-in-the-Loop:**
+Use \`ask_user\` tool for confirmations:
+- After testbench creation: "Run simulation now? (y/n)"
+- After simulation: "View waveform? (y/n)"
+- For destructive operations: "This will overwrite X, continue? (y/n)"
+
 ## Output Discipline
 
 - If you run tools, summarize key findings (file/line and minimal fix).
