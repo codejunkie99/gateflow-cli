@@ -173,22 +173,6 @@ export async function chatCommand(
     // Stop spinner
     ctx.bus.emit({ type: 'token_done' });
 
-    // Handle initial query if provided (non-interactive mode)
-    if (initialQuery) {
-        try {
-            // Try to detect mode from initial query context if possible
-            // For now, we rely on the query text, but we could add CLI flags later
-            await agent.run(initialQuery);
-            return ExitCodes.SUCCESS;
-        } catch (error) {
-            ctx.bus.emit({
-                type: 'error',
-                message: String(error)
-            });
-            return ExitCodes.TOOL_ERROR;
-        }
-    }
-
     // Interactive REPL
     const rl = readline.createInterface({
         input: process.stdin,
@@ -200,6 +184,20 @@ export async function chatCommand(
         console.log(chalk.yellow('   Warning: Indexing failed. Some features may be limited.'));
     } else {
         console.log(`   Indexed ${stats.modules} modules in ${stats.files} files.`);
+    }
+
+    // Handle initial query if provided, then continue to REPL
+    if (initialQuery) {
+        console.log(chalk.dim(`\n> ${initialQuery}\n`));
+        try {
+            await agent.run(initialQuery);
+        } catch (error) {
+            ctx.bus.emit({
+                type: 'error',
+                message: String(error)
+            });
+        }
+        console.log('');
     }
     console.log('   Type your questions or commands. Type "exit" to quit.\n');
 
