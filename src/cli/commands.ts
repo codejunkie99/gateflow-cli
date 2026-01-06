@@ -548,7 +548,9 @@ export async function doctorCommand(ctx: CommandContext): Promise<ExitCode> {
 export async function versionCommand(): Promise<ExitCode> {
     // Read package.json
     try {
-        const pkgPath = path.join(__dirname, '../../package.json');
+        const { fileURLToPath } = await import('url');
+        const currentDir = path.dirname(fileURLToPath(import.meta.url));
+        const pkgPath = path.join(currentDir, '../../package.json');
         const pkg = JSON.parse(await fs.readFile(pkgPath, 'utf-8'));
         console.log(`gateflow v${pkg.version}`);
     } catch {
@@ -613,17 +615,22 @@ export async function waveCommand(ctx: CommandContext, vcdPath: string): Promise
 
             if (process.platform === 'win32') {
                 // Windows: open new cmd window that stays open
-                child = spawn('cmd', ['/c', 'start', 'cmd', '/k',
-                    `node "${cliPath}" wave "${resolvedPath}"`
+                // Use array args to avoid shell injection - each arg is passed separately
+                child = spawn('cmd', [
+                    '/c', 'start', '', 'cmd', '/k',
+                    'node', cliPath, 'wave', resolvedPath
                 ], {
                     detached: true,
-                    stdio: 'ignore',
-                    shell: true
+                    stdio: 'ignore'
                 });
             } else if (process.platform === 'darwin') {
                 // macOS: open new Terminal window
+                // Escape paths for AppleScript to prevent injection
+                const escapeAppleScript = (s: string) => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+                const safeCliPath = escapeAppleScript(cliPath);
+                const safeResolvedPath = escapeAppleScript(resolvedPath);
                 child = spawn('osascript', ['-e',
-                    `tell app "Terminal" to do script "node '${cliPath}' wave '${resolvedPath}'"`
+                    `tell app "Terminal" to do script "node \\"${safeCliPath}\\" wave \\"${safeResolvedPath}\\""`
                 ], {
                     detached: true,
                     stdio: 'ignore'
