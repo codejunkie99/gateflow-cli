@@ -7,6 +7,7 @@ import path from 'path';
 import fs from 'fs/promises';
 import readline from 'readline';
 import chalk from 'chalk';
+import { glob } from 'glob';
 import { EventBus, ExitCodes, type ExitCode } from '../events/index.js';
 import { PolicyEngine, initPolicyEngine } from '../approval/index.js';
 import { FileTools, EditTools, createTools } from '../fileops/index.js';
@@ -46,45 +47,35 @@ export interface CommandContext {
 // Context Setup
 // ============================================================================
 
-/**
- * Detect the project root by looking for common markers
- * Prefers directories with .sv files or HDL project markers
- */
-async function detectProjectRoot(startDir: string): Promise<string> {
-    let dir = path.resolve(startDir);
-    
-    // If we're in a 'cli' subdirectory, always go up to parent
-    if (path.basename(dir) === 'cli') {
-        const parent = path.dirname(dir);
-        // Check if parent has HDL-related directories or .sv files
-        const hdlMarkers = ['rtl', 'tb', 'src', '.git'];
-        for (const marker of hdlMarkers) {
-            try {
-                await fs.access(path.join(parent, marker));
-                console.log(`  Project root: ${parent}`);
-                return parent;
-            } catch {
-                // Marker doesn't exist - continue checking other markers
-            }
+export async function setupContext(options: GlobalOptions): Promise<CommandContext> {
+    // Use the current working directory as project root (simple, predictable)
+    const projectRoot = path.resolve(options.cwd);
+
+    // Validate directory exists
+    try {
+        const stat = await fs.stat(projectRoot);
+        if (!stat.isDirectory()) {
+            throw new Error(`Not a directory: ${projectRoot}`);
         }
-        // Also check for .sv files directly in parent
-        try {
-            const files = await fs.readdir(parent);
-            if (files.some(f => f.endsWith('.sv'))) {
-                console.log(`  Project root: ${parent}`);
-                return parent;
-            }
-        } catch {
-            // Directory not readable - continue to fallback
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+            throw new Error(`Directory not found: ${projectRoot}`);
+        }
+        throw error;
+    }
+
+    // Warn if no HDL files found (non-blocking)
+    if (!options.json) {
+        const hdlFiles = await glob('**/*.{sv,svh,v,vh}', {
+            cwd: projectRoot,
+            ignore: ['node_modules/**', 'dist/**', 'obj_dir/**'],
+            nodir: true
+        });
+        if (hdlFiles.length === 0) {
+            console.log(chalk.yellow('  Warning: No SystemVerilog files found in project root'));
         }
     }
-    
-    return dir;
-}
 
-export async function setupContext(options: GlobalOptions): Promise<CommandContext> {
-    const projectRoot = await detectProjectRoot(options.cwd);
-    
     // Create event bus
     const bus = new EventBus();
 
