@@ -98,12 +98,39 @@ export const lintFileSchema = z.object({
 export const runSimSchema = z.object({
     top: z.string().describe('Top module name'),
     testbench: z.string().optional().describe('Testbench file path'),
-    timeout: z.number().optional().describe('Simulation timeout in ms')
+    timeout: z.number().optional().describe('Simulation timeout in ms'),
+    analyzeWaveform: z.boolean().optional().default(false).describe('Analyze the VCD waveform after simulation completes')
+});
+
+// Open Waveform Viewer
+export const openWaveformSchema = z.object({
+    vcdPath: z.string().describe('Path to the VCD file to open in the interactive viewer')
 });
 
 // Find All SV Files
 export const findAllSvFilesSchema = z.object({
     directory: z.string().optional().default('.').describe('Starting directory (default: project root)')
+});
+
+// Analyze Waveform
+export const analyzeWaveformSchema = z.object({
+    vcdPath: z.string().describe('Path to the VCD file to analyze'),
+    signals: z.array(z.string()).optional().describe('Specific signals to analyze (default: all)'),
+    detectClocks: z.boolean().optional().default(true).describe('Detect clock signals automatically'),
+    checkAnomalies: z.boolean().optional().default(true).describe('Check for signal anomalies')
+});
+
+// Ask User (Human-in-the-loop)
+export const askUserSchema = z.object({
+    question: z.string().describe('Question to ask the user'),
+    options: z.array(z.string()).optional().describe('Optional list of choices for the user'),
+    default: z.string().optional().describe('Default option if user just presses enter')
+});
+
+// Find VCD Files
+export const findVcdFilesSchema = z.object({
+    directory: z.string().optional().default('.').describe('Starting directory (default: project root)'),
+    pattern: z.string().optional().describe('Optional filename pattern to match (e.g., "counter" matches "counter.vcd")')
 });
 
 // ============================================================================
@@ -362,13 +389,172 @@ export function createToolExecutors(ctx: ToolContext) {
                 timeout: args.timeout
             });
 
+            // If simulation succeeded and analyzeWaveform is requested
+            let waveformAnalysis = null;
+            if (result.success && result.vcdPath && args.analyzeWaveform) {
+                const { VCDParser } = await import('../waveform/index.js');
+
+                ctx.bus.emit({
+                    type: 'sim_stage',
+                    stage: 'parse_vcd',
+                    status: 'started',
+                    message: 'Analyzing waveform...'
+                });
+
+                try {
+                    const parser = new VCDParser();
+                    const data = await parser.parseFile(result.vcdPath);
+
+                    // Get time range
+                    let minTime = Infinity, maxTime = -Infinity;
+                    for (const signal of data.signals) {
+                        for (const [time] of signal.values) {
+                            if (time < minTime) minTime = time;
+                            if (time > maxTime) maxTime = time;
+                        }
+                    }
+
+                    ctx.bus.emit({
+                        type: 'waveform_loaded',
+                        path: result.vcdPath,
+                        signalCount: data.signals.length,
+                        timeRange: {
+                            start: BigInt(minTime === Infinity ? 0 : minTime),
+                            end: BigInt(maxTime === -Infinity ? 0 : maxTime)
+                        }
+                    });
+
+                    waveformAnalysis = {
+                        signalCount: data.signals.length,
+                        timeRange: { start: minTime, end: maxTime },
+                        signals: data.signals.slice(0, 20).map(s => ({
+                            name: s.name,
+                            width: s.width,
+                            changes: s.values.length
+                        }))
+                    };
+
+                    ctx.bus.emit({
+                        type: 'sim_stage',
+                        stage: 'parse_vcd',
+                        status: 'completed'
+                    });
+                } catch (err) {
+                    ctx.bus.emit({
+                        type: 'sim_stage',
+                        stage: 'parse_vcd',
+                        status: 'failed',
+                        message: String(err)
+                    });
+                }
+            }
+
             return {
                 success: result.success,
                 stdout: result.stdout,
                 stderr: result.stderr,
                 exitCode: result.exitCode,
-                vcdPath: result.vcdPath
+                vcdPath: result.vcdPath,
+                waveformAnalysis
             };
+        },
+
+        open_waveform: async (args: z.infer<typeof openWaveformSchema>) => {
+            const path = await import('path');
+            const fs = await import('fs/promises');
+            const { spawn } = await import('child_process');
+            const { fileURLToPath } = await import('url');
+
+            // Resolve path
+            const resolvedPath = path.default.isAbsolute(args.vcdPath)
+                ? args.vcdPath
+                : path.default.join(ctx.projectRoot, args.vcdPath);
+
+            // Check file exists
+            try {
+                await fs.access(resolvedPath);
+            } catch {
+                return { error: `VCD file not found: ${resolvedPath}` };
+            }
+
+            ctx.bus.emit({
+                type: 'status',
+                phase: 'tool',
+                label: `Opening waveform viewer: ${args.vcdPath}`
+            });
+
+            // Check if we're in an interactive terminal
+            if (process.stdin.isTTY) {
+                // Direct mode - use viewer in current terminal
+                const { WaveformViewer } = await import('../waveform/index.js');
+                const viewer = new WaveformViewer({ bus: ctx.bus });
+
+                try {
+                    await viewer.open(resolvedPath);
+                    return {
+                        success: true,
+                        message: `Waveform viewer closed for ${args.vcdPath}`
+                    };
+                } catch (err) {
+                    return { error: `Failed to open waveform viewer: ${err}` };
+                }
+            } else {
+                // Non-TTY mode - spawn new terminal window
+                const cliPath = path.default.resolve(
+                    path.default.dirname(fileURLToPath(import.meta.url)),
+                    '../cli/main.js'
+                );
+
+                return new Promise((resolve) => {
+                    let child;
+
+                    if (process.platform === 'win32') {
+                        // Windows: open new cmd window
+                        child = spawn('cmd', ['/c', 'start', 'cmd', '/k',
+                            `node "${cliPath}" wave "${resolvedPath}" && exit`
+                        ], {
+                            detached: true,
+                            stdio: 'ignore',
+                            shell: true
+                        });
+                    } else if (process.platform === 'darwin') {
+                        // macOS: open new Terminal window
+                        child = spawn('osascript', ['-e',
+                            `tell app "Terminal" to do script "node '${cliPath}' wave '${resolvedPath}'"`
+                        ], {
+                            detached: true,
+                            stdio: 'ignore'
+                        });
+                    } else {
+                        // Linux: try common terminal emulators
+                        const terminals = ['gnome-terminal', 'xterm', 'konsole'];
+                        for (const term of terminals) {
+                            try {
+                                child = spawn(term, ['--', 'node', cliPath, 'wave', resolvedPath], {
+                                    detached: true,
+                                    stdio: 'ignore'
+                                });
+                                break;
+                            } catch {
+                                continue;
+                            }
+                        }
+                    }
+
+                    if (child) {
+                        child.unref();
+                        resolve({
+                            success: true,
+                            message: `Waveform viewer opened in new terminal window for ${args.vcdPath}`,
+                            note: 'Viewer is running in a separate window. Press q to close it.'
+                        });
+                    } else {
+                        resolve({
+                            error: 'Could not open terminal window. Please run manually: node dist/cli/main.js wave ' + resolvedPath
+                        });
+                    }
+                });
+            }
         },
 
         get_project_stats: async () => {
@@ -378,10 +564,10 @@ export function createToolExecutors(ctx: ToolContext) {
 
         find_all_sv_files: async (args: z.infer<typeof findAllSvFilesSchema>) => {
             // Always use project root, resolve '.' to project root
-            const directory = (!args.directory || args.directory === '.') 
-                ? ctx.projectRoot 
+            const directory = (!args.directory || args.directory === '.')
+                ? ctx.projectRoot
                 : args.directory;
-            
+
             // Use findFiles (glob) instead of listFiles for better performance and exclusion
             const files = await ctx.fileTools.findFiles('**/*.sv', {
                 cwd: directory
@@ -392,8 +578,322 @@ export function createToolExecutors(ctx: ToolContext) {
                 count: files.length,
                 files: files
             };
+        },
+
+        analyze_waveform: async (args: z.infer<typeof analyzeWaveformSchema>) => {
+            const { VCDParser } = await import('../waveform/index.js');
+            const path = await import('path');
+            const fs = await import('fs/promises');
+
+            // Resolve path
+            const resolvedPath = path.default.isAbsolute(args.vcdPath)
+                ? args.vcdPath
+                : path.default.join(ctx.projectRoot, args.vcdPath);
+
+            // Check file exists
+            try {
+                await fs.access(resolvedPath);
+            } catch {
+                return { error: `VCD file not found: ${resolvedPath}` };
+            }
+
+            ctx.bus.emit({
+                type: 'sim_stage',
+                stage: 'parse_vcd',
+                status: 'started',
+                message: `Parsing ${args.vcdPath}...`
+            });
+
+            // Parse VCD
+            const parser = new VCDParser({
+                signalFilter: args.signals ? new RegExp(args.signals.join('|')) : undefined
+            });
+
+            let data;
+            try {
+                data = await parser.parseFile(resolvedPath);
+            } catch (err) {
+                ctx.bus.emit({
+                    type: 'sim_stage',
+                    stage: 'parse_vcd',
+                    status: 'failed',
+                    message: String(err)
+                });
+                return { error: `Failed to parse VCD: ${err}` };
+            }
+
+            ctx.bus.emit({
+                type: 'sim_stage',
+                stage: 'parse_vcd',
+                status: 'completed'
+            });
+
+            // Emit waveform loaded event
+            const timeRange = getTimeRange(data);
+            ctx.bus.emit({
+                type: 'waveform_loaded',
+                path: resolvedPath,
+                signalCount: data.signals.length,
+                timeRange: {
+                    start: BigInt(timeRange.start),
+                    end: BigInt(timeRange.end)
+                }
+            });
+
+            ctx.bus.emit({
+                type: 'sim_stage',
+                stage: 'analyze_waveform',
+                status: 'started'
+            });
+
+            // Analyze waveform
+            const clocks: Array<{ signal: string; frequency: number }> = [];
+            const anomalies: Array<{ type: string; signal: string; time: bigint }> = [];
+
+            // Detect clocks (signals with regular toggling)
+            if (args.detectClocks) {
+                for (const signal of data.signals) {
+                    if (signal.width === 1 && signal.values.length > 10) {
+                        const freq = detectClockFrequency(signal);
+                        if (freq > 0) {
+                            clocks.push({ signal: signal.name, frequency: freq });
+                        }
+                    }
+                }
+            }
+
+            // Check for anomalies
+            if (args.checkAnomalies) {
+                for (const signal of data.signals) {
+                    // Check for X/Z values
+                    for (const [time, value] of signal.values) {
+                        if (typeof value === 'string' && (value.includes('x') || value.includes('X'))) {
+                            anomalies.push({
+                                type: 'unknown_value',
+                                signal: signal.name,
+                                time: BigInt(time)
+                            });
+                        }
+                        if (typeof value === 'string' && (value.includes('z') || value.includes('Z'))) {
+                            anomalies.push({
+                                type: 'high_impedance',
+                                signal: signal.name,
+                                time: BigInt(time)
+                            });
+                        }
+                    }
+                }
+            }
+
+            // Calculate coverage (% of time signals have valid values)
+            let validSamples = 0;
+            let totalSamples = 0;
+            for (const signal of data.signals) {
+                for (const [, value] of signal.values) {
+                    totalSamples++;
+                    if (typeof value === 'number' ||
+                        (typeof value === 'string' && !value.includes('x') && !value.includes('z'))) {
+                        validSamples++;
+                    }
+                }
+            }
+            const coverage = totalSamples > 0 ? (validSamples / totalSamples) * 100 : 100;
+
+            ctx.bus.emit({
+                type: 'sim_stage',
+                stage: 'analyze_waveform',
+                status: 'completed'
+            });
+
+            // Emit analysis event
+            const summary = `Analyzed ${data.signals.length} signals over ${timeRange.end - timeRange.start}${data.timescale}. ` +
+                `Found ${clocks.length} clocks, ${anomalies.length} anomalies. Coverage: ${coverage.toFixed(1)}%`;
+
+            ctx.bus.emit({
+                type: 'waveform_analysis',
+                clocks,
+                anomalies: anomalies.slice(0, 100), // Limit to first 100
+                coverage: { percentage: coverage },
+                summary
+            });
+
+            return {
+                path: resolvedPath,
+                timescale: data.timescale,
+                signalCount: data.signals.length,
+                timeRange: {
+                    start: timeRange.start,
+                    end: timeRange.end,
+                    duration: timeRange.end - timeRange.start
+                },
+                clocks,
+                anomalyCount: anomalies.length,
+                anomalies: anomalies.slice(0, 20),
+                coverage: coverage.toFixed(1) + '%',
+                summary,
+                signals: data.signals.map(s => ({
+                    name: s.name,
+                    width: s.width,
+                    changeCount: s.values.length
+                }))
+            };
+        },
+
+        ask_user: async (args: z.infer<typeof askUserSchema>) => {
+            const readline = await import('readline');
+
+            return new Promise((resolve) => {
+                const rl = readline.createInterface({
+                    input: process.stdin,
+                    output: process.stdout
+                });
+
+                let prompt = `\n${args.question}`;
+                if (args.options && args.options.length > 0) {
+                    prompt += `\n  Options: ${args.options.join(' / ')}`;
+                }
+                if (args.default) {
+                    prompt += ` [${args.default}]`;
+                }
+                prompt += '\n> ';
+
+                // Emit event so renderer knows we're waiting for input
+                ctx.bus.emit({
+                    type: 'status',
+                    phase: 'tool',
+                    label: 'Waiting for user input...'
+                });
+
+                rl.question(prompt, (answer) => {
+                    rl.close();
+                    const response = answer.trim() || args.default || '';
+
+                    // Normalize yes/no responses
+                    const normalized = response.toLowerCase();
+                    const isYes = ['y', 'yes', 'yeah', 'yep', 'ok', 'sure'].includes(normalized);
+                    const isNo = ['n', 'no', 'nope', 'nah'].includes(normalized);
+
+                    resolve({
+                        response,
+                        isYes,
+                        isNo,
+                        selectedOption: args.options?.find(o =>
+                            o.toLowerCase() === normalized ||
+                            o.toLowerCase().startsWith(normalized)
+                        )
+                    });
+                });
+            });
+        },
+
+        find_vcd_files: async (args: z.infer<typeof findVcdFilesSchema>) => {
+            const path = await import('path');
+            const fs = await import('fs/promises');
+
+            // Resolve starting directory
+            const startDir = (!args.directory || args.directory === '.')
+                ? ctx.projectRoot
+                : path.default.isAbsolute(args.directory)
+                    ? args.directory
+                    : path.default.join(ctx.projectRoot, args.directory);
+
+            ctx.bus.emit({
+                type: 'status',
+                phase: 'tool',
+                label: `Searching for VCD files...`
+            });
+
+            // Use glob to find VCD files
+            const files = await ctx.fileTools.findFiles('**/*.vcd', {
+                cwd: startDir
+            });
+
+            // Filter by pattern if provided
+            let matchedFiles = files;
+            if (args.pattern) {
+                const pattern = args.pattern.toLowerCase();
+                matchedFiles = files.filter(f => {
+                    const basename = path.default.basename(f).toLowerCase();
+                    return basename.includes(pattern);
+                });
+            }
+
+            // Get file stats for each match
+            const results: Array<{ path: string; relativePath: string; size: number }> = [];
+            for (const file of matchedFiles) {
+                try {
+                    const fullPath = path.default.join(startDir, file);
+                    const stats = await fs.stat(fullPath);
+                    results.push({
+                        path: fullPath,
+                        relativePath: file,
+                        size: stats.size
+                    });
+                } catch {
+                    // Skip files we can't stat
+                }
+            }
+
+            return {
+                count: results.length,
+                files: results,
+                searchDirectory: startDir,
+                pattern: args.pattern || null
+            };
         }
     };
+}
+
+// Helper: Get time range from waveform data
+function getTimeRange(data: { signals: Array<{ values: [number, unknown][] }> }): { start: number; end: number } {
+    let min = Infinity;
+    let max = -Infinity;
+    for (const signal of data.signals) {
+        for (const [time] of signal.values) {
+            if (time < min) min = time;
+            if (time > max) max = time;
+        }
+    }
+    return { start: min === Infinity ? 0 : min, end: max === -Infinity ? 0 : max };
+}
+
+// Helper: Detect clock frequency from signal
+function detectClockFrequency(signal: { values: [number, number | string][] }): number {
+    const values = signal.values;
+    if (values.length < 4) return 0;
+
+    // Find rising edges
+    const risingEdges: number[] = [];
+    for (let i = 1; i < values.length; i++) {
+        const prev = values[i - 1][1];
+        const curr = values[i][1];
+        if (prev === 0 && curr === 1) {
+            risingEdges.push(values[i][0]);
+        }
+    }
+
+    if (risingEdges.length < 2) return 0;
+
+    // Calculate average period
+    let totalPeriod = 0;
+    for (let i = 1; i < risingEdges.length; i++) {
+        totalPeriod += risingEdges[i] - risingEdges[i - 1];
+    }
+    const avgPeriod = totalPeriod / (risingEdges.length - 1);
+
+    // Check if period is consistent (clock-like)
+    let variance = 0;
+    for (let i = 1; i < risingEdges.length; i++) {
+        const period = risingEdges[i] - risingEdges[i - 1];
+        variance += Math.pow(period - avgPeriod, 2);
+    }
+    variance /= risingEdges.length - 1;
+
+    // If variance is too high, not a clock
+    if (variance > avgPeriod * 0.1) return 0;
+
+    // Return frequency (assuming timescale is in ns for now)
+    return avgPeriod > 0 ? 1 / avgPeriod : 0;
 }
 
 // ============================================================================
@@ -439,8 +939,12 @@ export function getToolSpecs() {
             parameters: lintFileSchema
         },
         run_simulation: {
-            description: 'Compile and run a simulation with Verilator. Returns stdout, stderr, and VCD path.',
+            description: 'Compile and run a simulation with Verilator. Returns stdout, stderr, VCD path, and optional waveform analysis. Set analyzeWaveform=true to automatically parse and analyze the VCD output.',
             parameters: runSimSchema
+        },
+        open_waveform: {
+            description: 'Open an interactive terminal-based waveform viewer for a VCD file. Supports keyboard navigation, zoom, pan, and signal inspection. Blocks until the viewer is closed.',
+            parameters: openWaveformSchema
         },
         get_project_stats: {
             description: 'Get statistics about the project: file count, modules, packages, etc.',
@@ -449,6 +953,18 @@ export function getToolSpecs() {
         find_all_sv_files: {
             description: 'Find all SystemVerilog (.sv) files in the project. Returns a list of all .sv file paths.',
             parameters: findAllSvFilesSchema
+        },
+        analyze_waveform: {
+            description: 'Analyze a VCD waveform file from simulation. Detects clocks, checks for X/Z anomalies, and calculates signal coverage. Returns signal list, timing info, and analysis summary.',
+            parameters: analyzeWaveformSchema
+        },
+        ask_user: {
+            description: 'Ask the user a question and wait for their response. Use this for human-in-the-loop confirmations, like asking if they want to view waveforms after simulation. Returns the user response with isYes/isNo flags for easy checking.',
+            parameters: askUserSchema
+        },
+        find_vcd_files: {
+            description: 'Search for VCD waveform files in the project. ALWAYS use this tool first when user mentions a VCD file by name to find its full path before opening. Returns list of matching files with paths.',
+            parameters: findVcdFilesSchema
         }
     };
 }
