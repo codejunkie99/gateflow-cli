@@ -195,11 +195,41 @@ export class GateFlowAgent {
                 })
             },
             run_simulation: {
-                description: 'Run a simulation with Verilator.',
+                description: 'Run a simulation with Verilator. Set analyzeWaveform=true to auto-analyze VCD. After simulation, ask user if they want to view the waveform.',
                 inputSchema: z.object({
                     top: z.string().describe('Top module name'),
                     testbench: z.string().optional().describe('Testbench file path'),
-                    timeout: z.number().optional().describe('Timeout in ms')
+                    timeout: z.number().optional().describe('Timeout in ms'),
+                    analyzeWaveform: z.boolean().optional().default(false).describe('Auto-analyze VCD after simulation')
+                })
+            },
+            open_waveform: {
+                description: 'Open interactive terminal waveform viewer for a VCD file. Use after simulation or when user mentions a .vcd file.',
+                inputSchema: z.object({
+                    vcdPath: z.string().describe('Path to VCD file')
+                })
+            },
+            analyze_waveform: {
+                description: 'Analyze a VCD file for clocks, X/Z anomalies, and coverage. Use when user asks to analyze simulation output.',
+                inputSchema: z.object({
+                    vcdPath: z.string().describe('Path to VCD file'),
+                    detectClocks: z.boolean().optional().default(true),
+                    checkAnomalies: z.boolean().optional().default(true)
+                })
+            },
+            ask_user: {
+                description: 'Ask user a yes/no question. Use after simulation to ask if they want to view waveforms.',
+                inputSchema: z.object({
+                    question: z.string().describe('Question to ask'),
+                    options: z.array(z.string()).optional().describe('Options like ["yes", "no"]'),
+                    default: z.string().optional().describe('Default answer')
+                })
+            },
+            find_vcd_files: {
+                description: 'Search for VCD waveform files in the project. ALWAYS use this first when user mentions a VCD file by name to find its full path before opening.',
+                inputSchema: z.object({
+                    directory: z.string().optional().default('.').describe('Starting directory'),
+                    pattern: z.string().optional().describe('Filename pattern to match (e.g., "counter" matches "counter.vcd")')
                 })
             },
             get_project_stats: {
