@@ -24,12 +24,38 @@ import {
 } from './commands.js';
 
 // Load environment variables from multiple locations
+// Priority (first found wins): cwd/.env > parent/.env > script-relative
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-dotenv.config(); // cwd/.env
-dotenv.config({ path: path.resolve(process.cwd(), '.env') });
-dotenv.config({ path: path.resolve(process.cwd(), '../.env') }); // parent (for running from cli/)
+
+// Load in reverse priority order (dotenv doesn't override existing vars)
+dotenv.config({ path: path.resolve(__dirname, '../../../.env') }); // for dist/ (lowest priority)
 dotenv.config({ path: path.resolve(__dirname, '../../.env') }); // relative to script
-dotenv.config({ path: path.resolve(__dirname, '../../../.env') }); // for dist/
+dotenv.config({ path: path.resolve(process.cwd(), '../.env') }); // parent (for running from cli/)
+dotenv.config({ path: path.resolve(process.cwd(), '.env') }); // cwd/.env (highest priority)
+
+/**
+ * Validate required environment variables
+ * Returns list of missing required vars
+ */
+function validateEnvVars(): { missing: string[]; warnings: string[] } {
+    const missing: string[] = [];
+    const warnings: string[] = [];
+
+    // Required for AI functionality
+    if (!process.env.ANTHROPIC_API_KEY) {
+        missing.push('ANTHROPIC_API_KEY');
+    }
+
+    // Optional but recommended
+    if (!process.env.VERILATOR_PATH) {
+        warnings.push('VERILATOR_PATH not set - will use system PATH');
+    }
+
+    return { missing, warnings };
+}
+
+// Validate env vars early
+const envValidation = validateEnvVars();
 
 // ============================================================================
 // Banner
@@ -62,11 +88,40 @@ program
     .option('--json', 'Output results as JSON', false)
     .option('-v, --verbose', 'Enable verbose output', false)
     .option('-C, --cwd <path>', 'Set working directory', process.cwd())
-    .hook('preAction', () => {
-        // Show banner unless JSON mode
+    .hook('preAction', (thisCommand) => {
         const opts = program.opts();
+
+        // Show banner unless JSON mode
         if (!opts.json) {
             console.log(BANNER);
+        }
+
+        // Show env var warnings (unless JSON mode)
+        if (!opts.json && envValidation.warnings.length > 0) {
+            for (const warning of envValidation.warnings) {
+                console.log(chalk.yellow(`⚠ ${warning}`));
+            }
+        }
+
+        // Check for missing required env vars (skip for non-AI commands)
+        const aiCommands = ['chat', 'fix', 'gen'];
+        const commandName = thisCommand.name();
+        const isAiCommand = aiCommands.includes(commandName) || thisCommand.args.length > 0;
+
+        if (isAiCommand && envValidation.missing.length > 0) {
+            if (opts.json) {
+                console.log(JSON.stringify({
+                    error: 'Missing required environment variables',
+                    missing: envValidation.missing
+                }));
+            } else {
+                console.error(chalk.red('\n✖ Missing required environment variables:'));
+                for (const varName of envValidation.missing) {
+                    console.error(chalk.red(`  - ${varName}`));
+                }
+                console.error(chalk.dim('\nSet these in your .env file or environment.\n'));
+            }
+            process.exit(ExitCodes.CONFIG_ERROR);
         }
     });
 

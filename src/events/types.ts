@@ -183,7 +183,7 @@ export interface ThoughtEvent {
     category: ThoughtCategory;
     thought: string;
     confidence?: number;
-    data?: any;
+    data?: Record<string, unknown>;
     timestamp: number;
 }
 
@@ -201,7 +201,7 @@ export interface AgentCompleteEvent {
     type: 'agent_complete';
     agentName: string;
     success: boolean;
-    result?: any;
+    result?: unknown;
     durationMs: number;
     outputTokens?: number;
     inputTokens?: number;
@@ -212,7 +212,7 @@ export interface DelegationEvent {
     from: string;
     to: string;
     taskType: string;
-    taskData: any;
+    taskData: Record<string, unknown>;
 }
 
 // ============================================================================
