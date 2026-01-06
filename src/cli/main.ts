@@ -20,8 +20,11 @@ import {
     generateCommand,
     doctorCommand,
     versionCommand,
+    waveCommand,
+    waveWebCommand,
     type GlobalOptions
 } from './commands.js';
+import { startMCPServer } from '../waveform/mcp-server.js';
 
 // Load environment variables from multiple locations
 // Priority (first found wins): cwd/.env > parent/.env > script-relative
@@ -91,13 +94,18 @@ program
     .hook('preAction', (thisCommand) => {
         const opts = program.opts();
 
-        // Show banner unless JSON mode
-        if (!opts.json) {
+        // MCP command needs clean stdin/stdout for JSON-RPC protocol
+        // Check both the command name and raw args (for when preAction fires with program)
+        const commandName = thisCommand.name();
+        const isMcpCommand = commandName === 'mcp' || process.argv.includes('mcp');
+
+        // Show banner unless JSON mode or MCP mode
+        if (!opts.json && !isMcpCommand) {
             console.log(BANNER);
         }
 
-        // Show env var warnings (unless JSON mode)
-        if (!opts.json && envValidation.warnings.length > 0) {
+        // Show env var warnings (unless JSON mode or MCP mode)
+        if (!opts.json && !isMcpCommand && envValidation.warnings.length > 0) {
             for (const warning of envValidation.warnings) {
                 console.log(chalk.yellow(`⚠ ${warning}`));
             }
@@ -105,7 +113,6 @@ program
 
         // Check for missing required env vars (skip for non-AI commands)
         const aiCommands = ['chat', 'fix', 'gen'];
-        const commandName = thisCommand.name();
         const isAiCommand = aiCommands.includes(commandName) || thisCommand.args.length > 0;
 
         if (isAiCommand && envValidation.missing.length > 0) {
@@ -248,6 +255,42 @@ program
         const ctx = await setupContext(opts);
         const exitCode = await doctorCommand(ctx);
         process.exit(exitCode);
+    });
+
+// ============================================================================
+// Wave Command
+// ============================================================================
+
+program
+    .command('wave <vcd-file>')
+    .description('Open interactive waveform viewer for VCD file')
+    .action(async (vcdFile: string) => {
+        const opts = program.opts() as GlobalOptions;
+        const ctx = await setupContext(opts);
+        const exitCode = await waveCommand(ctx, vcdFile);
+        process.exit(exitCode);
+    });
+
+program
+    .command('wave-web <vcd-file>')
+    .description('Open browser-based waveform viewer')
+    .option('-p, --port <port>', 'Server port', '3000')
+    .action(async (vcdFile: string, options: { port: string }) => {
+        const opts = program.opts() as GlobalOptions;
+        const ctx = await setupContext(opts);
+        const exitCode = await waveWebCommand(ctx, vcdFile, parseInt(options.port, 10));
+        process.exit(exitCode);
+    });
+
+// ============================================================================
+// MCP Command
+// ============================================================================
+
+program
+    .command('mcp')
+    .description('Start MCP waveform server for Claude integration')
+    .action(async () => {
+        await startMCPServer();
     });
 
 // ============================================================================

@@ -566,3 +566,170 @@ export async function versionCommand(): Promise<ExitCode> {
     return ExitCodes.SUCCESS;
 }
 
+// ============================================================================
+// Wave Command
+// ============================================================================
+
+export async function waveCommand(ctx: CommandContext, vcdPath: string): Promise<ExitCode> {
+    const { spawn } = await import('child_process');
+    const { fileURLToPath } = await import('url');
+
+    // Resolve path
+    const resolvedPath = path.isAbsolute(vcdPath)
+        ? vcdPath
+        : path.join(ctx.projectRoot, vcdPath);
+
+    // Check file exists
+    try {
+        await fs.access(resolvedPath);
+    } catch {
+        console.error(chalk.red(`File not found: ${resolvedPath}`));
+        return ExitCodes.TOOL_ERROR;
+    }
+
+    // Check file extension
+    if (!resolvedPath.endsWith('.vcd')) {
+        console.log(chalk.yellow('Warning: File does not have .vcd extension'));
+    }
+
+    console.log(chalk.cyan(`Opening waveform viewer: ${resolvedPath}`));
+    console.log(chalk.dim('Press q to quit\n'));
+
+    // Check if we're in an interactive terminal
+    if (process.stdin.isTTY) {
+        // Direct mode - use viewer in current terminal
+        const { WaveformViewer } = await import('../waveform/index.js');
+        const viewer = new WaveformViewer();
+
+        try {
+            await viewer.open(resolvedPath);
+            return ExitCodes.SUCCESS;
+        } catch (error) {
+            console.error(chalk.red(`Failed to open waveform: ${error}`));
+            return ExitCodes.TOOL_ERROR;
+        }
+    } else {
+        // Non-TTY mode - spawn new terminal window
+        const cliPath = path.resolve(
+            path.dirname(fileURLToPath(import.meta.url)),
+            'main.js'
+        );
+
+        console.log(chalk.yellow('Not in interactive terminal - opening in new window...'));
+
+        return new Promise((resolve) => {
+            let child;
+
+            if (process.platform === 'win32') {
+                // Windows: open new cmd window that stays open
+                child = spawn('cmd', ['/c', 'start', 'cmd', '/k',
+                    `node "${cliPath}" wave "${resolvedPath}"`
+                ], {
+                    detached: true,
+                    stdio: 'ignore',
+                    shell: true
+                });
+            } else if (process.platform === 'darwin') {
+                // macOS: open new Terminal window
+                child = spawn('osascript', ['-e',
+                    `tell app "Terminal" to do script "node '${cliPath}' wave '${resolvedPath}'"`
+                ], {
+                    detached: true,
+                    stdio: 'ignore'
+                });
+            } else {
+                // Linux: try common terminal emulators
+                const terminals = ['gnome-terminal', 'xterm', 'konsole'];
+                for (const term of terminals) {
+                    try {
+                        child = spawn(term, ['--', 'node', cliPath, 'wave', resolvedPath], {
+                            detached: true,
+                            stdio: 'ignore'
+                        });
+                        break;
+                    } catch {
+                        continue;
+                    }
+                }
+            }
+
+            if (child) {
+                child.unref();
+                console.log(chalk.green('Waveform viewer opened in new terminal window.'));
+                resolve(ExitCodes.SUCCESS);
+            } else {
+                console.error(chalk.red('Could not open terminal window.'));
+                console.log(chalk.dim(`Run manually: node ${cliPath} wave "${resolvedPath}"`));
+                resolve(ExitCodes.TOOL_ERROR);
+            }
+        });
+    }
+}
+
+// ============================================================================
+// Wave Web Command - Browser-based viewer
+// ============================================================================
+
+export async function waveWebCommand(ctx: CommandContext, vcdPath: string, port: number = 3000): Promise<ExitCode> {
+    const { spawn } = await import('child_process');
+
+    // Resolve path
+    const resolvedPath = path.isAbsolute(vcdPath)
+        ? vcdPath
+        : path.join(ctx.projectRoot, vcdPath);
+
+    // Check file exists
+    try {
+        await fs.access(resolvedPath);
+    } catch {
+        console.error(chalk.red(`File not found: ${resolvedPath}`));
+        return ExitCodes.TOOL_ERROR;
+    }
+
+    console.log(chalk.cyan(`Starting waveform web viewer...`));
+    console.log(chalk.dim(`Loading: ${resolvedPath}\n`));
+
+    try {
+        const { startStandaloneServer } = await import('../waveform/web/index.js');
+
+        // Start server
+        await startStandaloneServer({
+            port,
+            vcdPath: resolvedPath
+        });
+
+        const url = `http://localhost:${port}`;
+        console.log(chalk.green(`\nViewer running at: ${chalk.bold(url)}`));
+        console.log(chalk.dim('Press Ctrl+C to stop\n'));
+
+        // Open browser
+        let openCmd: string;
+        let openArgs: string[];
+
+        if (process.platform === 'win32') {
+            openCmd = 'cmd';
+            openArgs = ['/c', 'start', url];
+        } else if (process.platform === 'darwin') {
+            openCmd = 'open';
+            openArgs = [url];
+        } else {
+            openCmd = 'xdg-open';
+            openArgs = [url];
+        }
+
+        spawn(openCmd, openArgs, {
+            detached: true,
+            stdio: 'ignore'
+        }).unref();
+
+        // Keep process running
+        await new Promise(() => {});
+
+    } catch (error) {
+        console.error(chalk.red(`Failed to start viewer: ${error}`));
+        return ExitCodes.TOOL_ERROR;
+    }
+
+    return ExitCodes.SUCCESS;
+}
+

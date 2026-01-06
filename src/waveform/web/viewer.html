@@ -1,0 +1,2269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GateFlow Waveform Viewer</title>
+    <style>
+        :root {
+            --bg-primary: #0d1117;
+            --bg-secondary: #161b22;
+            --bg-tertiary: #21262d;
+            --bg-hover: #30363d;
+            --border-color: #30363d;
+            --text-primary: #e6edf3;
+            --text-secondary: #8b949e;
+            --text-muted: #6e7681;
+            --accent: #58a6ff;
+            --accent-emphasis: #1f6feb;
+            --cursor-primary: #f0883e;
+            --cursor-secondary: #a371f7;
+            --grid-color: #21262d;
+            --success: #3fb950;
+            --warning: #d29922;
+            --danger: #f85149;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+        }
+
+        /* Toolbar - VaporView style */
+        .toolbar {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 8px 16px;
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border-color);
+            min-height: 44px;
+        }
+
+        .toolbar-group {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .toolbar-divider {
+            width: 1px;
+            height: 24px;
+            background: var(--border-color);
+            margin: 0 8px;
+        }
+
+        .toolbar button {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            padding: 6px 12px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 12px;
+            font-weight: 500;
+            transition: all 0.15s ease;
+        }
+
+        .toolbar button:hover {
+            background: var(--bg-hover);
+            border-color: var(--text-muted);
+        }
+
+        .toolbar button.active {
+            background: var(--accent-emphasis);
+            border-color: var(--accent);
+            color: white;
+        }
+
+        .toolbar select {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            cursor: pointer;
+        }
+
+        .toolbar select:hover {
+            border-color: var(--text-muted);
+        }
+
+        .time-display {
+            font-family: 'SF Mono', Consolas, monospace;
+            font-size: 12px;
+            padding: 6px 12px;
+            background: var(--bg-tertiary);
+            border-radius: 6px;
+            border: 1px solid var(--border-color);
+        }
+
+        .time-display .label {
+            color: var(--text-muted);
+        }
+
+        .time-display .value {
+            color: var(--text-primary);
+            font-weight: 500;
+        }
+
+        .time-display .delta {
+            color: var(--cursor-secondary);
+            margin-left: 12px;
+        }
+
+        .file-name {
+            font-size: 12px;
+            color: var(--text-secondary);
+            margin-left: auto;
+            padding: 4px 8px;
+            background: var(--bg-tertiary);
+            border-radius: 4px;
+            max-width: 300px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        /* Main container */
+        .main-container {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        /* Signal list panel - VaporView style */
+        .signal-panel {
+            width: 220px;
+            min-width: 180px;
+            max-width: 400px;
+            background: var(--bg-secondary);
+            border-right: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            resize: horizontal;
+            overflow: hidden;
+            transition: width 0.2s ease, min-width 0.2s ease;
+        }
+
+        .signal-panel.collapsed {
+            width: 40px !important;
+            min-width: 40px !important;
+            resize: none;
+        }
+
+        .signal-panel.collapsed .signal-list,
+        .signal-panel.collapsed .signal-panel-header h3,
+        .signal-panel.collapsed .signal-count {
+            display: none;
+        }
+
+        .signal-panel.collapsed .signal-panel-header {
+            justify-content: center;
+            padding: 12px 8px;
+        }
+
+        .signal-panel-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 16px;
+            background: var(--bg-tertiary);
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .signal-panel-header h3 {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-secondary);
+        }
+
+        .collapse-btn {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            padding: 4px;
+            border-radius: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.15s ease;
+        }
+
+        .collapse-btn:hover {
+            background: var(--bg-hover);
+            color: var(--text-primary);
+        }
+
+        .collapse-btn svg {
+            width: 16px;
+            height: 16px;
+            transition: transform 0.2s ease;
+        }
+
+        .signal-panel.collapsed .collapse-btn svg {
+            transform: rotate(180deg);
+        }
+
+        .signal-count {
+            font-size: 10px;
+            color: var(--text-muted);
+            background: var(--bg-primary);
+            padding: 2px 6px;
+            border-radius: 10px;
+        }
+
+        .signal-list {
+            flex: 1;
+            overflow-y: auto;
+            overflow-x: hidden;
+        }
+
+        .signal-item {
+            display: flex;
+            align-items: center;
+            padding: 8px 16px;
+            cursor: pointer;
+            border-bottom: 1px solid var(--border-color);
+            transition: background 0.1s ease;
+            gap: 10px;
+        }
+
+        .signal-item:hover {
+            background: var(--bg-hover);
+        }
+
+        .signal-item.selected {
+            background: var(--bg-tertiary);
+            border-left: 3px solid var(--accent);
+            padding-left: 13px;
+        }
+
+        .signal-color {
+            width: 4px;
+            height: 20px;
+            border-radius: 2px;
+            flex-shrink: 0;
+        }
+
+        .signal-info {
+            flex: 1;
+            min-width: 0;
+        }
+
+        .signal-name {
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text-primary);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .signal-path {
+            font-size: 10px;
+            color: var(--text-muted);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .signal-value {
+            font-family: 'SF Mono', Consolas, monospace;
+            font-size: 11px;
+            color: var(--text-secondary);
+            background: var(--bg-primary);
+            padding: 2px 6px;
+            border-radius: 4px;
+            flex-shrink: 0;
+        }
+
+        /* Waveform panel */
+        .waveform-panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            background: var(--bg-primary);
+        }
+
+        /* Time ruler */
+        .time-ruler {
+            height: 28px;
+            background: var(--bg-secondary);
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        /* Waveform canvas container */
+        .waveform-container {
+            flex: 1;
+            position: relative;
+            overflow: hidden;
+        }
+
+        #waveformCanvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+
+        #cursorCanvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            pointer-events: none;
+        }
+
+        /* Tooltip */
+        .tooltip {
+            position: absolute;
+            background: var(--bg-tertiary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 8px 12px;
+            font-size: 11px;
+            pointer-events: none;
+            z-index: 1000;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+            opacity: 0;
+            transition: opacity 0.15s ease;
+        }
+
+        .tooltip.visible {
+            opacity: 1;
+        }
+
+        .tooltip-signal {
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 4px;
+        }
+
+        .tooltip-value {
+            font-family: 'SF Mono', Consolas, monospace;
+            color: var(--accent);
+        }
+
+        .tooltip-time {
+            color: var(--text-muted);
+            font-size: 10px;
+            margin-top: 4px;
+        }
+
+        /* Scrollbar styling */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: var(--bg-primary);
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: var(--border-color);
+            border-radius: 4px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--text-muted);
+        }
+
+        /* Status bar */
+        .status-bar {
+            display: flex;
+            align-items: center;
+            padding: 6px 16px;
+            background: var(--bg-secondary);
+            border-top: 1px solid var(--border-color);
+            font-size: 11px;
+            color: var(--text-secondary);
+            gap: 24px;
+        }
+
+        .status-item {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .status-label {
+            color: var(--text-muted);
+        }
+
+        .status-value {
+            color: var(--text-primary);
+            font-family: 'SF Mono', Consolas, monospace;
+        }
+
+        .status-hint {
+            margin-left: auto;
+            color: var(--text-muted);
+        }
+
+        .status-hint kbd {
+            background: var(--bg-tertiary);
+            padding: 2px 5px;
+            border-radius: 3px;
+            font-size: 10px;
+            margin: 0 2px;
+        }
+
+        /* Loading overlay */
+        .loading-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(13, 17, 23, 0.9);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+
+        .loading-overlay.hidden {
+            display: none;
+        }
+
+        .loading-spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid var(--border-color);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Empty state */
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: var(--text-muted);
+            padding: 20px;
+        }
+
+        .empty-state.hidden {
+            display: none;
+        }
+
+        /* Focused signal item in list */
+        .signal-item.focused {
+            background: var(--bg-tertiary);
+            outline: 1px solid var(--accent);
+            outline-offset: -1px;
+        }
+
+        /* Context menu */
+        .context-menu {
+            position: fixed;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+            padding: 4px 0;
+            min-width: 180px;
+            z-index: 1000;
+            display: none;
+        }
+
+        .context-menu.visible {
+            display: block;
+        }
+
+        .context-menu-item {
+            padding: 8px 16px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 12px;
+            color: var(--text-primary);
+            transition: background 0.1s;
+        }
+
+        .context-menu-item:hover {
+            background: var(--bg-hover);
+        }
+
+        .context-menu-item .shortcut {
+            margin-left: auto;
+            color: var(--text-muted);
+            font-size: 11px;
+        }
+
+        .context-menu-divider {
+            height: 1px;
+            background: var(--border-color);
+            margin: 4px 0;
+        }
+
+        .context-menu-submenu {
+            position: relative;
+        }
+
+        .context-menu-submenu::after {
+            content: '▶';
+            margin-left: auto;
+            font-size: 8px;
+            color: var(--text-muted);
+        }
+
+        /* Help overlay */
+        .help-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(13, 17, 23, 0.95);
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 2000;
+        }
+
+        .help-overlay.visible {
+            display: flex;
+        }
+
+        .help-content {
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 12px;
+            padding: 24px 32px;
+            max-width: 600px;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+
+        .help-content h2 {
+            font-size: 18px;
+            margin-bottom: 16px;
+            color: var(--text-primary);
+        }
+
+        .help-section {
+            margin-bottom: 20px;
+        }
+
+        .help-section h3 {
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-muted);
+            margin-bottom: 8px;
+        }
+
+        .help-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 6px 0;
+            font-size: 13px;
+        }
+
+        .help-row kbd {
+            background: var(--bg-tertiary);
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            min-width: 24px;
+            text-align: center;
+        }
+
+        .help-row span {
+            color: var(--text-secondary);
+        }
+
+        .help-close {
+            position: absolute;
+            top: 16px;
+            right: 16px;
+            background: none;
+            border: none;
+            color: var(--text-muted);
+            font-size: 24px;
+            cursor: pointer;
+        }
+
+        .help-close:hover {
+            color: var(--text-primary);
+        }
+
+        /* Separator in signal list */
+        .signal-separator {
+            height: 1px;
+            background: var(--border-color);
+            margin: 8px 16px;
+            position: relative;
+        }
+
+        .signal-separator::before {
+            content: 'separator';
+            position: absolute;
+            top: -8px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: var(--bg-secondary);
+            padding: 0 8px;
+            font-size: 9px;
+            color: var(--text-muted);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+    </style>
+</head>
+<body>
+    <!-- Toolbar -->
+    <div class="toolbar">
+        <div class="toolbar-group">
+            <button id="btnZoomIn" title="Zoom In (+)">＋</button>
+            <button id="btnZoomOut" title="Zoom Out (−)">−</button>
+            <button id="btnFitAll" title="Fit All (F)">Fit</button>
+        </div>
+        <div class="toolbar-divider"></div>
+        <div class="toolbar-group">
+            <button id="btnGoStart" title="Go to Start (Home)">⏮</button>
+            <button id="btnGoEnd" title="Go to End (End)">⏭</button>
+        </div>
+        <div class="toolbar-divider"></div>
+        <div class="toolbar-group">
+            <button id="btnCursor1" class="active" title="Cursor 1 (1)">C1</button>
+            <button id="btnCursor2" title="Cursor 2 (2)">C2</button>
+            <button id="btnClearCursors" title="Clear Cursors (Esc)">Clear</button>
+        </div>
+        <div class="toolbar-divider"></div>
+        <select id="formatSelect" title="Value Format">
+            <option value="hex">Hex</option>
+            <option value="binary">Binary</option>
+            <option value="decimal">Decimal</option>
+            <option value="signed">Signed</option>
+            <option value="octal">Octal</option>
+            <option value="ascii">ASCII</option>
+        </select>
+        <div class="time-display" id="timeDisplay">
+            <span class="label">C1:</span> <span class="value" id="cursor1Time">--</span>
+            <span class="label" style="margin-left: 12px;">C2:</span> <span class="value" id="cursor2Time">--</span>
+            <span class="delta" id="deltaTime"></span>
+        </div>
+        <div class="file-name" id="fileName">No file loaded</div>
+    </div>
+
+    <!-- Main container -->
+    <div class="main-container">
+        <!-- Signal list -->
+        <div class="signal-panel" id="signalPanel">
+            <div class="signal-panel-header">
+                <button class="collapse-btn" id="collapseBtn" title="Toggle panel (B)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M15 18l-6-6 6-6"/>
+                    </svg>
+                </button>
+                <h3>Signals</h3>
+                <span class="signal-count" id="signalCount">0</span>
+            </div>
+            <div class="signal-list" id="signalList">
+                <div class="empty-state" id="emptySignals">
+                    <div>No signals loaded</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Waveform display -->
+        <div class="waveform-panel">
+            <canvas class="time-ruler" id="timeRulerCanvas"></canvas>
+            <div class="waveform-container" id="waveformContainer">
+                <canvas id="waveformCanvas"></canvas>
+                <canvas id="cursorCanvas"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tooltip -->
+    <div class="tooltip" id="tooltip">
+        <div class="tooltip-signal" id="tooltipSignal"></div>
+        <div class="tooltip-value" id="tooltipValue"></div>
+        <div class="tooltip-time" id="tooltipTime"></div>
+    </div>
+
+    <!-- Status bar -->
+    <div class="status-bar">
+        <div class="status-item">
+            <span class="status-label">Signals:</span>
+            <span class="status-value" id="statusSignalCount">0</span>
+        </div>
+        <div class="status-item">
+            <span class="status-label">Time:</span>
+            <span class="status-value" id="statusTimeRange">--</span>
+        </div>
+        <div class="status-item">
+            <span class="status-label">Zoom:</span>
+            <span class="status-value" id="statusZoom">100%</span>
+        </div>
+        <div class="status-hint">
+            <kbd>N</kbd> Next edge
+            <kbd>Ctrl+Drag</kbd> Zoom select
+            <kbd>↑↓</kbd> Signals
+            <kbd>?</kbd> Help
+        </div>
+    </div>
+
+    <!-- Loading overlay -->
+    <div class="loading-overlay hidden" id="loadingOverlay">
+        <div class="loading-spinner"></div>
+    </div>
+
+    <!-- Context menu -->
+    <div class="context-menu" id="contextMenu">
+        <div class="context-menu-item" data-action="remove">Remove Signal</div>
+        <div class="context-menu-item" data-action="duplicate">Duplicate Signal</div>
+        <div class="context-menu-divider"></div>
+        <div class="context-menu-item" data-action="separator-above">Add Separator Above</div>
+        <div class="context-menu-item" data-action="separator-below">Add Separator Below</div>
+        <div class="context-menu-divider"></div>
+        <div class="context-menu-item" data-action="format-hex">Format: Hex</div>
+        <div class="context-menu-item" data-action="format-binary">Format: Binary</div>
+        <div class="context-menu-item" data-action="format-decimal">Format: Decimal</div>
+        <div class="context-menu-item" data-action="format-signed">Format: Signed</div>
+        <div class="context-menu-item" data-action="format-ascii">Format: ASCII</div>
+        <div class="context-menu-divider"></div>
+        <div class="context-menu-item" data-action="color-blue" style="color: #58a6ff;">● Blue</div>
+        <div class="context-menu-item" data-action="color-green" style="color: #3fb950;">● Green</div>
+        <div class="context-menu-item" data-action="color-orange" style="color: #f0883e;">● Orange</div>
+        <div class="context-menu-item" data-action="color-purple" style="color: #a371f7;">● Purple</div>
+        <div class="context-menu-item" data-action="color-pink" style="color: #f778ba;">● Pink</div>
+    </div>
+
+    <!-- Help overlay -->
+    <div class="help-overlay" id="helpOverlay">
+        <div class="help-content">
+            <h2>Keyboard Shortcuts</h2>
+
+            <div class="help-section">
+                <h3>Navigation</h3>
+                <div class="help-row"><kbd>+</kbd> / <kbd>-</kbd> <span>Zoom in / out</span></div>
+                <div class="help-row"><kbd>←</kbd> / <kbd>→</kbd> <span>Pan left / right</span></div>
+                <div class="help-row"><kbd>Home</kbd> / <kbd>End</kbd> <span>Go to start / end</span></div>
+                <div class="help-row"><kbd>F</kbd> <span>Fit all</span></div>
+                <div class="help-row"><kbd>Ctrl+Drag</kbd> <span>Zoom to selection</span></div>
+            </div>
+
+            <div class="help-section">
+                <h3>Cursors</h3>
+                <div class="help-row"><kbd>1</kbd> / <kbd>2</kbd> <span>Select cursor 1 / 2</span></div>
+                <div class="help-row"><kbd>N</kbd> / <kbd>Shift+N</kbd> <span>Next / previous edge</span></div>
+                <div class="help-row"><kbd>Esc</kbd> <span>Clear cursors</span></div>
+                <div class="help-row"><kbd>Click</kbd> <span>Place cursor (snaps to edge)</span></div>
+            </div>
+
+            <div class="help-section">
+                <h3>Signals</h3>
+                <div class="help-row"><kbd>↑</kbd> / <kbd>↓</kbd> <span>Select signal</span></div>
+                <div class="help-row"><kbd>Alt+↑</kbd> / <kbd>Alt+↓</kbd> <span>Move signal</span></div>
+                <div class="help-row"><kbd>Right-click</kbd> <span>Context menu</span></div>
+            </div>
+
+            <div class="help-section">
+                <h3>General</h3>
+                <div class="help-row"><kbd>?</kbd> <span>Toggle this help</span></div>
+                <div class="help-row"><kbd>Drag</kbd> <span>Pan view</span></div>
+                <div class="help-row"><kbd>Scroll</kbd> <span>Pan / Zoom</span></div>
+            </div>
+
+            <p style="margin-top: 20px; color: var(--text-muted); font-size: 12px; text-align: center;">
+                Press <kbd>?</kbd> or <kbd>Esc</kbd> to close
+            </p>
+        </div>
+    </div>
+
+    <script>
+        // ========================================================================
+        // VS Code API (if running in webview)
+        // ========================================================================
+        const vscode = (typeof acquireVsCodeApi !== 'undefined') ? acquireVsCodeApi() : null;
+
+        // ========================================================================
+        // Signal Colors - VaporView inspired palette
+        // ========================================================================
+        const SIGNAL_COLORS = [
+            '#58a6ff', // Blue
+            '#3fb950', // Green
+            '#f0883e', // Orange
+            '#a371f7', // Purple
+            '#f778ba', // Pink
+            '#79c0ff', // Light blue
+            '#7ee787', // Light green
+            '#ffa657', // Light orange
+            '#d2a8ff', // Light purple
+            '#ff7b72', // Red
+            '#ffc107', // Yellow
+            '#00bcd4', // Cyan
+        ];
+
+        // ========================================================================
+        // State
+        // ========================================================================
+        const state = {
+            signals: [],
+            signalData: new Map(),
+            selectedSignals: [],
+            signalColors: new Map(),
+            signalFormats: new Map(), // Per-signal value format overrides
+            timeRange: { start: 0n, end: 0n },
+            viewStart: 0n,
+            viewEnd: 0n,
+            cursor1Time: null,
+            cursor2Time: null,
+            activeCursor: 1, // 1 or 2
+            zoom: 1.0,
+            valueFormat: 'hex',
+            filePath: null,
+            timescale: { value: 1, unit: 'ns' },
+            hoveredSignal: null,
+            mouseX: 0,
+            mouseY: 0,
+            // New: Signal selection and navigation
+            focusedSignalIndex: 0, // Currently focused signal for keyboard nav
+            // New: Zoom selection
+            isZoomSelecting: false,
+            zoomSelectStartX: 0,
+            zoomSelectEndX: 0,
+            // New: Separators
+            separators: new Set(), // Signal indices with separator above
+        };
+
+        const SIGNAL_HEIGHT = 32;
+
+        // ========================================================================
+        // Canvas Elements
+        // ========================================================================
+        const timeRulerCanvas = document.getElementById('timeRulerCanvas');
+        const waveformCanvas = document.getElementById('waveformCanvas');
+        const cursorCanvas = document.getElementById('cursorCanvas');
+        const waveformContainer = document.getElementById('waveformContainer');
+        const tooltip = document.getElementById('tooltip');
+
+        const timeRulerCtx = timeRulerCanvas.getContext('2d');
+        const waveformCtx = waveformCanvas.getContext('2d');
+        const cursorCtx = cursorCanvas.getContext('2d');
+
+        // ========================================================================
+        // Initialization
+        // ========================================================================
+        function init() {
+            setupEventListeners();
+            resizeCanvases();
+            window.addEventListener('resize', resizeCanvases);
+            window.addEventListener('message', handleMessage);
+
+            if (vscode) {
+                vscode.postMessage({ type: 'ready' });
+            }
+        }
+
+        function resizeCanvases() {
+            const containerRect = waveformContainer.getBoundingClientRect();
+            const width = containerRect.width;
+            const height = containerRect.height;
+
+            timeRulerCanvas.width = width;
+            timeRulerCanvas.height = 28;
+
+            waveformCanvas.width = width;
+            waveformCanvas.height = height;
+
+            cursorCanvas.width = width;
+            cursorCanvas.height = height;
+
+            render();
+        }
+
+        // ========================================================================
+        // Event Listeners
+        // ========================================================================
+        function setupEventListeners() {
+            // Toolbar buttons
+            document.getElementById('btnZoomIn').addEventListener('click', () => zoom(1.5));
+            document.getElementById('btnZoomOut').addEventListener('click', () => zoom(1 / 1.5));
+            document.getElementById('btnFitAll').addEventListener('click', fitAll);
+            document.getElementById('btnGoStart').addEventListener('click', goToStart);
+            document.getElementById('btnGoEnd').addEventListener('click', goToEnd);
+
+            // Collapse button
+            document.getElementById('collapseBtn').addEventListener('click', toggleSignalPanel);
+
+            // Cursor buttons
+            document.getElementById('btnCursor1').addEventListener('click', () => setActiveCursor(1));
+            document.getElementById('btnCursor2').addEventListener('click', () => setActiveCursor(2));
+            document.getElementById('btnClearCursors').addEventListener('click', clearCursors);
+
+            // Format select
+            document.getElementById('formatSelect').addEventListener('change', (e) => {
+                state.valueFormat = e.target.value;
+                render();
+                updateSignalList();
+            });
+
+            // Waveform interactions
+            waveformContainer.addEventListener('wheel', handleWheel, { passive: false });
+            waveformContainer.addEventListener('mousedown', handleMouseDown);
+            waveformContainer.addEventListener('mousemove', handleMouseMove);
+            waveformContainer.addEventListener('mouseleave', handleMouseLeave);
+            waveformContainer.addEventListener('click', handleClick);
+
+            // Context menu
+            document.getElementById('signalList').addEventListener('contextmenu', handleContextMenu);
+            document.getElementById('contextMenu').addEventListener('click', handleContextMenuAction);
+            document.addEventListener('click', hideContextMenu);
+
+            // Help overlay
+            document.getElementById('helpOverlay').addEventListener('click', (e) => {
+                if (e.target.id === 'helpOverlay') toggleHelpOverlay();
+            });
+
+            // Keyboard shortcuts
+            document.addEventListener('keydown', handleKeyDown);
+        }
+
+        function handleWheel(e) {
+            e.preventDefault();
+            if (e.ctrlKey || e.metaKey) {
+                const zoomFactor = e.deltaY > 0 ? 0.85 : 1.18;
+                zoom(zoomFactor, e.offsetX);
+            } else if (e.shiftKey) {
+                pan(e.deltaY * 2);
+            } else {
+                pan(e.deltaY);
+            }
+        }
+
+        let isDragging = false;
+        let dragStartX = 0;
+        let dragStartViewStart = 0n;
+
+        function handleMouseDown(e) {
+            if (e.button === 0) {
+                // Ctrl+drag for zoom selection
+                if (e.ctrlKey || e.metaKey) {
+                    startZoomSelection(e.offsetX);
+                } else {
+                    isDragging = true;
+                    dragStartX = e.offsetX;
+                    dragStartViewStart = state.viewStart;
+                    waveformContainer.style.cursor = 'grabbing';
+                }
+            }
+        }
+
+        function handleMouseMove(e) {
+            state.mouseX = e.offsetX;
+            state.mouseY = e.offsetY;
+
+            if (state.isZoomSelecting) {
+                updateZoomSelection(e.offsetX);
+            } else if (isDragging) {
+                const dx = e.offsetX - dragStartX;
+                const timePerPixel = Number(state.viewEnd - state.viewStart) / waveformCanvas.width;
+                const timeDelta = BigInt(Math.round(-dx * timePerPixel));
+
+                let newStart = dragStartViewStart + timeDelta;
+                let newEnd = newStart + (state.viewEnd - state.viewStart);
+
+                if (newStart < state.timeRange.start) {
+                    newStart = state.timeRange.start;
+                    newEnd = newStart + (state.viewEnd - state.viewStart);
+                }
+                if (newEnd > state.timeRange.end) {
+                    newEnd = state.timeRange.end;
+                    newStart = newEnd - (state.viewEnd - state.viewStart);
+                }
+
+                state.viewStart = newStart;
+                state.viewEnd = newEnd;
+                render();
+            } else {
+                updateTooltip(e.offsetX, e.offsetY);
+            }
+        }
+
+        function handleMouseLeave() {
+            tooltip.classList.remove('visible');
+        }
+
+        document.addEventListener('mouseup', () => {
+            if (state.isZoomSelecting) {
+                finishZoomSelection();
+            } else if (isDragging) {
+                isDragging = false;
+                waveformContainer.style.cursor = 'crosshair';
+            }
+        });
+
+        function handleClick(e) {
+            if (isDragging) return;
+
+            // Snap to nearest edge
+            const clickTime = pixelToTime(e.offsetX);
+            const snappedTime = snapToNearestEdge(clickTime, e.offsetY);
+
+            if (state.activeCursor === 1) {
+                state.cursor1Time = snappedTime;
+            } else {
+                state.cursor2Time = snappedTime;
+            }
+
+            render();
+            updateCursorDisplay();
+            updateSignalValues();
+        }
+
+        function handleKeyDown(e) {
+            switch (e.key) {
+                case '+':
+                case '=':
+                    zoom(1.5);
+                    break;
+                case '-':
+                    zoom(1 / 1.5);
+                    break;
+                case 'f':
+                case 'F':
+                    fitAll();
+                    break;
+                case 'Home':
+                    goToStart();
+                    break;
+                case 'End':
+                    goToEnd();
+                    break;
+                case 'ArrowLeft':
+                    if (e.altKey) {
+                        moveSelectedSignal(-1);
+                    } else {
+                        pan(-50);
+                    }
+                    break;
+                case 'ArrowRight':
+                    pan(50);
+                    break;
+                case 'ArrowUp':
+                    if (e.altKey) {
+                        moveSelectedSignal(-1);
+                    } else {
+                        selectPreviousSignal();
+                    }
+                    e.preventDefault();
+                    break;
+                case 'ArrowDown':
+                    if (e.altKey) {
+                        moveSelectedSignal(1);
+                    } else {
+                        selectNextSignal();
+                    }
+                    e.preventDefault();
+                    break;
+                case '1':
+                    setActiveCursor(1);
+                    break;
+                case '2':
+                    setActiveCursor(2);
+                    break;
+                case 'n':
+                    jumpToNextEdge();
+                    break;
+                case 'N':
+                    jumpToPrevEdge();
+                    break;
+                case 'Escape':
+                    if (state.isZoomSelecting) {
+                        cancelZoomSelection();
+                    } else {
+                        clearCursors();
+                    }
+                    break;
+                case '?':
+                    toggleHelpOverlay();
+                    break;
+            }
+        }
+
+        // ========================================================================
+        // Cursor Functions
+        // ========================================================================
+        function setActiveCursor(num) {
+            state.activeCursor = num;
+            document.getElementById('btnCursor1').classList.toggle('active', num === 1);
+            document.getElementById('btnCursor2').classList.toggle('active', num === 2);
+        }
+
+        function clearCursors() {
+            state.cursor1Time = null;
+            state.cursor2Time = null;
+            render();
+            updateCursorDisplay();
+            updateSignalValues();
+        }
+
+        function updateCursorDisplay() {
+            const c1Elem = document.getElementById('cursor1Time');
+            const c2Elem = document.getElementById('cursor2Time');
+            const deltaElem = document.getElementById('deltaTime');
+
+            c1Elem.textContent = state.cursor1Time !== null ? formatTime(state.cursor1Time) : '--';
+            c2Elem.textContent = state.cursor2Time !== null ? formatTime(state.cursor2Time) : '--';
+
+            if (state.cursor1Time !== null && state.cursor2Time !== null) {
+                const delta = state.cursor2Time - state.cursor1Time;
+                const absDelta = delta < 0n ? -delta : delta;
+                deltaElem.textContent = `Δ: ${formatTime(absDelta)}`;
+            } else {
+                deltaElem.textContent = '';
+            }
+        }
+
+        // ========================================================================
+        // Snap to Edge
+        // ========================================================================
+        function snapToNearestEdge(time, y) {
+            const signalIndex = Math.floor(y / SIGNAL_HEIGHT);
+            if (signalIndex < 0 || signalIndex >= state.selectedSignals.length) {
+                return time;
+            }
+
+            const signalId = state.selectedSignals[signalIndex];
+            const data = state.signalData.get(signalId);
+            if (!data || !data.values || data.values.length === 0) {
+                return time;
+            }
+
+            // Find nearest edge within snap threshold (10 pixels)
+            const snapThreshold = Number(state.viewEnd - state.viewStart) / waveformCanvas.width * 10;
+            let nearestTime = time;
+            let nearestDistance = snapThreshold;
+
+            for (const v of data.values) {
+                const edgeTime = BigInt(v.time);
+                const distance = Number(time - edgeTime);
+                const absDistance = Math.abs(distance);
+
+                if (absDistance < nearestDistance) {
+                    nearestDistance = absDistance;
+                    nearestTime = edgeTime;
+                }
+            }
+
+            return nearestTime;
+        }
+
+        // ========================================================================
+        // Edge Navigation (VaporView-style N/Shift+N)
+        // ========================================================================
+        function jumpToNextEdge() {
+            const cursorTime = state.activeCursor === 1 ? state.cursor1Time : state.cursor2Time;
+            const signalIndex = state.focusedSignalIndex;
+
+            if (signalIndex < 0 || signalIndex >= state.selectedSignals.length) return;
+
+            const signalId = state.selectedSignals[signalIndex];
+            const data = state.signalData.get(signalId);
+            if (!data || !data.values || data.values.length === 0) return;
+
+            // Find next edge after current cursor (or view start if no cursor)
+            const fromTime = cursorTime !== null ? cursorTime : state.viewStart;
+            let nextEdge = null;
+
+            for (const v of data.values) {
+                const edgeTime = BigInt(v.time);
+                if (edgeTime > fromTime) {
+                    nextEdge = edgeTime;
+                    break;
+                }
+            }
+
+            if (nextEdge !== null) {
+                setCursorTime(nextEdge);
+                ensureTimeVisible(nextEdge);
+                flashEdgeIndicator(nextEdge);
+            }
+        }
+
+        function jumpToPrevEdge() {
+            const cursorTime = state.activeCursor === 1 ? state.cursor1Time : state.cursor2Time;
+            const signalIndex = state.focusedSignalIndex;
+
+            if (signalIndex < 0 || signalIndex >= state.selectedSignals.length) return;
+
+            const signalId = state.selectedSignals[signalIndex];
+            const data = state.signalData.get(signalId);
+            if (!data || !data.values || data.values.length === 0) return;
+
+            // Find previous edge before current cursor (or view end if no cursor)
+            const fromTime = cursorTime !== null ? cursorTime : state.viewEnd;
+            let prevEdge = null;
+
+            for (let i = data.values.length - 1; i >= 0; i--) {
+                const edgeTime = BigInt(data.values[i].time);
+                if (edgeTime < fromTime) {
+                    prevEdge = edgeTime;
+                    break;
+                }
+            }
+
+            if (prevEdge !== null) {
+                setCursorTime(prevEdge);
+                ensureTimeVisible(prevEdge);
+                flashEdgeIndicator(prevEdge);
+            }
+        }
+
+        function setCursorTime(time) {
+            if (state.activeCursor === 1) {
+                state.cursor1Time = time;
+            } else {
+                state.cursor2Time = time;
+            }
+            render();
+            updateCursorDisplay();
+            updateSignalValues();
+        }
+
+        function ensureTimeVisible(time) {
+            // Pan view if cursor is outside visible range
+            if (time < state.viewStart || time > state.viewEnd) {
+                const viewWidth = state.viewEnd - state.viewStart;
+                const newStart = time - viewWidth / 4n;
+                state.viewStart = newStart < state.timeRange.start ? state.timeRange.start : newStart;
+                state.viewEnd = state.viewStart + viewWidth;
+                if (state.viewEnd > state.timeRange.end) {
+                    state.viewEnd = state.timeRange.end;
+                    state.viewStart = state.viewEnd - viewWidth;
+                }
+                render();
+            }
+        }
+
+        function flashEdgeIndicator(time) {
+            // Brief visual feedback when jumping to an edge
+            const x = timeToPixel(time);
+            const ctx = cursorCtx;
+
+            ctx.save();
+            ctx.strokeStyle = '#58a6ff';
+            ctx.lineWidth = 3;
+            ctx.shadowColor = '#58a6ff';
+            ctx.shadowBlur = 10;
+            ctx.beginPath();
+            ctx.moveTo(x, 0);
+            ctx.lineTo(x, cursorCanvas.height);
+            ctx.stroke();
+            ctx.restore();
+
+            // Clear flash after short delay
+            setTimeout(() => render(), 150);
+        }
+
+        // ========================================================================
+        // Signal Selection & Reordering
+        // ========================================================================
+        function selectNextSignal() {
+            if (state.selectedSignals.length === 0) return;
+            state.focusedSignalIndex = Math.min(state.focusedSignalIndex + 1, state.selectedSignals.length - 1);
+            updateSignalListSelection();
+            scrollSignalIntoView(state.focusedSignalIndex);
+        }
+
+        function selectPreviousSignal() {
+            if (state.selectedSignals.length === 0) return;
+            state.focusedSignalIndex = Math.max(state.focusedSignalIndex - 1, 0);
+            updateSignalListSelection();
+            scrollSignalIntoView(state.focusedSignalIndex);
+        }
+
+        function moveSelectedSignal(delta) {
+            if (state.selectedSignals.length < 2) return;
+
+            const oldIndex = state.focusedSignalIndex;
+            const newIndex = Math.max(0, Math.min(oldIndex + delta, state.selectedSignals.length - 1));
+
+            if (oldIndex === newIndex) return;
+
+            // Swap signals
+            const temp = state.selectedSignals[oldIndex];
+            state.selectedSignals[oldIndex] = state.selectedSignals[newIndex];
+            state.selectedSignals[newIndex] = temp;
+
+            state.focusedSignalIndex = newIndex;
+            updateSignalList();
+            render();
+        }
+
+        function updateSignalListSelection() {
+            const items = document.querySelectorAll('.signal-item');
+            items.forEach((item, idx) => {
+                item.classList.toggle('focused', idx === state.focusedSignalIndex);
+            });
+        }
+
+        function scrollSignalIntoView(index) {
+            const list = document.getElementById('signalList');
+            const items = list.querySelectorAll('.signal-item');
+            if (items[index]) {
+                items[index].scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+            }
+        }
+
+        // ========================================================================
+        // Zoom Selection (Click-drag to zoom)
+        // ========================================================================
+        function startZoomSelection(x) {
+            state.isZoomSelecting = true;
+            state.zoomSelectStartX = x;
+            state.zoomSelectEndX = x;
+            waveformContainer.style.cursor = 'col-resize';
+        }
+
+        function updateZoomSelection(x) {
+            state.zoomSelectEndX = x;
+            renderCursors(); // Redraw to show selection
+        }
+
+        function finishZoomSelection() {
+            if (!state.isZoomSelecting) return;
+
+            const startX = Math.min(state.zoomSelectStartX, state.zoomSelectEndX);
+            const endX = Math.max(state.zoomSelectStartX, state.zoomSelectEndX);
+
+            // Only zoom if selection is meaningful (> 10 pixels)
+            if (endX - startX > 10) {
+                const newStart = pixelToTime(startX);
+                const newEnd = pixelToTime(endX);
+
+                state.viewStart = newStart < state.timeRange.start ? state.timeRange.start : newStart;
+                state.viewEnd = newEnd > state.timeRange.end ? state.timeRange.end : newEnd;
+
+                state.zoom = Number(state.timeRange.end - state.timeRange.start) / Number(state.viewEnd - state.viewStart);
+                updateZoomDisplay();
+            }
+
+            cancelZoomSelection();
+            render();
+        }
+
+        function cancelZoomSelection() {
+            state.isZoomSelecting = false;
+            state.zoomSelectStartX = 0;
+            state.zoomSelectEndX = 0;
+            waveformContainer.style.cursor = 'crosshair';
+            render();
+        }
+
+        // ========================================================================
+        // Signal Panel Toggle
+        // ========================================================================
+        function toggleSignalPanel() {
+            const panel = document.getElementById('signalPanel');
+            if (panel) {
+                panel.classList.toggle('collapsed');
+            }
+        }
+
+        // ========================================================================
+        // Help Overlay
+        // ========================================================================
+        function toggleHelpOverlay() {
+            const overlay = document.getElementById('helpOverlay');
+            if (overlay) {
+                overlay.classList.toggle('visible');
+            }
+        }
+
+        // ========================================================================
+        // Context Menu
+        // ========================================================================
+        let contextMenuSignalId = null;
+
+        function handleContextMenu(e) {
+            e.preventDefault();
+
+            // Find the signal item that was right-clicked
+            const signalItem = e.target.closest('.signal-item');
+            if (!signalItem) return;
+
+            contextMenuSignalId = signalItem.dataset.signalId;
+
+            const menu = document.getElementById('contextMenu');
+            menu.style.left = e.clientX + 'px';
+            menu.style.top = e.clientY + 'px';
+            menu.classList.add('visible');
+
+            // Ensure menu stays on screen
+            const rect = menu.getBoundingClientRect();
+            if (rect.right > window.innerWidth) {
+                menu.style.left = (e.clientX - rect.width) + 'px';
+            }
+            if (rect.bottom > window.innerHeight) {
+                menu.style.top = (e.clientY - rect.height) + 'px';
+            }
+        }
+
+        function hideContextMenu() {
+            const menu = document.getElementById('contextMenu');
+            menu.classList.remove('visible');
+        }
+
+        function handleContextMenuAction(e) {
+            const action = e.target.dataset.action;
+            if (!action || !contextMenuSignalId) return;
+
+            const signalIndex = state.selectedSignals.indexOf(contextMenuSignalId);
+
+            if (action === 'remove') {
+                state.selectedSignals = state.selectedSignals.filter(id => id !== contextMenuSignalId);
+                updateSignalList();
+                render();
+            } else if (action === 'duplicate') {
+                state.selectedSignals.splice(signalIndex + 1, 0, contextMenuSignalId);
+                updateSignalList();
+                render();
+            } else if (action === 'separator-above') {
+                state.separators.add(signalIndex);
+                updateSignalList();
+            } else if (action === 'separator-below') {
+                state.separators.add(signalIndex + 1);
+                updateSignalList();
+            } else if (action.startsWith('format-')) {
+                const format = action.replace('format-', '');
+                state.signalFormats.set(contextMenuSignalId, format);
+                updateSignalList();
+                render();
+            } else if (action.startsWith('color-')) {
+                const colorMap = {
+                    'color-blue': '#58a6ff',
+                    'color-green': '#3fb950',
+                    'color-orange': '#f0883e',
+                    'color-purple': '#a371f7',
+                    'color-pink': '#f778ba'
+                };
+                state.signalColors.set(contextMenuSignalId, colorMap[action]);
+                updateSignalList();
+                render();
+            }
+
+            hideContextMenu();
+        }
+
+        // ========================================================================
+        // Tooltip
+        // ========================================================================
+        function updateTooltip(x, y) {
+            const signalIndex = Math.floor(y / SIGNAL_HEIGHT);
+            if (signalIndex < 0 || signalIndex >= state.selectedSignals.length) {
+                tooltip.classList.remove('visible');
+                return;
+            }
+
+            const signalId = state.selectedSignals[signalIndex];
+            const signal = state.signals.find(s => s.id === signalId);
+            const data = state.signalData.get(signalId);
+
+            if (!signal || !data) {
+                tooltip.classList.remove('visible');
+                return;
+            }
+
+            const time = pixelToTime(x);
+            const value = getValueAtTime(data.values, time);
+
+            if (value === null) {
+                tooltip.classList.remove('visible');
+                return;
+            }
+
+            document.getElementById('tooltipSignal').textContent = signal.name;
+            document.getElementById('tooltipValue').textContent = formatValue(value, signal.width);
+            document.getElementById('tooltipTime').textContent = `@ ${formatTime(time)}`;
+
+            // Position tooltip
+            const rect = waveformContainer.getBoundingClientRect();
+            let tooltipX = x + 15;
+            let tooltipY = y + rect.top - 10;
+
+            // Keep tooltip on screen
+            if (tooltipX + 150 > rect.right) {
+                tooltipX = x - 160;
+            }
+
+            tooltip.style.left = `${tooltipX}px`;
+            tooltip.style.top = `${tooltipY}px`;
+            tooltip.classList.add('visible');
+        }
+
+        // ========================================================================
+        // Navigation
+        // ========================================================================
+        function zoom(factor, centerX = waveformCanvas.width / 2) {
+            const viewWidth = state.viewEnd - state.viewStart;
+            const centerTime = pixelToTime(centerX);
+
+            const newWidth = BigInt(Math.max(10, Math.round(Number(viewWidth) / factor)));
+
+            const ratio = BigInt(Math.round(centerX)) * 1000n / BigInt(waveformCanvas.width);
+            state.viewStart = centerTime - (newWidth * ratio / 1000n);
+            state.viewEnd = state.viewStart + newWidth;
+
+            if (state.viewStart < state.timeRange.start) {
+                state.viewStart = state.timeRange.start;
+                state.viewEnd = state.viewStart + newWidth;
+            }
+            if (state.viewEnd > state.timeRange.end) {
+                state.viewEnd = state.timeRange.end;
+                state.viewStart = state.viewEnd - newWidth;
+            }
+
+            state.zoom = Number(state.timeRange.end - state.timeRange.start) / Number(newWidth);
+            updateZoomDisplay();
+            render();
+        }
+
+        function pan(pixels) {
+            const timePerPixel = Number(state.viewEnd - state.viewStart) / waveformCanvas.width;
+            const timeDelta = BigInt(Math.round(pixels * timePerPixel));
+
+            let newStart = state.viewStart + timeDelta;
+            let newEnd = state.viewEnd + timeDelta;
+
+            if (newStart < state.timeRange.start) {
+                newStart = state.timeRange.start;
+                newEnd = newStart + (state.viewEnd - state.viewStart);
+            }
+            if (newEnd > state.timeRange.end) {
+                newEnd = state.timeRange.end;
+                newStart = newEnd - (state.viewEnd - state.viewStart);
+            }
+
+            state.viewStart = newStart;
+            state.viewEnd = newEnd;
+            render();
+        }
+
+        function fitAll() {
+            state.viewStart = state.timeRange.start;
+            state.viewEnd = state.timeRange.end;
+            state.zoom = 1.0;
+            updateZoomDisplay();
+            render();
+        }
+
+        function goToStart() {
+            const viewWidth = state.viewEnd - state.viewStart;
+            state.viewStart = state.timeRange.start;
+            state.viewEnd = state.viewStart + viewWidth;
+            render();
+        }
+
+        function goToEnd() {
+            const viewWidth = state.viewEnd - state.viewStart;
+            state.viewEnd = state.timeRange.end;
+            state.viewStart = state.viewEnd - viewWidth;
+            render();
+        }
+
+        // ========================================================================
+        // Coordinate Conversion
+        // ========================================================================
+        function timeToPixel(time) {
+            const viewWidth = Number(state.viewEnd - state.viewStart);
+            if (viewWidth === 0) return 0;
+            return Number(time - state.viewStart) / viewWidth * waveformCanvas.width;
+        }
+
+        function pixelToTime(pixel) {
+            const viewWidth = state.viewEnd - state.viewStart;
+            return state.viewStart + (viewWidth * BigInt(Math.round(pixel)) / BigInt(waveformCanvas.width));
+        }
+
+        // ========================================================================
+        // Rendering
+        // ========================================================================
+        function render() {
+            renderTimeRuler();
+            renderWaveforms();
+            renderCursors();
+        }
+
+        function renderTimeRuler() {
+            const ctx = timeRulerCtx;
+            const width = timeRulerCanvas.width;
+            const height = timeRulerCanvas.height;
+
+            ctx.fillStyle = '#161b22';
+            ctx.fillRect(0, 0, width, height);
+
+            if (state.viewEnd <= state.viewStart) return;
+
+            ctx.fillStyle = '#8b949e';
+            ctx.font = '11px -apple-system, BlinkMacSystemFont, sans-serif';
+            ctx.textAlign = 'center';
+
+            const viewWidth = Number(state.viewEnd - state.viewStart);
+            const pixelsPerUnit = width / viewWidth;
+            const targetTickPixels = 100;
+            const tickInterval = Math.pow(10, Math.ceil(Math.log10(targetTickPixels / pixelsPerUnit)));
+
+            ctx.strokeStyle = '#30363d';
+            ctx.lineWidth = 1;
+
+            const startTick = Math.ceil(Number(state.viewStart) / tickInterval) * tickInterval;
+            for (let t = startTick; t <= Number(state.viewEnd); t += tickInterval) {
+                const x = timeToPixel(BigInt(Math.round(t)));
+
+                ctx.beginPath();
+                ctx.moveTo(x, height - 8);
+                ctx.lineTo(x, height);
+                ctx.stroke();
+
+                ctx.fillText(formatTime(BigInt(Math.round(t))), x, height - 12);
+            }
+
+            // Draw minor ticks
+            ctx.strokeStyle = '#21262d';
+            const minorInterval = tickInterval / 5;
+            for (let t = startTick - tickInterval; t <= Number(state.viewEnd) + tickInterval; t += minorInterval) {
+                if (t % tickInterval === 0) continue;
+                const x = timeToPixel(BigInt(Math.round(t)));
+                if (x < 0 || x > width) continue;
+
+                ctx.beginPath();
+                ctx.moveTo(x, height - 4);
+                ctx.lineTo(x, height);
+                ctx.stroke();
+            }
+        }
+
+        function renderWaveforms() {
+            const ctx = waveformCtx;
+            const width = waveformCanvas.width;
+            const height = waveformCanvas.height;
+
+            ctx.fillStyle = '#0d1117';
+            ctx.fillRect(0, 0, width, height);
+
+            if (state.selectedSignals.length === 0) return;
+
+            // Draw alternating row backgrounds
+            state.selectedSignals.forEach((_, index) => {
+                if (index % 2 === 1) {
+                    ctx.fillStyle = '#161b22';
+                    ctx.fillRect(0, index * SIGNAL_HEIGHT, width, SIGNAL_HEIGHT);
+                }
+            });
+
+            // Draw grid lines
+            ctx.strokeStyle = '#21262d';
+            ctx.lineWidth = 1;
+            for (let i = 1; i <= state.selectedSignals.length; i++) {
+                const y = i * SIGNAL_HEIGHT;
+                ctx.beginPath();
+                ctx.moveTo(0, y);
+                ctx.lineTo(width, y);
+                ctx.stroke();
+            }
+
+            // Draw each signal
+            state.selectedSignals.forEach((signalId, index) => {
+                const signal = state.signals.find(s => s.id === signalId);
+                const data = state.signalData.get(signalId);
+                if (!signal || !data) return;
+
+                const y = index * SIGNAL_HEIGHT;
+                const color = state.signalColors.get(signalId) || SIGNAL_COLORS[0];
+                renderSignal(ctx, signal, data, y, color);
+            });
+        }
+
+        function renderSignal(ctx, signal, data, y, color) {
+            const isBus = signal.width > 1;
+            const values = data.values || [];
+
+            const margin = 6;
+            const waveHeight = SIGNAL_HEIGHT - margin * 2;
+            const midY = y + margin + waveHeight / 2;
+            const highY = y + margin + 2;
+            const lowY = y + SIGNAL_HEIGHT - margin - 2;
+            const busTopY = y + margin + 3;
+            const busBotY = y + SIGNAL_HEIGHT - margin - 3;
+
+            if (isBus) {
+                // VaporView-style shaded bus rendering
+                renderBusSignal(ctx, signal, values, y, color, busTopY, busBotY, midY, waveHeight);
+            } else {
+                // Single-bit signal
+                renderBitSignal(ctx, signal, values, color, highY, lowY, midY);
+            }
+        }
+
+        function renderBusSignal(ctx, signal, values, y, color, topY, botY, midY, waveHeight) {
+            if (values.length === 0) return;
+
+            // Parse color to get RGB for shading
+            const rgb = hexToRgb(color);
+            const fillColor = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0.2)`;
+
+            for (let i = 0; i < values.length; i++) {
+                const { time, value } = values[i];
+                const x = timeToPixel(BigInt(time));
+                const nextX = i < values.length - 1
+                    ? timeToPixel(BigInt(values[i + 1].time))
+                    : waveformCanvas.width;
+
+                if (nextX < -50) continue;
+                if (x > waveformCanvas.width + 50) break;
+
+                const clampedX = Math.max(-10, x);
+                const clampedNextX = Math.min(waveformCanvas.width + 10, nextX);
+                const width = clampedNextX - clampedX;
+
+                if (width < 1) continue;
+
+                const strVal = String(value).toLowerCase();
+                const isX = strVal.includes('x');
+                const isZ = strVal.includes('z');
+
+                // Shaded fill (VaporView style)
+                ctx.fillStyle = isX ? 'rgba(248, 81, 73, 0.3)' : isZ ? 'rgba(210, 153, 34, 0.3)' : fillColor;
+                ctx.beginPath();
+                ctx.moveTo(clampedX + 4, topY);
+                ctx.lineTo(clampedNextX - 4, topY);
+                ctx.lineTo(clampedNextX - 4, botY);
+                ctx.lineTo(clampedX + 4, botY);
+                ctx.closePath();
+                ctx.fill();
+
+                // Border lines
+                ctx.strokeStyle = isX ? '#f85149' : isZ ? '#d29922' : color;
+                ctx.lineWidth = 1.5;
+                ctx.beginPath();
+
+                // Top line
+                ctx.moveTo(clampedX + 4, topY);
+                ctx.lineTo(clampedNextX - 4, topY);
+
+                // Bottom line
+                ctx.moveTo(clampedX + 4, botY);
+                ctx.lineTo(clampedNextX - 4, botY);
+
+                ctx.stroke();
+
+                // Transition diamonds at edges
+                if (i > 0 && x > -10 && x < waveformCanvas.width + 10) {
+                    ctx.beginPath();
+                    ctx.moveTo(x, topY);
+                    ctx.lineTo(x + 4, midY);
+                    ctx.lineTo(x, botY);
+                    ctx.lineTo(x - 4, midY);
+                    ctx.closePath();
+                    ctx.fillStyle = color;
+                    ctx.fill();
+                }
+
+                // Value label
+                if (width > 35) {
+                    const text = formatValue(value, signal.width, signal.id);
+                    ctx.font = '10px SF Mono, Consolas, monospace';
+                    ctx.fillStyle = isX ? '#f85149' : isZ ? '#d29922' : color;
+                    ctx.textAlign = 'left';
+                    ctx.textBaseline = 'middle';
+
+                    // Truncate text if too long
+                    const maxWidth = width - 16;
+                    let displayText = text;
+                    if (ctx.measureText(text).width > maxWidth) {
+                        while (displayText.length > 1 && ctx.measureText(displayText + '…').width > maxWidth) {
+                            displayText = displayText.slice(0, -1);
+                        }
+                        displayText += '…';
+                    }
+
+                    ctx.fillText(displayText, clampedX + 8, midY);
+                }
+            }
+        }
+
+        function renderBitSignal(ctx, signal, values, color, highY, lowY, midY) {
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 2;
+            ctx.lineJoin = 'round';
+            ctx.lineCap = 'round';
+            ctx.beginPath();
+
+            let lastX = -100;
+            let lastValue = null;
+            let lastY = midY;
+
+            for (let i = 0; i < values.length; i++) {
+                const { time, value } = values[i];
+                const x = timeToPixel(BigInt(time));
+
+                if (x < -50) {
+                    lastX = x;
+                    lastValue = value;
+                    const isHigh = value === 1 || value === '1';
+                    lastY = isHigh ? highY : lowY;
+                    continue;
+                }
+                if (x > waveformCanvas.width + 50) break;
+
+                const isHigh = value === 1 || value === '1';
+                const strVal = String(value).toLowerCase();
+                const isX = strVal.includes('x');
+                const isZ = strVal.includes('z');
+
+                let currentY;
+                if (isX || isZ) {
+                    currentY = midY;
+                } else {
+                    currentY = isHigh ? highY : lowY;
+                }
+
+                // Draw with appropriate color
+                if (lastValue !== null) {
+                    ctx.stroke();
+                    ctx.beginPath();
+                    ctx.strokeStyle = isX ? '#f85149' : isZ ? '#d29922' : color;
+
+                    // Horizontal from last position
+                    ctx.moveTo(lastX, lastY);
+                    ctx.lineTo(x, lastY);
+
+                    // Vertical transition
+                    if (lastY !== currentY) {
+                        ctx.lineTo(x, currentY);
+                    }
+                } else {
+                    ctx.moveTo(x, currentY);
+                }
+
+                lastX = x;
+                lastValue = value;
+                lastY = currentY;
+            }
+
+            // Extend to end
+            if (lastValue !== null && lastX < waveformCanvas.width) {
+                ctx.lineTo(waveformCanvas.width, lastY);
+            }
+
+            ctx.stroke();
+        }
+
+        function hexToRgb(hex) {
+            const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+            return result ? {
+                r: parseInt(result[1], 16),
+                g: parseInt(result[2], 16),
+                b: parseInt(result[3], 16)
+            } : { r: 88, g: 166, b: 255 };
+        }
+
+        function renderCursors() {
+            const ctx = cursorCtx;
+            const width = cursorCanvas.width;
+            const height = cursorCanvas.height;
+
+            ctx.clearRect(0, 0, width, height);
+
+            // Zoom selection rectangle
+            if (state.isZoomSelecting) {
+                const startX = Math.min(state.zoomSelectStartX, state.zoomSelectEndX);
+                const endX = Math.max(state.zoomSelectStartX, state.zoomSelectEndX);
+
+                // Selection fill
+                ctx.fillStyle = 'rgba(88, 166, 255, 0.2)';
+                ctx.fillRect(startX, 0, endX - startX, height);
+
+                // Selection border
+                ctx.strokeStyle = '#58a6ff';
+                ctx.lineWidth = 2;
+                ctx.setLineDash([5, 3]);
+                ctx.strokeRect(startX, 0, endX - startX, height);
+                ctx.setLineDash([]);
+
+                // Time labels at edges
+                ctx.fillStyle = '#58a6ff';
+                ctx.font = '10px SF Mono, Consolas, monospace';
+                ctx.textAlign = 'center';
+                const startTime = pixelToTime(startX);
+                const endTime = pixelToTime(endX);
+                ctx.fillText(formatTime(startTime), startX, height - 8);
+                ctx.fillText(formatTime(endTime), endX, height - 8);
+            }
+
+            // Focused signal highlight
+            if (state.focusedSignalIndex >= 0 && state.focusedSignalIndex < state.selectedSignals.length) {
+                const y = state.focusedSignalIndex * SIGNAL_HEIGHT;
+                ctx.fillStyle = 'rgba(88, 166, 255, 0.05)';
+                ctx.fillRect(0, y, width, SIGNAL_HEIGHT);
+                ctx.strokeStyle = 'rgba(88, 166, 255, 0.3)';
+                ctx.lineWidth = 1;
+                ctx.strokeRect(0, y, width, SIGNAL_HEIGHT);
+            }
+
+            // Cursor 1 (Orange)
+            if (state.cursor1Time !== null) {
+                renderCursor(ctx, state.cursor1Time, '#f0883e', 'C1', height);
+            }
+
+            // Cursor 2 (Purple)
+            if (state.cursor2Time !== null) {
+                renderCursor(ctx, state.cursor2Time, '#a371f7', 'C2', height);
+            }
+
+            // Delta region highlight
+            if (state.cursor1Time !== null && state.cursor2Time !== null) {
+                const x1 = timeToPixel(state.cursor1Time);
+                const x2 = timeToPixel(state.cursor2Time);
+                const minX = Math.min(x1, x2);
+                const maxX = Math.max(x1, x2);
+
+                ctx.fillStyle = 'rgba(88, 166, 255, 0.1)';
+                ctx.fillRect(minX, 0, maxX - minX, height);
+            }
+        }
+
+        function renderCursor(ctx, time, color, label, height) {
+            const x = Math.round(timeToPixel(time)) + 0.5;
+            if (x < 0 || x > cursorCanvas.width) return;
+
+            // Glow
+            ctx.shadowColor = color;
+            ctx.shadowBlur = 6;
+
+            // Line
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(x, 0);
+            ctx.lineTo(x, height);
+            ctx.stroke();
+
+            ctx.shadowBlur = 0;
+
+            // Label badge
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            ctx.roundRect(x - 12, 4, 24, 16, 4);
+            ctx.fill();
+
+            ctx.fillStyle = '#0d1117';
+            ctx.font = 'bold 10px -apple-system, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(label, x, 12);
+
+            // Time label
+            ctx.fillStyle = color;
+            ctx.font = '10px SF Mono, Consolas, monospace';
+            ctx.fillText(formatTime(time), x, 32);
+        }
+
+        // ========================================================================
+        // Formatting
+        // ========================================================================
+        function formatTime(time) {
+            const t = Number(time);
+            const unit = state.timescale.unit;
+            return `${t}${unit}`;
+        }
+
+        function formatValue(value, width, signalId = null) {
+            if (value === null || value === undefined) return '--';
+
+            const strVal = String(value);
+            if (strVal.toLowerCase().includes('x')) return 'X';
+            if (strVal.toLowerCase().includes('z')) return 'Z';
+
+            const num = typeof value === 'number' ? value : parseInt(strVal, 2) || 0;
+
+            // Use per-signal format if set, otherwise global format
+            const format = (signalId && state.signalFormats.has(signalId))
+                ? state.signalFormats.get(signalId)
+                : state.valueFormat;
+
+            switch (format) {
+                case 'binary':
+                    return 'b' + num.toString(2).padStart(width, '0');
+                case 'decimal':
+                    return num.toString(10);
+                case 'signed':
+                    // Two's complement signed interpretation
+                    const maxUnsigned = Math.pow(2, width);
+                    const halfMax = maxUnsigned / 2;
+                    const signed = num >= halfMax ? num - maxUnsigned : num;
+                    return signed.toString(10);
+                case 'octal':
+                    return '0o' + num.toString(8);
+                case 'ascii':
+                    // Convert to ASCII characters (for 8-bit aligned widths)
+                    let ascii = '';
+                    let temp = num;
+                    const bytes = Math.ceil(width / 8);
+                    for (let i = 0; i < bytes; i++) {
+                        const byte = temp & 0xFF;
+                        if (byte >= 32 && byte < 127) {
+                            ascii = String.fromCharCode(byte) + ascii;
+                        } else {
+                            ascii = '.' + ascii;
+                        }
+                        temp = temp >> 8;
+                    }
+                    return '"' + ascii + '"';
+                case 'hex':
+                default:
+                    return '0x' + num.toString(16).toUpperCase().padStart(Math.ceil(width/4), '0');
+            }
+        }
+
+        function getValueAtTime(values, time) {
+            if (!values || values.length === 0) return null;
+
+            let result = null;
+            for (const v of values) {
+                const vTime = BigInt(v.time);
+                if (vTime <= time) {
+                    result = v.value;
+                } else {
+                    break;
+                }
+            }
+            return result;
+        }
+
+        // ========================================================================
+        // UI Updates
+        // ========================================================================
+        function updateSignalList() {
+            const list = document.getElementById('signalList');
+            const empty = document.getElementById('emptySignals');
+            const countElem = document.getElementById('signalCount');
+
+            countElem.textContent = state.selectedSignals.length;
+
+            if (state.selectedSignals.length === 0) {
+                empty.classList.remove('hidden');
+                list.innerHTML = '';
+
+                // Show all available signals to add
+                state.signals.forEach((signal, idx) => {
+                    const color = state.signalColors.get(signal.id) || SIGNAL_COLORS[idx % SIGNAL_COLORS.length];
+                    if (!state.signalColors.has(signal.id)) {
+                        state.signalColors.set(signal.id, color);
+                    }
+
+                    const item = document.createElement('div');
+                    item.className = 'signal-item';
+                    item.dataset.signalId = signal.id;
+                    item.innerHTML = `
+                        <div class="signal-color" style="background: ${color}"></div>
+                        <div class="signal-info">
+                            <div class="signal-name">${signal.name}</div>
+                            <div class="signal-path">${signal.fullPath}</div>
+                        </div>
+                        <div class="signal-value">+</div>
+                    `;
+                    item.addEventListener('click', () => toggleSignal(signal.id));
+                    list.appendChild(item);
+                });
+                return;
+            }
+
+            empty.classList.add('hidden');
+            list.innerHTML = '';
+
+            // Render selected signals (in display order)
+            state.selectedSignals.forEach((signalId, idx) => {
+                // Add separator if needed
+                if (state.separators.has(idx)) {
+                    const sep = document.createElement('div');
+                    sep.className = 'signal-separator';
+                    list.appendChild(sep);
+                }
+
+                const signal = state.signals.find(s => s.id === signalId);
+                if (!signal) return;
+
+                const color = state.signalColors.get(signalId) || SIGNAL_COLORS[0];
+                const isFocused = idx === state.focusedSignalIndex;
+
+                const item = document.createElement('div');
+                item.className = 'signal-item selected' + (isFocused ? ' focused' : '');
+                item.dataset.signalId = signalId;
+
+                // Get current value at cursor
+                let valueText = '--';
+                const cursorTime = state.cursor1Time || state.cursor2Time;
+                if (cursorTime !== null && state.signalData.has(signalId)) {
+                    const data = state.signalData.get(signalId);
+                    const value = getValueAtTime(data.values, cursorTime);
+                    if (value !== null) {
+                        valueText = formatValue(value, signal.width, signalId);
+                    }
+                }
+
+                item.innerHTML = `
+                    <div class="signal-color" style="background: ${color}"></div>
+                    <div class="signal-info">
+                        <div class="signal-name">${signal.name}</div>
+                        <div class="signal-path">${signal.fullPath}</div>
+                    </div>
+                    <div class="signal-value">${valueText}</div>
+                `;
+
+                item.addEventListener('click', () => {
+                    state.focusedSignalIndex = idx;
+                    updateSignalList();
+                    render();
+                });
+                list.appendChild(item);
+            });
+        }
+
+        function toggleSignal(signalId) {
+            const index = state.selectedSignals.indexOf(signalId);
+            if (index >= 0) {
+                state.selectedSignals.splice(index, 1);
+            } else {
+                state.selectedSignals.push(signalId);
+                if (!state.signalData.has(signalId)) {
+                    requestSignalData(signalId);
+                }
+            }
+            updateSignalList();
+            render();
+        }
+
+        function updateSignalValues() {
+            updateSignalList();
+        }
+
+        function updateZoomDisplay() {
+            document.getElementById('statusZoom').textContent = `${Math.round(state.zoom * 100)}%`;
+        }
+
+        function updateStatusBar() {
+            document.getElementById('statusSignalCount').textContent = state.signals.length;
+            document.getElementById('statusTimeRange').textContent =
+                `${formatTime(state.timeRange.start)} - ${formatTime(state.timeRange.end)}`;
+            updateZoomDisplay();
+        }
+
+        // ========================================================================
+        // Message Handling
+        // ========================================================================
+        function handleMessage(event) {
+            const message = event.data;
+            if (!message || !message.type) return;
+
+            switch (message.type) {
+                case 'loadWaveform':
+                    loadWaveformData(message.data);
+                    break;
+                case 'signalData':
+                    state.signalData.set(message.signalId, message.data);
+                    render();
+                    break;
+            }
+        }
+
+        function loadWaveformData(data) {
+            state.filePath = data.filePath;
+            state.signals = data.signals || [];
+            state.timeRange = {
+                start: BigInt(data.timeRange?.start || 0),
+                end: BigInt(data.timeRange?.end || 100)
+            };
+            state.timescale = data.timescale || { value: 1, unit: 'ns' };
+            state.viewStart = state.timeRange.start;
+            state.viewEnd = state.timeRange.end;
+            state.selectedSignals = [];
+            state.signalData.clear();
+            state.signalColors.clear();
+
+            // Assign colors
+            state.signals.forEach((signal, idx) => {
+                state.signalColors.set(signal.id, SIGNAL_COLORS[idx % SIGNAL_COLORS.length]);
+            });
+
+            document.getElementById('fileName').textContent = data.filePath?.split(/[/\\]/).pop() || 'No file';
+            document.getElementById('loadingOverlay').classList.add('hidden');
+
+            updateSignalList();
+            updateStatusBar();
+            updateCursorDisplay();
+            render();
+
+            // Auto-select all signals
+            state.signals.forEach(s => {
+                state.selectedSignals.push(s.id);
+                requestSignalData(s.id);
+            });
+            updateSignalList();
+        }
+
+        async function requestSignalData(signalId) {
+            if (vscode) {
+                vscode.postMessage({ type: 'getSignalData', signalId });
+            } else {
+                try {
+                    const response = await fetch(`/api/signal?id=${encodeURIComponent(signalId)}`);
+                    if (!response.ok) throw new Error('Failed to fetch');
+                    const data = await response.json();
+
+                    state.signalData.set(signalId, {
+                        values: data.values.map(v => ({
+                            time: BigInt(v.time),
+                            value: v.value
+                        })),
+                        timeRange: {
+                            start: BigInt(data.timeRange.start),
+                            end: BigInt(data.timeRange.end)
+                        }
+                    });
+
+                    render();
+                    updateSignalValues();
+                } catch (error) {
+                    console.error('Failed to fetch signal data:', error);
+                }
+            }
+        }
+
+        // ========================================================================
+        // Start
+        // ========================================================================
+        init();
+    </script>
+</body>
+</html>
