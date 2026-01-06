@@ -153,8 +153,10 @@ export class MemoryManager {
             // Clean up temp file if it exists
             try {
                 await fs.unlink(tempPath);
-            } catch {}
-            
+            } catch {
+                // Temp file may not exist or already cleaned up - safe to ignore
+            }
+
             throw error;
         }
     }
@@ -204,7 +206,9 @@ export class MemoryManager {
         if (this.lockAcquired) {
             try {
                 await fs.unlink(this.lockPath);
-            } catch {}
+            } catch {
+                // Lock file may have been removed externally - safe to ignore
+            }
             this.lockAcquired = false;
         }
     }

@@ -63,7 +63,9 @@ async function detectProjectRoot(startDir: string): Promise<string> {
                 await fs.access(path.join(parent, marker));
                 console.log(`  Project root: ${parent}`);
                 return parent;
-            } catch {}
+            } catch {
+                // Marker doesn't exist - continue checking other markers
+            }
         }
         // Also check for .sv files directly in parent
         try {
@@ -72,7 +74,9 @@ async function detectProjectRoot(startDir: string): Promise<string> {
                 console.log(`  Project root: ${parent}`);
                 return parent;
             }
-        } catch {}
+        } catch {
+            // Directory not readable - continue to fallback
+        }
     }
     
     return dir;

@@ -445,7 +445,9 @@ export class ProjectIndexer {
             try {
                 await fs.access(candidate);
                 return candidate;
-            } catch {}
+            } catch {
+                // File doesn't exist in this include path - try next
+            }
         }
 
         // Check in project root
@@ -453,7 +455,9 @@ export class ProjectIndexer {
         try {
             await fs.access(rootCandidate);
             return rootCandidate;
-        } catch {}
+        } catch {
+            // File doesn't exist in project root either
+        }
 
         return null;
     }
