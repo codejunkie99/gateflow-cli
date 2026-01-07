@@ -136,20 +136,15 @@ export class ErrorRecoveryPipeline {
         context: ErrorContext
     ): Promise<RecoveryAction> {
         const suggestion = this.getRecoverySuggestion(errorType);
-        
-        return new Promise((resolve) => {
-            this.bus.emit({
-                type: 'approval_request',
-                id: `error-recovery-${Date.now()}`,
-                action: 'Error Recovery',
-                details: `Error: ${context.error.message}\n\n${suggestion}`,
-                options: ['Retry', 'Skip', 'Abort']
-            });
 
-            // Wait for user response (handled by renderer)
-            // For now, return ASK_USER - actual implementation would wait for approval_response
-            resolve(RecoveryAction.ASK_USER);
-        });
+        // Use synchronous approval to properly wait for user input
+        const { requestApprovalSync } = await import('../fileops/approval.js');
+        const approval = requestApprovalSync(
+            'error_recovery',
+            `Error: ${context.error.message}\n\n${suggestion}\n\nRetry this operation?`
+        );
+
+        return approval.approved ? RecoveryAction.RETRY_WITH_BACKOFF : RecoveryAction.ABORT;
     }
 
     /**

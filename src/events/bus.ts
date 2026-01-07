@@ -233,6 +233,7 @@ export class EventBus {
 
         let paused = false;
         const buffer: UiEvent[] = [];
+        const MAX_BUFFER_SIZE = 10000; // Prevent unbounded memory growth
 
         const drainBuffer = () => {
             while (buffer.length > 0 && !paused) {
@@ -250,6 +251,10 @@ export class EventBus {
 
         const sub = this.subscribe((event) => {
             if (paused) {
+                // Enforce buffer limit - drop oldest events if full
+                if (buffer.length >= MAX_BUFFER_SIZE) {
+                    buffer.shift();
+                }
                 buffer.push(event);
             } else {
                 const ok = transform.write(event);
@@ -274,7 +279,13 @@ export class EventBus {
     enableHistory(enabled: boolean, maxSize?: number): void {
         this.historyEnabled = enabled;
         if (maxSize !== undefined && maxSize > 0) {
-            this.maxHistorySize = maxSize;
+            if (maxSize !== this.maxHistorySize) {
+                // Size changed - reset ring buffer state to prevent index corruption
+                this.maxHistorySize = maxSize;
+                this.history = [];
+                this.historyIndex = 0;
+                this.historyFull = false;
+            }
         }
         if (!enabled) {
             this.history = [];

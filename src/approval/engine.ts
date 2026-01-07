@@ -141,11 +141,12 @@ export class PolicyEngine {
             }
         }
 
-        // Check if outside project root
-        const isInRoot = absolutePath.startsWith(this.config.projectRoot);
+        // Check if outside project root (normalize paths for consistent comparison)
+        const normalizedRoot = this.config.projectRoot.replace(/\\/g, '/');
+        const isInRoot = normalizedPath.startsWith(normalizedRoot);
         const isInAllowedDir = this.config.allowedDirs.some(dir => {
-            const allowedPath = path.resolve(this.config.projectRoot, dir);
-            return absolutePath.startsWith(allowedPath);
+            const allowedPath = path.resolve(this.config.projectRoot, dir).replace(/\\/g, '/');
+            return normalizedPath.startsWith(allowedPath);
         });
 
         if (!isInRoot && !isInAllowedDir && !this.config.allowOutsideRoot) {

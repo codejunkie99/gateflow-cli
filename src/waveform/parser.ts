@@ -190,5 +190,7 @@ export class VCDParser {
         if (signal) {
             signal.values.push([time, value]);
         }
+        // Note: If signal ID not in map, value is silently discarded
+        // This is expected behavior when signals are filtered
     }
 }

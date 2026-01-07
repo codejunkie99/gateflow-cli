@@ -220,14 +220,28 @@ export class MemoryManager {
         try {
             const content = await fs.readFile(this.lockPath, 'utf-8');
             const lock = JSON.parse(content);
-            
+
             // Consider stale if > 5 minutes old
             if (Date.now() - lock.time > 5 * 60 * 1000) {
                 return true;
             }
 
-            // Check if PID is still running (Unix only)
-            if (process.platform !== 'win32') {
+            if (process.platform === 'win32') {
+                // Windows: Use tasklist to check if process exists
+                try {
+                    const { spawnSync } = await import('child_process');
+                    const result = spawnSync('tasklist', ['/FI', `PID eq ${lock.pid}`, '/NH'], {
+                        encoding: 'utf-8',
+                        timeout: 2000
+                    });
+                    // If PID not found, tasklist returns "INFO: No tasks..."
+                    return !result.stdout.includes(lock.pid.toString());
+                } catch {
+                    // If tasklist fails, fall back to time-based only
+                    return false;
+                }
+            } else {
+                // Unix: Use signal 0 test
                 try {
                     process.kill(lock.pid, 0);
                     return false; // Process exists
@@ -235,8 +249,6 @@ export class MemoryManager {
                     return true; // Process doesn't exist
                 }
             }
-
-            return false;
         } catch {
             return true;
         }

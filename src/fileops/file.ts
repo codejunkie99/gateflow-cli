@@ -691,6 +691,35 @@ export class FileTools {
         const startTime = Date.now();
 
         try {
+            // Validate pattern length to prevent ReDoS attacks
+            const MAX_PATTERN_LENGTH = 500;
+            if (pattern.length > MAX_PATTERN_LENGTH) {
+                return {
+                    success: false,
+                    pattern,
+                    matches: [],
+                    totalMatches: 0,
+                    error: `Pattern too long (max ${MAX_PATTERN_LENGTH} chars)`
+                };
+            }
+
+            // Sanitize pattern - remove inline flags like (?i), (?m), (?s) that JS doesn't support
+            const sanitizedPattern = pattern.replace(/\(\?[imsx]+\)/g, '');
+
+            // Validate regex before use
+            let regex: RegExp;
+            try {
+                regex = new RegExp(sanitizedPattern, caseSensitive ? 'g' : 'gi');
+            } catch (regexError) {
+                return {
+                    success: false,
+                    pattern,
+                    matches: [],
+                    totalMatches: 0,
+                    error: `Invalid regex: ${regexError}`
+                };
+            }
+
             const files = await glob(filePattern, {
                 cwd: rootPath,
                 ignore: ['**/node_modules/**', '**/obj_dir/**', '**/.git/**'],
@@ -698,9 +727,6 @@ export class FileTools {
             });
 
             const matches: SearchMatch[] = [];
-            // Sanitize pattern - remove inline flags like (?i), (?m), (?s) that JS doesn't support
-            const sanitizedPattern = pattern.replace(/\(\?[imsx]+\)/g, '');
-            const regex = new RegExp(sanitizedPattern, caseSensitive ? 'g' : 'gi');
 
             for (const file of files) {
                 if (matches.length >= maxResults) break;

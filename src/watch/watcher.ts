@@ -206,7 +206,10 @@ export class WatchManager {
      */
     private async processChanges(): Promise<void> {
         if (this.processing) {
-            // Reschedule if we're already processing
+            // Clear existing timer before rescheduling to prevent memory leak
+            if (this.debounceTimer) {
+                clearTimeout(this.debounceTimer);
+            }
             this.debounceTimer = setTimeout(() => this.processChanges(), this.config.debounceMs);
             return;
         }
