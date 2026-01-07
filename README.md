@@ -1,17 +1,17 @@
 ## GateFlow CLI
 
-GateFlow is a **natural-language CLI assistant for SystemVerilog**. You can ask it to read/understand a codebase, edit `.sv` files with an approval gate, and run **Verilator lint** (including an iterative “lint → fix → re-lint” loop).
-.
+GateFlow is a **natural-language CLI assistant for SystemVerilog**. You can ask it to read/understand a codebase, edit `.sv` files with an approval gate, run **Verilator lint** (including an iterative "lint → fix → re-lint" loop), and **view waveforms** in both terminal and browser interfaces.
 
-## What it does in v1
+## Features
 
-- **Codebase understanding**: scans and indexes SystemVerilog projects (regex-based index for v1).
+- **Codebase understanding**: scans and indexes SystemVerilog projects (regex-based index).
 - **Code writing**: generate new modules/testbenches/packages.
 - **Code editing**: line edits and search/replace with diff preview + approval policy.
-- **Verification**: Verilator lint; “fix loop” can apply edits and re-run lint until clean (or until it detects thrashing).
-- **TUI/UX**: streaming output, blue “GateFlow” branding, no emojis, approval prompts.
-
-Deferred (intentionally): waveform visualization and full LSP-grade semantic understanding.
+- **Verification**: Verilator lint; "fix loop" can apply edits and re-run lint until clean (or until it detects thrashing).
+- **Waveform visualization**: terminal-based and browser-based VCD waveform viewers with signal hierarchy browsing.
+- **MCP integration**: Model Context Protocol server for Claude Desktop integration.
+- **Dynamic context discovery**: intelligent token optimization and context management.
+- **TUI/UX**: streaming output, blue "GateFlow" branding, no emojis, approval prompts.
 
 ## Install & run (from source)
 
@@ -26,8 +26,8 @@ npm run build
 Run via Node:
 
 ```bash
-node dist/index.js doctor
-node dist/index.js "lint src/src/counter.sv"
+node dist/cli/main.js doctor
+node dist/cli/main.js "lint src/counter.sv"
 ```
 
 Optional: install as a shell command (local dev):
@@ -63,14 +63,35 @@ If Verilator is installed in WSL (example path `/usr/bin/verilator`), set this i
 
 ```powershell
 $env:VERILATOR_PATH="/usr/bin/verilator"
-node dist/index.js doctor
+node dist/cli/main.js doctor
 ```
 
 GateFlow detects Unix-style paths on Windows and runs Verilator via `wsl ...`.
 
+### Project configuration
+
+Create a `.gaterc.json` file in your project root:
+
+```json
+{
+  "ux": {
+    "showThinking": true,
+    "showThinkingConfidence": false,
+    "showToolCalls": true,
+    "streamTokens": true,
+    "maxHistory": 50
+  },
+  "llm": {
+    "model": "claude-sonnet-4-20250514",
+    "maxTokens": 8192,
+    "temperature": 0
+  }
+}
+```
+
 ## CLI usage
 
-GateFlow is “chat-first”: the default command is `chat`, so you can run:
+GateFlow is "chat-first": the default command is `chat`, so you can run:
 
 ```bash
 gateflow "list all modules"
@@ -111,12 +132,12 @@ Scan and index the project (SystemVerilog-focused). In `--json` mode, prints the
 Run Verilator lint.
 
 - If you pass files, it lints those.
-- If you pass none, it scans the project and lints discovered “module/testbench” files.
+- If you pass none, it scans the project and lints discovered "module/testbench" files.
 
 Example:
 
 ```bash
-gateflow lint src/src/counter.sv
+gateflow lint src/counter.sv
 gateflow lint
 ```
 
@@ -129,19 +150,19 @@ Run an iterative lint-fix loop on a single file:
 - show a diff preview
 - require approval unless `--yes`
 - re-lint and repeat up to a limit
-- detects “thrashing” and stops if the same errors keep reappearing
+- detects "thrashing" and stops if the same errors keep reappearing
 
 Example:
 
 ```bash
-gateflow fix src/src/counter.sv
-gateflow --yes fix src/src/counter.sv
-gateflow --dry-run fix src/src/counter.sv
+gateflow fix src/counter.sv
+gateflow --yes fix src/counter.sv
+gateflow --dry-run fix src/counter.sv
 ```
 
 ### `gateflow watch [patterns...]`
 
-Watch files and re-run lint on changes (Ctrl+C to stop). If you pass patterns, they’re used; otherwise it uses its defaults.
+Watch files and re-run lint on changes (Ctrl+C to stop). If you pass patterns, they're used; otherwise it uses its defaults.
 
 ### `gateflow gen <type> <name>`
 
@@ -151,13 +172,57 @@ Generate new SystemVerilog code using natural language prompts:
 - `testbench`
 - `package`
 
+Options:
+- **`-o, --output <path>`**: specify output file path
+
 Examples:
 
 ```bash
 gateflow gen module uart_rx
 gateflow gen testbench counter
 gateflow gen package common
+gateflow gen module fifo -o src/rtl/fifo.sv
 ```
+
+### `gateflow wave <vcd-file>`
+
+Open an interactive terminal-based waveform viewer for VCD files.
+
+Features:
+- Signal hierarchy browser
+- Time-based navigation
+- Multiple value formats (hex, binary, decimal)
+- Keyboard-driven interface
+
+Example:
+
+```bash
+gateflow wave sim/output.vcd
+```
+
+Press `q` to quit the viewer.
+
+### `gateflow wave-web <vcd-file>`
+
+Open a browser-based waveform viewer with a graphical interface.
+
+Options:
+- **`-p, --port <port>`**: server port (default: 3000)
+
+Example:
+
+```bash
+gateflow wave-web sim/output.vcd
+gateflow wave-web sim/output.vcd -p 8080
+```
+
+Press Ctrl+C to stop the server.
+
+### `gateflow mcp`
+
+Start the MCP (Model Context Protocol) waveform server for Claude Desktop integration.
+
+This enables Claude to analyze and interact with waveform data through the standardized MCP protocol.
 
 ### `gateflow doctor`
 
@@ -218,44 +283,6 @@ GateFlow uses stable exit codes for automation:
 - **6**: timeout
 - **7**: watch error
 
-## Troubleshooting
-
-### “ANTHROPIC_API_KEY not set”
-
-- Put `ANTHROPIC_API_KEY=...` in a `.env` file at the repo root, or export it in your shell.
-- Run `gateflow doctor` to confirm it’s being picked up.
-
-### “Verilator not found”
-
-- Ensure `verilator` is in PATH, or set `VERILATOR_PATH`.
-- On Windows with WSL Verilator:
-  - `VERILATOR_PATH=/usr/bin/verilator`
-
-### “It’s scanning node_modules / dist”
-
-- File scanning uses `glob` with built-in ignore patterns. If you see a case it misses, open an issue with the exact directory layout and command you ran.
-
-### “The prompt hangs / approval input doesn’t work”
-
-- If you’re in `chat` mode and it’s waiting for approval, type `y`, `n`, `a`, or `s` and press Enter.
-- For non-interactive runs, add `--yes`.
-
-## Development
-
-Build:
-
-```bash
-cd cli
-npm run build
-```
-
-Run in dev (TypeScript):
-
-```bash
-cd cli
-npm run dev
-```
-
 ## Multi-Agent Architecture
 
 GateFlow uses a sophisticated multi-agent system that automatically coordinates specialized agents for complex tasks.
@@ -269,6 +296,7 @@ GateFlow uses a sophisticated multi-agent system that automatically coordinates 
 | **Testbench** | Generates verification code | "Write a testbench for counter", stimulus generation |
 | **Debug** | Diagnoses failures | "Why does simulation hang?", root cause analysis |
 | **Refactoring** | Modifies existing code | "Rename signal", "Add parameter" |
+| **Planning** | Plans multi-step tasks | Complex implementations, architectural decisions |
 
 ### Orchestrator
 
@@ -288,34 +316,92 @@ All agent reasoning is visible during execution:
 - Agent transitions for multi-agent tasks
 - Confidence indicators
 
-### Configuration Options
+## Context Management
 
-Create a `.gaterc.json` file in your project root:
+GateFlow implements intelligent context management inspired by Cursor's optimization strategies:
 
-```json
-{
-  "ux": {
-    "showThinking": true,
-    "showThinkingConfidence": false,
-    "showToolCalls": true,
-    "streamTokens": true,
-    "maxHistory": 50
-  },
-  "llm": {
-    "model": "claude-sonnet-4-20250514",
-    "maxTokens": 8192,
-    "temperature": 0
-  }
-}
+- **Tool Description Optimization**: ~46% token reduction through dynamic tool loading
+- **Long Tool Responses as Files**: 30-40% reduction for verification sessions
+- **Terminal Sessions as Files**: 10-20% reduction for command outputs
+- **Memory Manager**: Persistent project context across sessions
+
+## Troubleshooting
+
+### "ANTHROPIC_API_KEY not set"
+
+- Put `ANTHROPIC_API_KEY=...` in a `.env` file at the repo root, or export it in your shell.
+- Run `gateflow doctor` to confirm it's being picked up.
+
+### "Verilator not found"
+
+- Ensure `verilator` is in PATH, or set `VERILATOR_PATH`.
+- On Windows with WSL Verilator:
+  - `VERILATOR_PATH=/usr/bin/verilator`
+
+### "It's scanning node_modules / dist"
+
+- File scanning uses `glob` with built-in ignore patterns. If you see a case it misses, open an issue with the exact directory layout and command you ran.
+
+### "The prompt hangs / approval input doesn't work"
+
+- If you're in `chat` mode and it's waiting for approval, type `y`, `n`, `a`, or `s` and press Enter.
+- For non-interactive runs, add `--yes`.
+
+### "Waveform viewer doesn't open"
+
+- For terminal viewer (`wave`): requires an interactive TTY
+- For web viewer (`wave-web`): check that the port isn't already in use
+- Ensure the VCD file exists and is readable
+
+## Development
+
+Build:
+
+```bash
+cd cli
+npm run build
 ```
 
-## Architecture notes
+Run in dev (TypeScript):
 
-If you want to extend GateFlow (new tools, new renderers, stricter policies), see:
+```bash
+cd cli
+npm run dev
+```
 
-- `cli/docs/ARCHITECTURE.md`
-- `cli/src/agent/README.md` - Agent system overview
-- `cli/src/indexer/README.md` - Project indexing
-- `cli/src/verification/README.md` - Verilator integration
+Run tests:
 
+```bash
+cd cli
+npm test
+```
 
+## Architecture
+
+GateFlow is organized into the following modules:
+
+| Module | Description |
+|--------|-------------|
+| `agent/` | Multi-agent system (orchestrator, workers, prompts, reasoning) |
+| `approval/` | Policy engine and approval workflow |
+| `cli/` | Command definitions and main entry point |
+| `config/` | Configuration management |
+| `context/` | Dynamic context discovery (tool registry, file manager, terminal sessions) |
+| `diff/` | Diff engine and preview rendering |
+| `error/` | Error handling and recovery |
+| `events/` | Event bus for inter-module communication |
+| `fileops/` | File operations (read, write, edit, catalog) |
+| `indexer/` | SystemVerilog project indexing and parsing |
+| `mcp/` | Model Context Protocol integration |
+| `memory/` | Persistent project memory |
+| `skills/` | Extensible skill system |
+| `types/` | Shared type definitions |
+| `ui/` | Terminal rendering |
+| `verification/` | Verilator integration and fix loop |
+| `watch/` | File watching |
+| `waveform/` | VCD parsing, terminal viewer, web viewer, MCP server |
+
+For more details, see:
+
+- `cli/docs/ARCHITECTURE.md` - System architecture
+- `cli/docs/AGENTS.md` - Agent system design
