@@ -79,6 +79,15 @@ export class TerminalSessionManager {
     }
 
     /**
+     * Get the file path for a session (for direct grep access)
+     * Returns undefined if session doesn't exist
+     */
+    getSessionFilePath(sessionId: string): string | undefined {
+        const session = this.sessions.get(sessionId);
+        return session?.filePath;
+    }
+
+    /**
      * Append output to a terminal session
      * Called during command execution to stream output
      */

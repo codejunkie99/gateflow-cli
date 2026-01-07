@@ -60,6 +60,10 @@ export interface MemoryConfig {
     maxHistory: number;
     /** Lock timeout in ms */
     lockTimeout: number;
+    /** Threshold for archiving messages (message count) */
+    archiveThreshold: number;
+    /** Number of recent messages to keep after archiving */
+    keepRecentMessages: number;
 }
 
 // ============================================================================
@@ -89,7 +93,9 @@ export class MemoryManager {
         this.config = {
             memoryDir: config?.memoryDir ?? path.join(os.homedir(), '.gateflow'),
             maxHistory: config?.maxHistory ?? 50,
-            lockTimeout: config?.lockTimeout ?? 5000
+            lockTimeout: config?.lockTimeout ?? 5000,
+            archiveThreshold: config?.archiveThreshold ?? 10,
+            keepRecentMessages: config?.keepRecentMessages ?? 4
         };
 
         this.memoryPath = path.join(this.config.memoryDir, `${this.projectId}.json`);
@@ -492,6 +498,121 @@ export class MemoryManager {
         });
 
         return result;
+    }
+
+    /**
+     * Trigger summarization when context window is filling up
+     * Implements Cursor's "give the agent a reference to the history file" pattern
+     *
+     * @param sessionId Current session ID
+     * @param messages All messages in the current conversation
+     * @param threshold Number of messages that triggers archiving (default from config)
+     * @param keepRecent Number of recent messages to keep (default from config)
+     * @returns SummarizationResult with history reference if triggered
+     */
+    async triggerSummarization(
+        sessionId: string,
+        messages: Array<{ role: string; content: string }>,
+        threshold?: number,
+        keepRecent?: number
+    ): Promise<{
+        triggered: boolean;
+        historyRef?: {
+            filePath: string;
+            sessionId: string;
+            summary: string;
+            messageCount: number;
+            turnRange: { start: number; end: number };
+            timestamp: number;
+            agentInstructions: string;
+        };
+        remainingMessages: Array<{ role: string; content: string }>;
+        summary: string;
+    }> {
+        const archiveThreshold = threshold ?? this.config.archiveThreshold;
+        const keepRecentCount = keepRecent ?? this.config.keepRecentMessages;
+
+        // Check if we need to archive
+        if (messages.length < archiveThreshold) {
+            return {
+                triggered: false,
+                remainingMessages: messages,
+                summary: ''
+            };
+        }
+
+        // Calculate how many messages to archive
+        const messagesToArchive = messages.slice(0, messages.length - keepRecentCount);
+        const remainingMessages = messages.slice(-keepRecentCount);
+
+        // Generate a summary of what we're archiving
+        const summary = this.generateArchiveSummary(messagesToArchive);
+
+        // Archive the messages
+        const archiveResult = await this.archiveConversation(
+            sessionId,
+            messagesToArchive,
+            summary
+        );
+
+        // Create the history reference for the agent
+        const historyRef = {
+            filePath: archiveResult.filePath,
+            sessionId: archiveResult.sessionId,
+            summary: archiveResult.summary,
+            messageCount: messagesToArchive.length,
+            turnRange: archiveResult.turnRange,
+            timestamp: archiveResult.timestamp,
+            agentInstructions: `Your conversation history has been archived to save context space.
+Archive file: ${archiveResult.filePath}
+Archived messages: ${messagesToArchive.length} (turns ${archiveResult.turnRange.start}-${archiveResult.turnRange.end})
+Summary: ${summary}
+
+If you need details from the archived conversation, use the search_history tool:
+  search_history({ query: "what you're looking for" })
+
+You can also grep the archive file directly:
+  grep "pattern" ${archiveResult.filePath}`
+        };
+
+        this.bus.emit({
+            type: 'status',
+            phase: 'tool',
+            label: `Context summarized: archived ${messagesToArchive.length} messages, keeping ${remainingMessages.length} recent`
+        });
+
+        return {
+            triggered: true,
+            historyRef,
+            remainingMessages,
+            summary
+        };
+    }
+
+    /**
+     * Generate a brief summary of messages being archived
+     */
+    private generateArchiveSummary(messages: Array<{ role: string; content: string }>): string {
+        // Extract key topics from the conversation
+        const topics: string[] = [];
+
+        for (const msg of messages) {
+            if (msg.role === 'user') {
+                // Extract first sentence or line as topic hint
+                const firstLine = msg.content.split(/[.\n]/)[0].trim();
+                if (firstLine.length > 10 && firstLine.length < 100) {
+                    topics.push(firstLine);
+                }
+            }
+        }
+
+        if (topics.length === 0) {
+            return `Conversation with ${messages.length} messages`;
+        }
+
+        // Take first 3 topics
+        const topicSummary = topics.slice(0, 3).join('; ');
+        return `Topics discussed: ${topicSummary}`;
     }
 
     /**

@@ -12,6 +12,8 @@ import type { DiffEngine } from '../diff/index.js';
 import type { Verilator } from '../verification/verilator.js';
 import type { ToolRegistry, ContextFileManager, TerminalSessionManager } from '../context/index.js';
 import type { MemoryManager } from '../memory/manager.js';
+import type { SkillRegistry } from '../skills/index.js';
+import type { MCPToolSync } from '../mcp/index.js';
 
 // ============================================================================
 // Tool Context
@@ -34,6 +36,9 @@ export interface ToolContext {
     terminalSessionManager?: TerminalSessionManager;
     memoryManager?: MemoryManager;
     sessionId?: string;
+    // Skills and MCP integration
+    skillRegistry?: SkillRegistry;
+    mcpToolSync?: MCPToolSync;
 }
 
 // ============================================================================
@@ -169,6 +174,38 @@ export const searchHistorySchema = z.object({
 export const searchTerminalSchema = z.object({
     pattern: z.string().describe('Regex pattern to search for'),
     context: z.number().optional().default(2).describe('Lines of context around matches (default: 2)')
+});
+
+// Get Terminal File Path - Get path to terminal session file for grep access
+export const getTerminalFilePathSchema = z.object({});
+
+// Search Skills - Search skill files for relevant capabilities
+export const searchSkillsSchema = z.object({
+    query: z.string().describe('What capability or task to search for'),
+    maxResults: z.number().optional().default(5).describe('Maximum number of results (default: 5)')
+});
+
+// Get Skill - Get full skill definition by name
+export const getSkillSchema = z.object({
+    name: z.string().describe('Name of the skill to retrieve')
+});
+
+// Run Skill Script - Execute a bundled script from a skill
+export const runSkillScriptSchema = z.object({
+    skillName: z.string().describe('Name of the skill'),
+    scriptPath: z.string().describe('Path to the script within the skill'),
+    env: z.record(z.string()).optional().describe('Additional environment variables')
+});
+
+// Check MCP Status - Check status of MCP servers and tools
+export const checkMcpStatusSchema = z.object({
+    serverName: z.string().optional().describe('Specific server to check (default: all servers)')
+});
+
+// Get MCP Tool - Get full definition of an MCP tool
+export const getMcpToolSchema = z.object({
+    serverName: z.string().describe('Name of the MCP server'),
+    toolName: z.string().describe('Name of the tool')
 });
 
 // ============================================================================
@@ -432,16 +469,21 @@ export function createToolExecutors(ctx: ToolContext) {
                 ].join('\n');
 
                 const ref = await ctx.contextFileManager.writeOutput('lint_file', ctx.sessionId, fullOutput);
-                const summary = await ctx.contextFileManager.getSummary(ref);
 
+                // Unix-like pattern: return file path only, agent uses tail/head/grep
                 return {
                     success: result.success,
                     errorCount: result.errors.length,
                     warningCount: result.warnings.length,
-                    errors: result.errors.slice(0, 10),  // First 10 inline
-                    warnings: result.warnings.slice(0, 5), // First 5 inline
-                    contextFile: ref.path,
-                    note: `Full details (${totalIssues} issues) stored in context file. Use read_context_output to view more.`
+                    outputFile: ref.path,
+                    outputSize: `${ref.lineCount} lines (${(ref.size / 1024).toFixed(1)} KB)`,
+                    hint: `Use tail to check the end: tail -50 "${ref.path}"`,
+                    commands: {
+                        tail: `tail -50 "${ref.path}"`,
+                        head: `head -50 "${ref.path}"`,
+                        grep: `grep -n "ERROR\\|error" "${ref.path}"`,
+                        all: `cat "${ref.path}"`
+                    }
                 };
             }
 
@@ -564,20 +606,23 @@ export function createToolExecutors(ctx: ToolContext) {
                 ].filter(Boolean).join('\n');
 
                 const ref = await ctx.contextFileManager.writeOutput('run_simulation', ctx.sessionId, fullOutput);
-                const summary = await ctx.contextFileManager.getSummary(ref);
 
-                // Return summary with context file reference
+                // Unix-like pattern: return file path only, agent uses tail/head/grep
                 return {
                     success: result.success,
                     exitCode: result.exitCode,
                     vcdPath: result.vcdPath,
                     waveformAnalysis,
-                    // Provide first/last lines inline
-                    stdoutPreview: result.stdout.slice(0, 500),
-                    stderrPreview: result.stderr.slice(0, 500),
-                    contextFile: ref.path,
-                    outputSize: `${(totalOutputSize / 1024).toFixed(1)} KB`,
-                    note: `Full output stored in context file. Use read_context_output to view more.`
+                    outputFile: ref.path,
+                    outputSize: `${ref.lineCount} lines (${(ref.size / 1024).toFixed(1)} KB)`,
+                    hint: `Use tail to check the end: tail -50 "${ref.path}"`,
+                    commands: {
+                        tail: `tail -50 "${ref.path}"`,
+                        head: `head -50 "${ref.path}"`,
+                        grepError: `grep -n "error\\|Error\\|ERROR" "${ref.path}"`,
+                        grepFail: `grep -n "fail\\|FAIL\\|assert" "${ref.path}"`,
+                        all: `cat "${ref.path}"`
+                    }
                 };
             }
 
@@ -1109,6 +1154,217 @@ export function createToolExecutors(ctx: ToolContext) {
             } catch (err) {
                 return { error: `Failed to search terminal output: ${err}` };
             }
+        },
+
+        // Get terminal file path for direct grep access
+        get_terminal_file_path: async (_args: z.infer<typeof getTerminalFilePathSchema>) => {
+            if (!ctx.terminalSessionManager || !ctx.sessionId) {
+                return { error: 'Terminal session manager not configured' };
+            }
+
+            const filePath = ctx.terminalSessionManager.getSessionFilePath?.(ctx.sessionId);
+            if (!filePath) {
+                return {
+                    error: 'Terminal session file not available',
+                    note: 'Use search_terminal tool instead'
+                };
+            }
+
+            return {
+                filePath,
+                sessionId: ctx.sessionId,
+                note: 'You can use grep directly on this file: grep "pattern" ' + filePath
+            };
+        },
+
+        // Search skills by capability/task
+        search_skills: async (args: z.infer<typeof searchSkillsSchema>) => {
+            if (!ctx.skillRegistry) {
+                return { error: 'Skill registry not configured' };
+            }
+
+            try {
+                const matches = ctx.skillRegistry.matchSkills(args.query, args.maxResults);
+
+                if (matches.length === 0) {
+                    return {
+                        count: 0,
+                        message: `No skills found matching: ${args.query}`,
+                        skillsDir: ctx.skillRegistry.getSkillsDir(),
+                        note: 'You can also grep the skills directory directly'
+                    };
+                }
+
+                return {
+                    count: matches.length,
+                    query: args.query,
+                    skillsDir: ctx.skillRegistry.getSkillsDir(),
+                    matches: matches.map(m => ({
+                        name: m.skill.name,
+                        description: m.skill.description,
+                        relevance: (m.relevance * 100).toFixed(0) + '%',
+                        matchedTrigger: m.matchedTrigger,
+                        filePath: m.filePath
+                    }))
+                };
+            } catch (err) {
+                return { error: `Failed to search skills: ${err}` };
+            }
+        },
+
+        // Get full skill definition
+        get_skill: async (args: z.infer<typeof getSkillSchema>) => {
+            if (!ctx.skillRegistry) {
+                return { error: 'Skill registry not configured' };
+            }
+
+            const skill = ctx.skillRegistry.getSkill(args.name);
+            if (!skill) {
+                return {
+                    error: `Skill not found: ${args.name}`,
+                    availableSkills: ctx.skillRegistry.getSkillNames()
+                };
+            }
+
+            const ref = ctx.skillRegistry.getSkillRef(args.name);
+            return {
+                skill,
+                filePath: ref?.filePath,
+                formatted: ctx.skillRegistry.formatSkillForAgent(skill)
+            };
+        },
+
+        // Execute a bundled skill script
+        run_skill_script: async (args: z.infer<typeof runSkillScriptSchema>) => {
+            if (!ctx.skillRegistry) {
+                return { error: 'Skill registry not configured' };
+            }
+
+            // Check skill exists
+            const skill = ctx.skillRegistry.getSkill(args.skillName);
+            if (!skill) {
+                return { error: `Skill not found: ${args.skillName}` };
+            }
+
+            // Check script is in skill's executables list
+            const executables = skill.executables ?? [];
+            if (!executables.includes(args.scriptPath)) {
+                return {
+                    error: `Script not found in skill: ${args.scriptPath}`,
+                    availableScripts: executables
+                };
+            }
+
+            try {
+                const result = await ctx.skillRegistry.executeScript(
+                    args.skillName,
+                    args.scriptPath,
+                    {
+                        sessionId: ctx.sessionId ?? 'unknown',
+                        projectRoot: ctx.projectRoot,
+                        query: '',
+                        env: args.env
+                    }
+                );
+
+                return {
+                    success: result.success,
+                    exitCode: result.exitCode,
+                    stdout: result.stdout,
+                    stderr: result.stderr,
+                    duration: `${result.duration}ms`
+                };
+            } catch (err) {
+                return { error: `Failed to execute skill script: ${err}` };
+            }
+        },
+
+        // Check MCP server and tool status
+        check_mcp_status: async (args: z.infer<typeof checkMcpStatusSchema>) => {
+            if (!ctx.mcpToolSync) {
+                return {
+                    error: 'MCP tool sync not configured',
+                    note: 'No MCP servers are connected'
+                };
+            }
+
+            if (args.serverName) {
+                // Check specific server
+                const servers = ctx.mcpToolSync.getAllServers();
+                const server = servers.find(s => s.name === args.serverName);
+
+                if (!server) {
+                    return {
+                        error: `Server not found: ${args.serverName}`,
+                        availableServers: servers.map(s => s.name)
+                    };
+                }
+
+                const tools = ctx.mcpToolSync.getServerTools(args.serverName);
+
+                return {
+                    server: {
+                        name: server.name,
+                        status: server.status,
+                        error: server.error,
+                        toolCount: server.toolCount,
+                        lastSync: server.lastSync ? new Date(server.lastSync).toISOString() : null
+                    },
+                    tools: tools.map(t => t.name),
+                    needsAuth: server.status === 'needs_auth',
+                    authMessage: server.status === 'needs_auth'
+                        ? `Server ${server.name} requires re-authentication. Please ask the user to re-authenticate.`
+                        : null
+                };
+            }
+
+            // Return summary of all servers
+            const summary = ctx.mcpToolSync.getSummary();
+
+            return {
+                serverCount: summary.serverCount,
+                availableServers: summary.availableServers,
+                serversNeedingAuth: summary.serversNeedingAuth,
+                totalTools: summary.totalTools,
+                toolsByServer: summary.toolsByServer,
+                toolsDir: summary.toolsDir,
+                formatted: ctx.mcpToolSync.formatSummaryForAgent()
+            };
+        },
+
+        // Get full MCP tool definition
+        get_mcp_tool: async (args: z.infer<typeof getMcpToolSchema>) => {
+            if (!ctx.mcpToolSync) {
+                return { error: 'MCP tool sync not configured' };
+            }
+
+            // Check availability first
+            const availability = ctx.mcpToolSync.isToolAvailable(args.serverName, args.toolName);
+            if (!availability.available) {
+                return {
+                    error: `Tool not available: ${availability.reason}`,
+                    serverName: args.serverName,
+                    toolName: args.toolName
+                };
+            }
+
+            const tool = ctx.mcpToolSync.getTool(args.serverName, args.toolName);
+            if (!tool) {
+                return { error: `Tool not found: ${args.toolName} on server ${args.serverName}` };
+            }
+
+            return {
+                tool: {
+                    name: tool.name,
+                    description: tool.description,
+                    server: tool.server,
+                    status: tool.status,
+                    inputSchema: tool.inputSchema,
+                    examples: tool.examples,
+                    tags: tool.tags
+                },
+                available: true
+            };
         }
     };
 }

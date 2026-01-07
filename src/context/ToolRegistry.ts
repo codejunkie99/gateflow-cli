@@ -230,6 +230,65 @@ export class ToolRegistry {
             ]
         });
 
+        this.register({
+            name: 'get_terminal_file_path',
+            description: 'Get the file path of the terminal session log. Use this to grep the terminal output directly.',
+            category: 'context',
+            parameters: []
+        });
+
+        // Skill Operations
+        this.register({
+            name: 'search_skills',
+            description: 'Search for relevant skills by capability or task. Skills are file-based definitions that guide specialized tasks.',
+            category: 'skills',
+            parameters: [
+                { name: 'query', type: 'string', description: 'What capability or task to search for', required: true },
+                { name: 'maxResults', type: 'number', description: 'Maximum number of results', required: false, default: 5 }
+            ],
+            example: 'search_skills({ query: "fix lint errors" })'
+        });
+
+        this.register({
+            name: 'get_skill',
+            description: 'Get the full definition of a skill by name. Returns instructions, triggers, and bundled scripts.',
+            category: 'skills',
+            parameters: [
+                { name: 'name', type: 'string', description: 'Name of the skill to retrieve', required: true }
+            ]
+        });
+
+        this.register({
+            name: 'run_skill_script',
+            description: 'Execute a bundled script from a skill. Scripts are defined in the skill file.',
+            category: 'skills',
+            parameters: [
+                { name: 'skillName', type: 'string', description: 'Name of the skill', required: true },
+                { name: 'scriptPath', type: 'string', description: 'Path to the script within the skill', required: true },
+                { name: 'env', type: 'object', description: 'Additional environment variables', required: false }
+            ]
+        });
+
+        // MCP Operations
+        this.register({
+            name: 'check_mcp_status',
+            description: 'Check the status of MCP servers and their tools. Shows which servers need re-authentication.',
+            category: 'mcp',
+            parameters: [
+                { name: 'serverName', type: 'string', description: 'Specific server to check (default: all servers)', required: false }
+            ]
+        });
+
+        this.register({
+            name: 'get_mcp_tool',
+            description: 'Get the full definition of an MCP tool including its input schema.',
+            category: 'mcp',
+            parameters: [
+                { name: 'serverName', type: 'string', description: 'Name of the MCP server', required: true },
+                { name: 'toolName', type: 'string', description: 'Name of the tool', required: true }
+            ]
+        });
+
         this.initialized = true;
     }
 
