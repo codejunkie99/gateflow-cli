@@ -49,13 +49,34 @@ export function getMinimalToolSection(enableOptimization: boolean = true): strin
 **Search Operations**: search_code, find_module, find_all_sv_files, get_dependencies
 **Verification**: lint_file, run_simulation
 **Waveform**: analyze_waveform, open_waveform, find_vcd_files
-**Context**: describe_tool, read_context_output, search_terminal, search_history
+**Context Discovery**: describe_tool, read_context_output, search_terminal, search_history, get_terminal_file_path
+**Skills**: search_skills, get_skill, run_skill_script
+**MCP Tools**: check_mcp_status, get_mcp_tool
 **Interaction**: ask_user
 
 To learn about any tool's parameters and usage, call: describe_tool({ toolName: "tool_name" })
 
-For large tool outputs (lint errors, simulation logs), the response may include a context file reference.
-Use read_context_output to read portions: head (first N lines), tail (last N lines), or line range.
+## Dynamic Context Discovery
+
+**Large Outputs**: For large tool outputs (lint errors, simulation logs), the response includes:
+- outputFile: Path to the full output file
+- commands: Ready-to-use shell commands (tail, head, grep)
+
+When you receive a large output:
+1. First use \`tail -50 "path"\` to check the end (often contains the summary/result)
+2. Use \`grep -n "error\\|ERROR" "path"\` to find specific issues
+3. Use \`head -50 "path"\` or line ranges if you need earlier content
+4. Only read the full file if absolutely necessary
+
+**Terminal History**: Use get_terminal_file_path to get the terminal log file, then grep it directly.
+
+**Skills**: Skills are file-based capabilities in .gateflow/skills/. Use search_skills to find relevant skills,
+or grep the skills directory directly. Skills may include bundled scripts you can run with run_skill_script.
+
+**MCP Tools**: External tools from MCP servers. Use check_mcp_status to see available servers and their auth status.
+If a server needs re-authentication, inform the user. MCP tool definitions are synced to .gateflow/mcp-tools/.
+
+**History**: If context was summarized, use search_history to recover archived details, or grep the archive file.
 `;
 }
 
