@@ -9,6 +9,7 @@ import crypto from 'crypto';
 import os from 'os';
 import type { EventBus } from '../events/index.js';
 import type { ApprovalGrant } from '../approval/index.js';
+import type { ChatHistoryFile, RelevantMessage } from '../context/types.js';
 
 // ============================================================================
 // Types
@@ -433,6 +434,265 @@ export class MemoryManager {
      */
     getProjectId(): string {
         return this.projectId;
+    }
+
+    // ========================================================================
+    // Chat History Archiving (Dynamic Context Discovery - Phase 3)
+    // ========================================================================
+
+    /**
+     * Get the history archive directory for this project
+     */
+    private getArchiveDir(): string {
+        return path.join(this.config.memoryDir, 'archives', this.projectId);
+    }
+
+    /**
+     * Archive a conversation's messages to a file
+     * Called when context window needs trimming
+     */
+    async archiveConversation(
+        sessionId: string,
+        messages: Array<{ role: string; content: string }>,
+        summary: string
+    ): Promise<ChatHistoryFile> {
+        const archiveDir = this.getArchiveDir();
+        await fs.mkdir(archiveDir, { recursive: true });
+
+        const timestamp = Date.now();
+        const filename = `${sessionId}-${timestamp}.json`;
+        const filePath = path.join(archiveDir, filename);
+
+        const archiveData = {
+            sessionId,
+            timestamp,
+            summary,
+            messageCount: messages.length,
+            messages: messages.map((m, i) => ({
+                turn: Math.floor(i / 2),
+                role: m.role,
+                content: m.content
+            }))
+        };
+
+        await fs.writeFile(filePath, JSON.stringify(archiveData, null, 2), 'utf-8');
+
+        const result: ChatHistoryFile = {
+            sessionId,
+            turnRange: { start: 0, end: Math.floor(messages.length / 2) },
+            summary,
+            filePath,
+            timestamp
+        };
+
+        this.bus.emit({
+            type: 'status',
+            phase: 'tool',
+            label: `Archived ${messages.length} messages to ${filename}`
+        });
+
+        return result;
+    }
+
+    /**
+     * Search archived history for a query
+     * Returns relevant messages matching the search query
+     */
+    async queryArchivedHistory(
+        sessionId: string | null,
+        query: string
+    ): Promise<RelevantMessage[]> {
+        const archiveDir = this.getArchiveDir();
+        const results: RelevantMessage[] = [];
+
+        try {
+            const files = await fs.readdir(archiveDir);
+            const queryLower = query.toLowerCase();
+
+            for (const file of files) {
+                // Filter by session if specified
+                if (sessionId && !file.startsWith(sessionId)) {
+                    continue;
+                }
+
+                if (!file.endsWith('.json')) continue;
+
+                try {
+                    const content = await fs.readFile(
+                        path.join(archiveDir, file),
+                        'utf-8'
+                    );
+                    const archive = JSON.parse(content);
+
+                    // Search through messages
+                    for (const msg of archive.messages) {
+                        const contentLower = msg.content.toLowerCase();
+                        if (contentLower.includes(queryLower)) {
+                            // Calculate simple relevance score
+                            const occurrences = (contentLower.match(new RegExp(queryLower, 'g')) || []).length;
+                            const relevance = Math.min(occurrences / 5, 1);
+
+                            results.push({
+                                turnNumber: msg.turn,
+                                role: msg.role as 'user' | 'assistant',
+                                content: this.extractRelevantExcerpt(msg.content, query),
+                                relevance
+                            });
+                        }
+                    }
+                } catch {
+                    // Skip files that can't be read or parsed
+                }
+            }
+
+            // Sort by relevance and limit
+            return results
+                .sort((a, b) => b.relevance - a.relevance)
+                .slice(0, 20);
+
+        } catch {
+            // Archive directory may not exist yet
+            return [];
+        }
+    }
+
+    /**
+     * Get a specific archived turn
+     */
+    async getArchivedTurn(
+        sessionId: string,
+        turnNumber: number
+    ): Promise<{ role: string; content: string } | null> {
+        const archiveDir = this.getArchiveDir();
+
+        try {
+            const files = await fs.readdir(archiveDir);
+
+            for (const file of files) {
+                if (!file.startsWith(sessionId) || !file.endsWith('.json')) continue;
+
+                const content = await fs.readFile(
+                    path.join(archiveDir, file),
+                    'utf-8'
+                );
+                const archive = JSON.parse(content);
+
+                for (const msg of archive.messages) {
+                    if (msg.turn === turnNumber) {
+                        return {
+                            role: msg.role,
+                            content: msg.content
+                        };
+                    }
+                }
+            }
+        } catch {
+            // Archive not found
+        }
+
+        return null;
+    }
+
+    /**
+     * List all archived sessions
+     */
+    async listArchivedSessions(): Promise<Array<{
+        sessionId: string;
+        timestamp: number;
+        summary: string;
+        messageCount: number;
+    }>> {
+        const archiveDir = this.getArchiveDir();
+        const sessions: Array<{
+            sessionId: string;
+            timestamp: number;
+            summary: string;
+            messageCount: number;
+        }> = [];
+
+        try {
+            const files = await fs.readdir(archiveDir);
+
+            for (const file of files) {
+                if (!file.endsWith('.json')) continue;
+
+                try {
+                    const content = await fs.readFile(
+                        path.join(archiveDir, file),
+                        'utf-8'
+                    );
+                    const archive = JSON.parse(content);
+                    sessions.push({
+                        sessionId: archive.sessionId,
+                        timestamp: archive.timestamp,
+                        summary: archive.summary,
+                        messageCount: archive.messageCount
+                    });
+                } catch {
+                    // Skip unreadable files
+                }
+            }
+
+            return sessions.sort((a, b) => b.timestamp - a.timestamp);
+        } catch {
+            return [];
+        }
+    }
+
+    /**
+     * Clean up old archives (beyond max age)
+     */
+    async cleanupArchives(maxAgeMs: number = 7 * 24 * 60 * 60 * 1000): Promise<number> {
+        const archiveDir = this.getArchiveDir();
+        const now = Date.now();
+        let cleaned = 0;
+
+        try {
+            const files = await fs.readdir(archiveDir);
+
+            for (const file of files) {
+                if (!file.endsWith('.json')) continue;
+
+                const filePath = path.join(archiveDir, file);
+                try {
+                    const stats = await fs.stat(filePath);
+                    if (now - stats.mtimeMs > maxAgeMs) {
+                        await fs.unlink(filePath);
+                        cleaned++;
+                    }
+                } catch {
+                    // Skip files we can't stat/delete
+                }
+            }
+        } catch {
+            // Archive directory may not exist
+        }
+
+        return cleaned;
+    }
+
+    /**
+     * Extract a relevant excerpt around the query match
+     */
+    private extractRelevantExcerpt(content: string, query: string): string {
+        const maxLength = 300;
+        const queryLower = query.toLowerCase();
+        const contentLower = content.toLowerCase();
+
+        const matchIndex = contentLower.indexOf(queryLower);
+        if (matchIndex === -1) {
+            return content.slice(0, maxLength) + (content.length > maxLength ? '...' : '');
+        }
+
+        // Extract context around the match
+        const start = Math.max(0, matchIndex - 100);
+        const end = Math.min(content.length, matchIndex + query.length + 100);
+
+        let excerpt = content.slice(start, end);
+        if (start > 0) excerpt = '...' + excerpt;
+        if (end < content.length) excerpt = excerpt + '...';
+
+        return excerpt;
     }
 }
 

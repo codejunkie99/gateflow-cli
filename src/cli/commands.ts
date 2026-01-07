@@ -18,6 +18,15 @@ import { Verilator } from '../verification/index.js';
 import { FixLoop } from '../verification/fix-loop.js';
 import { WatchManager } from '../watch/index.js';
 import { TerminalRenderer, createRenderer } from '../ui/index.js';
+import {
+    getToolRegistry,
+    getContextFileManager,
+    getTerminalSessionManager,
+    type ToolRegistry,
+    type ContextFileManager,
+    type TerminalSessionManager
+} from '../context/index.js';
+import { MemoryManager } from '../memory/manager.js';
 
 // ============================================================================
 // Types
@@ -41,6 +50,12 @@ export interface CommandContext {
     renderer: TerminalRenderer;
     options: GlobalOptions;
     projectRoot: string;
+    // Dynamic context discovery managers
+    toolRegistry: ToolRegistry;
+    contextFileManager: ContextFileManager;
+    terminalSessionManager: TerminalSessionManager;
+    memoryManager: MemoryManager;
+    sessionId: string;
 }
 
 // ============================================================================
@@ -101,6 +116,21 @@ export async function setupContext(options: GlobalOptions): Promise<CommandConte
     const verilatorPath = process.env.VERILATOR_PATH;
     const verilator = new Verilator(bus, verilatorPath ? { binary: verilatorPath } : undefined);
 
+    // Dynamic context discovery managers
+    const toolRegistry = getToolRegistry();
+    const contextFileManager = getContextFileManager();
+    const terminalSessionManager = getTerminalSessionManager();
+
+    // Initialize context file manager
+    await contextFileManager.initialize();
+
+    // Memory manager for persistent context and history archiving
+    const memoryManager = new MemoryManager(projectRoot, bus);
+    await memoryManager.load();
+
+    // Generate unique session ID
+    const sessionId = `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
     return {
         bus,
         policy,
@@ -110,7 +140,12 @@ export async function setupContext(options: GlobalOptions): Promise<CommandConte
         verilator,
         renderer,
         options,
-        projectRoot
+        projectRoot,
+        toolRegistry,
+        contextFileManager,
+        terminalSessionManager,
+        memoryManager,
+        sessionId
     };
 }
 
@@ -128,7 +163,13 @@ function buildToolContext(ctx: CommandContext): ToolContext {
         verilator: ctx.verilator,
         projectRoot: ctx.projectRoot,
         dryRun: ctx.options.dryRun,
-        autoApprove: ctx.options.yes
+        autoApprove: ctx.options.yes,
+        // Dynamic context discovery
+        toolRegistry: ctx.toolRegistry,
+        contextFileManager: ctx.contextFileManager,
+        terminalSessionManager: ctx.terminalSessionManager,
+        memoryManager: ctx.memoryManager,
+        sessionId: ctx.sessionId
     };
 }
 

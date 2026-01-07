@@ -10,6 +10,8 @@ import type { FileTools, EditTools } from '../fileops/index.js';
 import type { ProjectIndexer } from '../indexer/index.js';
 import type { DiffEngine } from '../diff/index.js';
 import type { Verilator } from '../verification/verilator.js';
+import type { ToolRegistry, ContextFileManager, TerminalSessionManager } from '../context/index.js';
+import type { MemoryManager } from '../memory/manager.js';
 
 // ============================================================================
 // Tool Context
@@ -26,6 +28,12 @@ export interface ToolContext {
     projectRoot: string;
     dryRun: boolean;
     autoApprove: boolean;
+    // Dynamic context discovery (optional for backwards compatibility)
+    toolRegistry?: ToolRegistry;
+    contextFileManager?: ContextFileManager;
+    terminalSessionManager?: TerminalSessionManager;
+    memoryManager?: MemoryManager;
+    sessionId?: string;
 }
 
 // ============================================================================
@@ -131,6 +139,36 @@ export const askUserSchema = z.object({
 export const findVcdFilesSchema = z.object({
     directory: z.string().optional().default('.').describe('Starting directory (default: project root)'),
     pattern: z.string().optional().describe('Optional filename pattern to match (e.g., "counter" matches "counter.vcd")')
+});
+
+// ============================================================================
+// Dynamic Context Discovery Tools (Schemas)
+// ============================================================================
+
+// Describe Tool - Get full description of any tool
+export const describeToolSchema = z.object({
+    toolName: z.string().describe('Name of the tool to describe')
+});
+
+// Read Context Output - Read portions of stored tool output
+export const readContextOutputSchema = z.object({
+    ref: z.string().describe('Context file path from tool result'),
+    head: z.number().optional().describe('Read first N lines'),
+    tail: z.number().optional().describe('Read last N lines'),
+    startLine: z.number().optional().describe('Start line for range read (1-indexed)'),
+    endLine: z.number().optional().describe('End line for range read (inclusive)')
+});
+
+// Search History - Search archived conversation history
+export const searchHistorySchema = z.object({
+    query: z.string().describe('What to search for in conversation history'),
+    sessionOnly: z.boolean().optional().default(true).describe('Search only current session (default: true)')
+});
+
+// Search Terminal - Search terminal output for patterns
+export const searchTerminalSchema = z.object({
+    pattern: z.string().describe('Regex pattern to search for'),
+    context: z.number().optional().default(2).describe('Lines of context around matches (default: 2)')
 });
 
 // ============================================================================
@@ -357,6 +395,19 @@ export function createToolExecutors(ctx: ToolContext) {
 
             const result = await ctx.verilator.lint(args.path);
 
+            // Log to terminal session if available
+            if (ctx.terminalSessionManager && ctx.sessionId) {
+                const logOutput = [
+                    `Lint: ${args.path}`,
+                    `Result: ${result.success ? 'PASS' : 'FAIL'}`,
+                    `Errors: ${result.errors.length}, Warnings: ${result.warnings.length}`,
+                    ...result.errors.map(e => `  ERROR: ${e.file}:${e.line} - ${e.message}`),
+                    ...result.warnings.slice(0, 10).map(w => `  WARN: ${w.file}:${w.line} - ${w.message}`)
+                ].join('\n');
+                await ctx.terminalSessionManager.appendCommand(ctx.sessionId, `lint ${args.path}`, 'lint_file');
+                await ctx.terminalSessionManager.appendOutput(ctx.sessionId, logOutput + '\n');
+            }
+
             ctx.bus.emit({
                 type: 'tool_result',
                 tool: 'lint_file',
@@ -365,6 +416,34 @@ export function createToolExecutors(ctx: ToolContext) {
                     ? `No errors (${result.warnings.length} warnings)`
                     : `${result.errors.length} errors, ${result.warnings.length} warnings`
             });
+
+            // If many errors/warnings, store details in context file
+            const totalIssues = result.errors.length + result.warnings.length;
+            if (totalIssues > 20 && ctx.contextFileManager && ctx.sessionId) {
+                const fullOutput = [
+                    `=== Lint Results for ${args.path} ===`,
+                    `Success: ${result.success}`,
+                    ``,
+                    `=== ERRORS (${result.errors.length}) ===`,
+                    ...result.errors.map(e => `${e.file}:${e.line}:${e.column || 0}: ${e.code} - ${e.message}`),
+                    ``,
+                    `=== WARNINGS (${result.warnings.length}) ===`,
+                    ...result.warnings.map(w => `${w.file}:${w.line}:${w.column || 0}: ${w.code} - ${w.message}`)
+                ].join('\n');
+
+                const ref = await ctx.contextFileManager.writeOutput('lint_file', ctx.sessionId, fullOutput);
+                const summary = await ctx.contextFileManager.getSummary(ref);
+
+                return {
+                    success: result.success,
+                    errorCount: result.errors.length,
+                    warningCount: result.warnings.length,
+                    errors: result.errors.slice(0, 10),  // First 10 inline
+                    warnings: result.warnings.slice(0, 5), // First 5 inline
+                    contextFile: ref.path,
+                    note: `Full details (${totalIssues} issues) stored in context file. Use read_context_output to view more.`
+                };
+            }
 
             return {
                 success: result.success,
@@ -447,6 +526,59 @@ export function createToolExecutors(ctx: ToolContext) {
                         message: String(err)
                     });
                 }
+            }
+
+            // Log to terminal session if available
+            if (ctx.terminalSessionManager && ctx.sessionId) {
+                const logOutput = [
+                    `Simulation: ${args.top}`,
+                    `Result: ${result.success ? 'PASS' : 'FAIL'} (exit code: ${result.exitCode})`,
+                    result.vcdPath ? `VCD: ${result.vcdPath}` : '',
+                    '--- STDOUT ---',
+                    result.stdout.slice(0, 2000),
+                    result.stdout.length > 2000 ? `... (${result.stdout.length} chars total)` : '',
+                    '--- STDERR ---',
+                    result.stderr.slice(0, 2000),
+                    result.stderr.length > 2000 ? `... (${result.stderr.length} chars total)` : ''
+                ].filter(Boolean).join('\n');
+                await ctx.terminalSessionManager.appendCommand(ctx.sessionId, `simulate ${args.top}`, 'run_simulation');
+                await ctx.terminalSessionManager.appendOutput(ctx.sessionId, logOutput + '\n');
+            }
+
+            // Check if output is large enough for context files
+            const totalOutputSize = result.stdout.length + result.stderr.length;
+            const shouldUseContextFile = totalOutputSize > 2048 && ctx.contextFileManager && ctx.sessionId;
+
+            if (shouldUseContextFile && ctx.contextFileManager && ctx.sessionId) {
+                const fullOutput = [
+                    `=== Simulation Results for ${args.top} ===`,
+                    `Success: ${result.success}`,
+                    `Exit Code: ${result.exitCode}`,
+                    result.vcdPath ? `VCD Path: ${result.vcdPath}` : '',
+                    ``,
+                    `=== STDOUT ===`,
+                    result.stdout,
+                    ``,
+                    `=== STDERR ===`,
+                    result.stderr
+                ].filter(Boolean).join('\n');
+
+                const ref = await ctx.contextFileManager.writeOutput('run_simulation', ctx.sessionId, fullOutput);
+                const summary = await ctx.contextFileManager.getSummary(ref);
+
+                // Return summary with context file reference
+                return {
+                    success: result.success,
+                    exitCode: result.exitCode,
+                    vcdPath: result.vcdPath,
+                    waveformAnalysis,
+                    // Provide first/last lines inline
+                    stdoutPreview: result.stdout.slice(0, 500),
+                    stderrPreview: result.stderr.slice(0, 500),
+                    contextFile: ref.path,
+                    outputSize: `${(totalOutputSize / 1024).toFixed(1)} KB`,
+                    note: `Full output stored in context file. Use read_context_output to view more.`
+                };
             }
 
             return {
@@ -840,6 +972,143 @@ export function createToolExecutors(ctx: ToolContext) {
                 searchDirectory: startDir,
                 pattern: args.pattern || null
             };
+        },
+
+        // ====================================================================
+        // Dynamic Context Discovery Tools
+        // ====================================================================
+
+        describe_tool: async (args: z.infer<typeof describeToolSchema>) => {
+            if (!ctx.toolRegistry) {
+                return { error: 'Tool registry not configured' };
+            }
+
+            const tool = ctx.toolRegistry.getToolDescription(args.toolName);
+            if (!tool) {
+                // Try to find similar tools
+                const matches = ctx.toolRegistry.searchTools(args.toolName);
+                if (matches.length > 0) {
+                    return {
+                        error: `Tool '${args.toolName}' not found. Did you mean: ${matches.slice(0, 3).map(m => m.name).join(', ')}?`
+                    };
+                }
+                return { error: `Tool '${args.toolName}' not found` };
+            }
+
+            return {
+                name: tool.name,
+                description: tool.description,
+                category: tool.category,
+                parameters: tool.parameters,
+                example: tool.example,
+                formatted: ctx.toolRegistry.formatToolDescription(tool)
+            };
+        },
+
+        read_context_output: async (args: z.infer<typeof readContextOutputSchema>) => {
+            if (!ctx.contextFileManager) {
+                return { error: 'Context file manager not configured' };
+            }
+
+            // Check if file exists
+            const exists = await ctx.contextFileManager.exists(args.ref);
+            if (!exists) {
+                return { error: `Context file not found: ${args.ref}` };
+            }
+
+            try {
+                const content = await ctx.contextFileManager.readOutput(args.ref, {
+                    head: args.head,
+                    tail: args.tail,
+                    startLine: args.startLine,
+                    endLine: args.endLine
+                });
+
+                const lines = content.split('\n').length;
+                return {
+                    content,
+                    lines,
+                    readMode: args.head ? `head ${args.head}` :
+                              args.tail ? `tail ${args.tail}` :
+                              args.startLine ? `range ${args.startLine}-${args.endLine || 'end'}` :
+                              'full'
+                };
+            } catch (err) {
+                return { error: `Failed to read context output: ${err}` };
+            }
+        },
+
+        search_history: async (args: z.infer<typeof searchHistorySchema>) => {
+            if (!ctx.memoryManager) {
+                return { error: 'Memory manager not configured' };
+            }
+
+            try {
+                const sessionFilter = args.sessionOnly ? ctx.sessionId : null;
+                const results = await ctx.memoryManager.queryArchivedHistory(
+                    sessionFilter ?? null,
+                    args.query
+                );
+
+                if (results.length === 0) {
+                    return {
+                        count: 0,
+                        message: `No archived messages found matching: ${args.query}`,
+                        note: 'History is archived when context window fills up. Recent messages are still in active context.'
+                    };
+                }
+
+                return {
+                    count: results.length,
+                    query: args.query,
+                    sessionOnly: args.sessionOnly,
+                    results: results.map(r => ({
+                        turn: r.turnNumber,
+                        role: r.role,
+                        excerpt: r.content,
+                        relevance: (r.relevance * 100).toFixed(0) + '%'
+                    }))
+                };
+            } catch (err) {
+                return { error: `Failed to search history: ${err}` };
+            }
+        },
+
+        search_terminal: async (args: z.infer<typeof searchTerminalSchema>) => {
+            if (!ctx.terminalSessionManager || !ctx.sessionId) {
+                return { error: 'Terminal session manager not configured' };
+            }
+
+            try {
+                const hits = await ctx.terminalSessionManager.searchOutput(
+                    ctx.sessionId,
+                    args.pattern,
+                    args.context
+                );
+
+                if (hits.length === 0) {
+                    return {
+                        count: 0,
+                        message: `No matches found for pattern: ${args.pattern}`
+                    };
+                }
+
+                return {
+                    count: hits.length,
+                    pattern: args.pattern,
+                    hits: hits.slice(0, 20).map(hit => ({
+                        line: hit.line,
+                        content: hit.content,
+                        context: {
+                            before: hit.before,
+                            after: hit.after
+                        }
+                    })),
+                    formatted: ctx.terminalSessionManager.formatSearchHits(hits.slice(0, 20))
+                };
+            } catch (err) {
+                return { error: `Failed to search terminal output: ${err}` };
+            }
         }
     };
 }
@@ -965,6 +1234,24 @@ export function getToolSpecs() {
         find_vcd_files: {
             description: 'Search for VCD waveform files in the project. ALWAYS use this tool first when user mentions a VCD file by name to find its full path before opening. Returns list of matching files with paths.',
             parameters: findVcdFilesSchema
+        },
+
+        // Dynamic Context Discovery Tools
+        describe_tool: {
+            description: 'Get full description and parameters for a tool. Use this to understand how to use any tool.',
+            parameters: describeToolSchema
+        },
+        read_context_output: {
+            description: 'Read a portion of tool output stored in a context file. Use head/tail for quick inspection.',
+            parameters: readContextOutputSchema
+        },
+        search_history: {
+            description: 'Search archived conversation history for relevant context from earlier in the session.',
+            parameters: searchHistorySchema
+        },
+        search_terminal: {
+            description: 'Search terminal/simulation output for patterns. Find specific errors or output from commands.',
+            parameters: searchTerminalSchema
         }
     };
 }
