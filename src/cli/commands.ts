@@ -735,10 +735,18 @@ export async function waveWebCommand(ctx: CommandContext, vcdPath: string, port:
             openArgs = [url];
         }
 
-        spawn(openCmd, openArgs, {
+        const child = spawn(openCmd, openArgs, {
             detached: true,
             stdio: 'ignore'
-        }).unref();
+        });
+
+        child.once('error', (err) => {
+            console.error(chalk.yellow(`Failed to open browser: ${err.message}`));
+            console.log(chalk.dim(`Open manually: ${url}`));
+        });
+
+        // Small delay before unref to catch immediate spawn errors
+        setTimeout(() => child.unref(), 100);
 
         // Keep process running until interrupted
         await new Promise<void>((resolve) => {

@@ -141,6 +141,14 @@ Select the most appropriate agent and describe the task.`
             return finalText || output;
         } catch (error) {
             const duration = Date.now() - startTime;
+
+            // Mark thinking chain step as failed
+            this.thinkingChain.addAnalysisStep(
+                `Agent ${routing.selectedAgent} failed: ${error instanceof Error ? error.message : String(error)}`,
+                { error: error instanceof Error ? error.message : String(error) },
+                0
+            );
+
             this.bus.emit({
                 type: 'agent_complete',
                 agentName: routing.selectedAgent,

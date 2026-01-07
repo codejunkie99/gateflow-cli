@@ -358,37 +358,14 @@ Return needsMultiAgent: true only for genuinely complex requests.`
             stopWhen: stepCountIs(this.config.maxToolCalls),  // AI SDK handles the loop automatically
             
             // Thinking visibility via onStepFinish
+            // Note: Tool call/result events are emitted from the stream loop for real-time updates
+            // We only handle thinking chain and error tracking here to avoid duplicate events
             onStepFinish: (step: StepResult<any>) => {
                 this.session.thinkingChain.onStepFinish(step);
-                
-                // Emit events for tool calls
-                if (step.toolCalls) {
-                    for (const call of step.toolCalls) {
-                        this.bus.emit({
-                            type: 'tool_call',
-                            tool: call.toolName,
-                            argsSummary: this.summarizeArgs(call.input),
-                            args: call.input as Record<string, unknown>
-                        });
-                        options?.onToolCall?.(call.toolName, call.input);
-                    }
-                }
-                
-                // Emit tool results
+
+                // Track lint errors for mode detection (from tool results)
                 if (step.toolResults) {
                     for (const toolResult of step.toolResults) {
-                        const outputObj = toolResult.output;
-                        const hasError = outputObj && typeof outputObj === 'object' && outputObj !== null && 'error' in outputObj;
-                        this.bus.emit({
-                            type: 'tool_result',
-                            tool: toolResult.toolName,
-                            ok: !hasError,
-                            summary: this.summarizeResult(toolResult.output),
-                            result: toolResult.output
-                        });
-                        options?.onToolResult?.(toolResult.toolName, toolResult.output);
-                        
-                        // Track lint errors for mode detection
                         if (toolResult.toolName === 'lint_file') {
                             const output = toolResult.output as { errors?: unknown[] } | null;
                             if (output?.errors && Array.isArray(output.errors) && output.errors.length > 0) {

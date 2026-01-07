@@ -453,9 +453,25 @@ export class SVParser {
 
     /**
      * Get line number from character index
+     * Note: When called with originalContent but index from cleanContent,
+     * we search for the match in original content to get accurate line numbers
      */
     private getLineNumber(content: string, index: number): number {
-        return content.slice(0, index).split('\n').length;
+        // Clamp index to valid range to prevent inaccurate results
+        const safeIndex = Math.min(index, content.length);
+        return content.slice(0, safeIndex).split('\n').length;
+    }
+
+    /**
+     * Find accurate line number for a name in original content
+     */
+    private findLineForName(originalContent: string, name: string, searchStart: number = 0): number {
+        const searchContent = originalContent.slice(searchStart);
+        const match = searchContent.match(new RegExp(`\\b${name}\\b`));
+        if (match && match.index !== undefined) {
+            return this.getLineNumber(originalContent, searchStart + match.index);
+        }
+        return 1; // Default to line 1 if not found
     }
 }
 
