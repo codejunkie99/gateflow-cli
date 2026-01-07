@@ -205,6 +205,14 @@ export async function chatCommand(
         // Simple prompt with dotted border
         const border = chalk.blue('─'.repeat(60));
         console.log(border);
+
+        // FIX: Resume stdin if it was paused during agent execution
+        // This is critical because something (likely ora spinner or stream handling)
+        // pauses stdin, and readline doesn't automatically resume it
+        if (process.stdin.isPaused()) {
+            process.stdin.resume();
+        }
+
         rl.question(chalk.blue('> '), (input) => {
             // Wrap async logic to properly handle rejections
             (async () => {

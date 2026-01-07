@@ -246,6 +246,11 @@ export class TerminalRenderer {
         this.currentPhase = phase;
         this.currentLabel = label;
 
+        // Don't show spinner while streaming tokens - it corrupts output
+        if (this.isStreaming) {
+            return;
+        }
+
         // Flush any pending tokens
         this.flushBuffer();
 
@@ -266,6 +271,10 @@ export class TerminalRenderer {
      * Restart spinner with current phase/label (after tool output)
      */
     private restartSpinner(): void {
+        // Don't restart spinner while streaming tokens - it corrupts output
+        if (this.isStreaming) {
+            return;
+        }
         if (!this.spinner && this.currentPhase) {
             const icon = this.getPhaseIcon(this.currentPhase);
             this.spinner = ora({
