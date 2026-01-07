@@ -67,7 +67,9 @@ export type ToolCategory =
     | 'verification'   // Lint and simulation
     | 'waveform'       // VCD/FST analysis
     | 'project'        // Project-level operations
-    | 'context';       // Context management (new tools)
+    | 'context'        // Context management (dynamic context discovery)
+    | 'skills'         // Skill discovery and execution
+    | 'mcp';           // MCP server tools
 
 /**
  * Full tool description stored in registry
@@ -218,3 +220,51 @@ export const DEFAULT_CONTEXT_CONFIG: ContextConfig = {
     archiveThreshold: 10,
     keepRecentMessages: 4
 };
+
+// ============================================================================
+// History File Reference (for summarization)
+// ============================================================================
+
+/**
+ * Reference to archived history given to agent during summarization
+ * Implements Cursor's "give the agent a reference to the history file" pattern
+ */
+export interface HistoryFileReference {
+    /** Path to the archived history file */
+    filePath: string;
+
+    /** Session ID of the archived conversation */
+    sessionId: string;
+
+    /** Brief summary of what was archived */
+    summary: string;
+
+    /** Number of messages archived */
+    messageCount: number;
+
+    /** Turn range covered by this archive */
+    turnRange: { start: number; end: number };
+
+    /** When the archive was created */
+    timestamp: number;
+
+    /** Instructions for the agent on how to use this reference */
+    agentInstructions: string;
+}
+
+/**
+ * Result of triggering summarization
+ */
+export interface SummarizationResult {
+    /** Whether summarization occurred */
+    triggered: boolean;
+
+    /** The history file reference (if summarization occurred) */
+    historyRef?: HistoryFileReference;
+
+    /** Messages to keep in active context */
+    remainingMessages: Array<{ role: string; content: string }>;
+
+    /** Summary for the agent */
+    summary: string;
+}
