@@ -26,6 +26,40 @@ export type PromptMode =
     | 'generate';
 
 // ============================================================================
+// Dynamic Context Discovery: Minimal Tool List
+// ============================================================================
+
+/**
+ * Generate minimal tool list for system prompt.
+ * This implements Cursor's ~46% token reduction strategy:
+ * - Only tool names provided in context
+ * - Agent must call describe_tool for full details
+ */
+export function getMinimalToolSection(enableOptimization: boolean = true): string {
+    if (!enableOptimization) {
+        // Return empty - full tool descriptions will be in the SDK tool definitions
+        return '';
+    }
+
+    return `
+## Available Tools
+
+**File Operations**: read_file, write_file, list_files
+**Edit Operations**: edit_lines, search_replace
+**Search Operations**: search_code, find_module, find_all_sv_files, get_dependencies
+**Verification**: lint_file, run_simulation
+**Waveform**: analyze_waveform, open_waveform, find_vcd_files
+**Context**: describe_tool, read_context_output, search_terminal, search_history
+**Interaction**: ask_user
+
+To learn about any tool's parameters and usage, call: describe_tool({ toolName: "tool_name" })
+
+For large tool outputs (lint errors, simulation logs), the response may include a context file reference.
+Use read_context_output to read portions: head (first N lines), tail (last N lines), or line range.
+`;
+}
+
+// ============================================================================
 // Shared Rules (included in all modes)
 // ============================================================================
 
@@ -288,11 +322,21 @@ export const SYSTEM_PROMPTS: Record<PromptMode, string> = {
     generate: GENERATE_MODE,
 };
 
+export interface SystemPromptOptions {
+    /** Enable minimal tool list optimization (default: true) */
+    enableToolOptimization?: boolean;
+}
+
 /**
  * Get the system prompt for a given mode
+ * @param mode - The prompt mode to use
+ * @param options - Optional configuration
  */
-export function getSystemPrompt(mode: PromptMode): string {
-    return SYSTEM_PROMPTS[mode] ?? SYSTEM_PROMPTS.general;
+export function getSystemPrompt(mode: PromptMode, options: SystemPromptOptions = {}): string {
+    const basePrompt = SYSTEM_PROMPTS[mode] ?? SYSTEM_PROMPTS.general;
+    const toolSection = getMinimalToolSection(options.enableToolOptimization ?? true);
+
+    return basePrompt + toolSection;
 }
 
 // ============================================================================
