@@ -70,6 +70,9 @@ export class ProjectResolver {
   /** Recipe for include path resolution */
   private recipe?: Recipe;
 
+  /** Macro index: macro name -> file where it's defined */
+  private macroIndex: Map<string, string> = new Map();
+
   /**
    * Create a new project resolver.
    *
@@ -101,6 +104,16 @@ export class ProjectResolver {
 
     // Index declarations
     this.index.addAll(result.declarations);
+
+    // Index macro definitions for dependency tracking
+    for (const directive of result.directives) {
+      if (directive.data.kind === 'define' && directive.data.name) {
+        // Store first definition of each macro (later definitions would override)
+        if (!this.macroIndex.has(directive.data.name)) {
+          this.macroIndex.set(directive.data.name, directive.location.file);
+        }
+      }
+    }
   }
 
   /**
@@ -275,14 +288,34 @@ export class ProjectResolver {
 
   /**
    * Resolve a class name, handling scoped references.
+   *
+   * Handles multi-level scoped names like `pkg::subpkg::class` or `a::b::c::d`.
    */
   private resolveClassName(name: string, scope: string[]): Declaration | undefined {
-    // Check for scoped reference (pkg::class)
+    // Check for scoped reference (pkg::class or pkg::subpkg::class, etc.)
     if (name.includes('::')) {
-      const [pkgName, className] = name.split('::');
-      const classes = this.index.getByNameAndKind(className, 'class');
-      if (classes && classes.scope.includes(pkgName)) {
-        return classes;
+      const parts = name.split('::');
+      const className = parts[parts.length - 1];
+      const scopeParts = parts.slice(0, -1);
+
+      // Find all classes with this name
+      const candidates = this.index.getByName(className);
+      for (const candidate of candidates) {
+        if (candidate.kind !== 'class') continue;
+
+        // Check if all scope parts are present in the candidate's scope
+        // The scope parts must appear in order in the candidate's scope
+        let matchIndex = 0;
+        for (const scopePart of candidate.scope) {
+          if (matchIndex < scopeParts.length && scopePart === scopeParts[matchIndex]) {
+            matchIndex++;
+          }
+        }
+
+        // All scope parts must have been matched
+        if (matchIndex === scopeParts.length) {
+          return candidate;
+        }
       }
     }
 
@@ -296,12 +329,15 @@ export class ProjectResolver {
 
   /**
    * Resolve a type name (could be typedef, struct, enum, class).
+   *
+   * Handles multi-level scoped names like `pkg::subpkg::type_t` or `a::b::c::d`.
    */
   private resolveTypeName(name: string, scope: string[]): Declaration | undefined {
     // Check for scoped reference
     if (name.includes('::')) {
       const parts = name.split('::');
       const typeName = parts[parts.length - 1];
+      const scopeParts = parts.slice(0, -1);
 
       // Search in the specified scope
       const candidates = this.index.getByName(typeName);
@@ -313,8 +349,17 @@ export class ProjectResolver {
           candidate.kind === 'enum' ||
           candidate.kind === 'class'
         ) {
-          // Check if scope matches
-          if (candidate.scope.includes(parts[0])) {
+          // Check if all scope parts are present in the candidate's scope
+          // The scope parts must appear in order in the candidate's scope
+          let matchIndex = 0;
+          for (const scopePart of candidate.scope) {
+            if (matchIndex < scopeParts.length && scopePart === scopeParts[matchIndex]) {
+              matchIndex++;
+            }
+          }
+
+          // All scope parts must have been matched
+          if (matchIndex === scopeParts.length) {
             return candidate;
           }
         }
@@ -361,12 +406,24 @@ export class ProjectResolver {
 
   /**
    * Resolve an include path.
+   *
+   * Resolution order (matches typical SystemVerilog compiler behavior):
+   * 1. Relative to the including file (same directory first)
+   * 2. Recipe include paths (in order specified)
    */
   private async resolveIncludePath(
     includePath: string,
     fromFile: string
   ): Promise<string | null> {
-    // Try include paths from recipe
+    // 1. Try relative to the including file FIRST
+    // This matches typical compiler behavior where local includes take priority
+    const fromDir = path.dirname(fromFile);
+    const relative = path.join(fromDir, includePath);
+    if (await this.fileExists(relative)) {
+      return relative;
+    }
+
+    // 2. Try include paths from recipe (in order)
     if (this.recipe) {
       for (const incDir of this.recipe.includePaths) {
         const candidate = path.join(incDir, includePath);
@@ -374,13 +431,6 @@ export class ProjectResolver {
           return candidate;
         }
       }
-    }
-
-    // Try relative to the including file
-    const fromDir = path.dirname(fromFile);
-    const relative = path.join(fromDir, includePath);
-    if (await this.fileExists(relative)) {
-      return relative;
     }
 
     return null;
@@ -556,6 +606,28 @@ export class ProjectResolver {
         fromFile: ref.location.file,
         toFile: target.location.file,
         reason: 'extends',
+        entityName: ref.targetName,
+      });
+    }
+
+    // From macro usages
+    for (const ref of this.references) {
+      if (ref.kind !== 'macro_usage') continue;
+
+      const macroFile = this.macroIndex.get(ref.targetName);
+      if (!macroFile) continue;
+
+      // Skip self-references (macro defined and used in same file)
+      if (macroFile === ref.location.file) continue;
+
+      const key = `${ref.location.file}|${macroFile}|uses_macro`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      deps.push({
+        fromFile: ref.location.file,
+        toFile: macroFile,
+        reason: 'uses_macro',
         entityName: ref.targetName,
       });
     }

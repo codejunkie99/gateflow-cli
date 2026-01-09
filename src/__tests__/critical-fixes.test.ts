@@ -169,12 +169,14 @@ describe('Scope Lookup: buildScopeLookup', () => {
       {
         kind: 'module',
         name: 'outer_module',
+        scope: [], // at root level
         location: { line: 1 },
         data: { endLine: 100 },
       },
       {
         kind: 'function',
         name: 'inner_func',
+        scope: ['outer_module'], // nested inside outer_module
         location: { line: 20 },
         data: { endLine: 40 },
       },

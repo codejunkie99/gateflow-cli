@@ -264,3 +264,4 @@ If removing legacy code:
    - `ProjectIndexer.findModule()` → Query `ResolvedProject.declarations`
 3. **Update types:** `ModuleInfo` → `Declaration` with `kind: 'module'`
 
+

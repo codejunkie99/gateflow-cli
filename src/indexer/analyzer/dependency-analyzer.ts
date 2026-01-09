@@ -300,12 +300,37 @@ export class DependencyGraph {
   /**
    * Detect circular dependencies.
    *
-   * @returns Array of cycles found
+   * Returns unique cycles - each cycle is reported only once,
+   * regardless of which node the DFS started from.
+   *
+   * @returns Array of cycles found (deduplicated)
    */
   detectCycles(): DependencyCycle[] {
     const cycles: DependencyCycle[] = [];
     const visited = new Set<string>();
     const recStack = new Set<string>();
+    // Track seen cycles by their canonical representation (sorted nodes joined)
+    const seenCycles = new Set<string>();
+
+    /**
+     * Create a canonical key for a cycle to detect duplicates.
+     * We normalize by finding the lexicographically smallest rotation.
+     */
+    const getCycleKey = (cyclePath: string[]): string => {
+      // Remove the closing node (it's a duplicate of the start)
+      const nodes = cyclePath.slice(0, -1);
+      if (nodes.length === 0) return '';
+
+      // Find all rotations and pick the lexicographically smallest
+      let minRotation = nodes.join('|');
+      for (let i = 1; i < nodes.length; i++) {
+        const rotation = [...nodes.slice(i), ...nodes.slice(0, i)].join('|');
+        if (rotation < minRotation) {
+          minRotation = rotation;
+        }
+      }
+      return minRotation;
+    };
 
     const dfs = (file: string, path: string[]): boolean => {
       visited.add(file);
@@ -325,17 +350,23 @@ export class DependencyGraph {
             const cyclePath = path.slice(cycleStart);
             cyclePath.push(dep); // Close the cycle
 
-            // Get edges for this cycle
-            const cycleEdges: FileDependency[] = [];
-            for (let i = 0; i < cyclePath.length - 1; i++) {
-              const edges = this.getEdges(cyclePath[i], cyclePath[i + 1]);
-              cycleEdges.push(...edges);
-            }
+            // Check if we've already seen this cycle
+            const cycleKey = getCycleKey(cyclePath);
+            if (!seenCycles.has(cycleKey)) {
+              seenCycles.add(cycleKey);
 
-            cycles.push({
-              files: cyclePath,
-              edges: cycleEdges,
-            });
+              // Get edges for this cycle
+              const cycleEdges: FileDependency[] = [];
+              for (let i = 0; i < cyclePath.length - 1; i++) {
+                const edges = this.getEdges(cyclePath[i], cyclePath[i + 1]);
+                cycleEdges.push(...edges);
+              }
+
+              cycles.push({
+                files: cyclePath,
+                edges: cycleEdges,
+              });
+            }
           }
         }
       }

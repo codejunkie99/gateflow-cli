@@ -1,25 +1,25 @@
-# Complete Audit Summary: src/indexer
+# Complete Audit Summary: src/indexer (RE-AUDIT)
 
 **Date:** January 9, 2026  
-**Scope:** Entire `src/indexer/` directory  
+**Scope:** Entire `src/indexer/` directory (re-audited after rewrite)  
 **Modules Audited:** 9 subdirectories + root files
 
 ---
 
 ## Audit Coverage
 
-| Module | Status | Audit File |
-|--------|--------|------------|
-| `ids/` | ✅ Complete | `ids/AUDIT.md` |
-| `preprocessor/` | ✅ Complete | `preprocessor/AUDIT.md` |
-| `reader/` | ✅ Complete | `reader/AUDIT.md` |
-| `recipe/` | ✅ Complete | `recipe/AUDIT.md` |
-| `resolver/` | ✅ Complete | `resolver/AUDIT.md` |
-| `scanners/` | ✅ Complete | `scanners/AUDIT.md` |
-| `types/` | ✅ Complete | `types/AUDIT.md` |
-| `understander/` | ✅ Complete | `understander/AUDIT.md` |
-| `analyzer/` | ✅ Complete | `analyzer/AUDIT.md` + `CODE_REVIEW.md` |
-| Root files | ✅ Complete | `AUDIT.md` |
+| Module | Status | Audit File | Critical Issues |
+|--------|--------|------------|-----------------|
+| `scanners/` | ✅ Complete | `scanners/AUDIT.md` | 1 |
+| `understander/`
+ | ✅ Complete | `understander/AUDIT.md` | 1 |
+| `resolver/` | ✅ Complete | `resolver/AUDIT.md` | 0 |
+| `recipe/` | ✅ Complete | `recipe/AUDIT.md` | 0 |
+| `preprocessor/` | ✅ Complete | `preprocessor/AUDIT.md` | 0 |
+| `reader/` | ✅ Complete | `reader/AUDIT.md` | 0 |
+| `ids/` | ✅ Complete | `ids/AUDIT.md` | 0 |
+| `types/` | ✅ Complete | `types/AUDIT.md` | 0 |
+| `analyzer/` | ⚠️ Complete | `analyzer/AUDIT.md` | 0 (1 High) |
 
 ---
 
@@ -27,167 +27,110 @@
 
 ### 🔴 CRITICAL (Must Fix Immediately)
 
-1. **ScopeTracker not shared** (`understander/file-understander.ts`)
-   - **Impact:** All references have `scope: []`, all instances have `parentScope: []`
-   - **Cascade:** Breaks hierarchy building, scoped resolution, guard tracking
-   - **Fix:** Pass ScopeTracker through scanner pipeline
+1. **Guard state not passed to scanners** (`understander/file-understander.ts`)
+   - **Impact:** All references and instances have `guard: undefined` even when inside `ifdef` blocks
+   - **Fix:** Pass `ifdefState` or guard lookup function to `scanReferences` and `scanInstances`
 
-2. **Infinite recursion on circular filelists** (`recipe/filelist-parser.ts`)
-   - **Impact:** Stack overflow crash
-   - **Fix:** Add cycle detection with `visited: Set<string>`
-
-3. **Infinite recursion on circular instantiation** (`resolver/project-resolver.ts`)
-   - **Impact:** Stack overflow crash
-   - **Fix:** Add cycle detection in `buildHierarchyNode()`
+2. **ScopeTracker guards never populated** (`scanners/reference-scanner.ts`, `scanners/instance-scanner.ts`)
+   - **Impact:** Same as above - guards always undefined
+   - **Fix:** Share guard state from directive scanner or build guard lookup function
 
 ---
 
-## High Severity Issues Summary
+## High Severity Issues
 
-### 🟠 HIGH (Fix Soon)
+### 🟠 HIGH (Should Fix Soon)
 
-1. **Missing `guard` field on Directive** (`types/directive.ts`)
-   - Can't track conditional macros
+1. **Scoped name resolution drops path segments** (`resolver/project-resolver.ts:279-295`)
+   - `pkg::outer::Inner` only splits on first `::`, loses middle segment
+   - **Fix:** Use `name.split('::')` to get all segments
 
-2. **Quoted paths include quotes** (`recipe/filelist-parser.ts`)
-   - Path resolution fails for quoted paths
+2. **Include resolution order wrong** (`resolver/project-resolver.ts:365-387`)
+   - Checks recipe paths before relative paths (should be reversed)
+   - **Fix:** Check relative path first, then recipe paths
 
-3. **Include resolution order wrong** (`resolver/project-resolver.ts`)
-   - Relative paths should be checked before include directories
+3. **buildScopeLookup doesn't handle nested scopes** (`scanners/scope-tracker.ts:524-546`)
+   - Adds all scopes that start before line, doesn't check nesting
+   - **Fix:** Track scope hierarchy and only include containing scopes
 
-4. **Scoped name resolution drops segments** (`resolver/project-resolver.ts`)
-   - `pkg::outer::Inner` loses middle parts
+4. **Quoted paths include quotes** (`recipe/filelist-parser.ts:236-242`)
+   - `+incdir+"/path"` stores `"/path"` with quotes
+   - **Fix:** Strip quotes from captured path
 
-5. **Errors array always empty** (`understander/file-understander.ts`)
-   - No error reporting to users
+5. **Encoding detection hash instability** (`reader/file-reader.ts:293-314`)
+   - Same file can return different hashes if encoding detection inconsistent
+   - **Fix:** Hash raw buffer or normalize encoding before hashing
 
-6. **Legacy indexer still active** (`index.ts`)
-   - Creates confusion about which indexer to use
+6. **Missing guard field on Directive** (`types/directive.ts:120-156`)
+   - Directive type missing `guard?: Guard` field (inconsistent with other types)
+   - **Fix:** Add `guard?: Guard` to Directive interface
 
----
-
-## Bug Pattern Analysis
-
-### Pattern 1: Missing Cycle Detection (3 instances)
-- `recipe/filelist-parser.ts` - Circular `-f` includes
-- `resolver/project-resolver.ts` - Circular instantiation
-- **Root cause:** No `visited` tracking in recursive functions
-
-### Pattern 2: Scope Tracking Not Integrated (Cross-module)
-- `understander/file-understander.ts` - Doesn't pass ScopeTracker
-- `reference-scanner.ts` - Creates empty tracker
-- `instance-scanner.ts` - No tracker at all
-- **Root cause:** Scanners designed independently, no shared state
-
-### Pattern 3: String Parsing Edge Cases (2 instances)
-- `preprocessor/comment-stripper.ts` - Off-by-one in block comments
-- `recipe/filelist-parser.ts` - Quoted paths not stripped
-- **Root cause:** Regex patterns don't handle all edge cases
+7. **Macro dependencies not resolved** (`resolver/project-resolver.ts:247-251`, `analyzer/dependency-analyzer.ts`)
+   - Macro usages are scanned but NOT resolved - `DeclarationIndex` doesn't index macros
+   - **Impact:** Files using macros from other files won't have dependencies, compile order may be WRONG
+   - **Fix:** Index macro definitions, resolve `macro_usage` references, add to `buildDependencies()`
 
 ---
 
-## Statistics
+## Medium Severity Issues
 
-| Severity | Count | Percentage |
-|----------|-------|------------|
-| 🔴 Critical | 3 | 8% |
-| 🟠 High | 6 | 16% |
-| 🟡 Medium | 20 | 54% |
-| 🟢 Low | 8 | 22% |
-| **Total** | **37** | **100%** |
+### 🟡 MEDIUM (Should Fix Eventually)
 
----
-
-## Recommended Fix Order
-
-### Phase 1: Critical Fixes (Prevent Crashes)
-1. ✅ Add cycle detection to `recipe/filelist-parser.ts`
-2. ✅ Add cycle detection to `resolver/project-resolver.ts`
-3. ✅ Share ScopeTracker across scanners in `understander/file-understander.ts`
-
-### Phase 2: High Priority (Core Functionality)
-4. ✅ Add `guard` field to Directive type
-5. ✅ Fix include resolution order
-6. ✅ Fix scoped name resolution
-7. ✅ Strip quotes from paths
-8. ✅ Implement error collection
-
-### Phase 3: Medium Priority (Quality)
-9. Fix duplicate adds in DeclarationIndex
-10. Fix hierarchy scope matching
-11. Use ifdefState for guard propagation
-12. Fix port connection locations
-13. Fix enum value locations
-
-### Phase 4: Low Priority (Polish)
-14. Remove duplicate buildLineOffsets
-15. Use SHA-256 consistently
-16. Remove unused variables
-17. Deprecate legacy indexer
+1. **Hierarchy matching only checks first scope** (`resolver/project-resolver.ts:454-456`)
+2. **Duplicate adds cause inconsistent state** (`resolver/declaration-index.ts:68-90`)
+3. **Duplicate files not deduplicated** (`recipe/filelist-parser.ts`)
+4. **endLine not tracked** (`scanners/scope-tracker.ts:508-510`)
+5. **identifyIdType duplicates logic** (`ids/declaration-id.ts:201-218`)
+6. **PortConnection.location always invalid** (`types/instance.ts:297-320`)
+7. **console.warn in library** (`recipe/filelist-parser.ts:270-272`)
 
 ---
 
-## Architecture Observations
+## Fixed Issues ✅
 
-### ✅ Strengths
-- **Clean separation of concerns** - Each module has single responsibility
-- **Well-typed** - Excellent use of TypeScript discriminated unions
-- **Good documentation** - Comprehensive JSDoc comments
-- **Modular design** - Easy to test individual components
-
-### ⚠️ Weaknesses
-- **Lack of integration testing** - Scanners work independently but don't share state
-- **Legacy code still present** - Old parser/indexer creates confusion
-- **Error handling incomplete** - Errors collected but not propagated
-- **No validation** - Input validation missing in many places
+1. ✅ **Cycle detection** - Both `project-resolver.ts` and `filelist-parser.ts` now have cycle detection
+2. ✅ **parentScope always empty** - Now uses `getScope(loc.line)` correctly
+3. ✅ **Unterminated block comment off-by-one** - Fixed in `comment-stripper.ts`
+4. ✅ **HierarchyNode.isCyclic** - Added to type definition
 
 ---
 
-## Test Coverage Gaps
+## Overall Assessment
 
-Based on audit findings, these scenarios need testing:
+**Improvements:**
+- ✅ Scope tracking significantly improved (`parentScope` now works!)
+- ✅ Cycle detection added to resolver and recipe parser
+- ✅ Comment stripper bug fixed
+- ✅ Better architecture with `buildScopeLookup` approach
 
-1. **Circular dependencies:**
-   - Circular filelists (`a.f → b.f → a.f`)
-   - Circular instantiation (`module A; A a(); endmodule`)
+**Remaining Issues:**
+- 🔴 Guard tracking broken (critical)
+- 🟠 Scoped name resolution bugs
+- 🟠 Include path order wrong
+- 🟠 Scope lookup doesn't handle nesting correctly
+- 🟠 Macro dependencies not resolved (compile order risk)
 
-2. **Scope tracking:**
-   - Nested modules/classes/packages
-   - References inside nested scopes
-   - Instances inside nested scopes
+**SystemVerilog Limitations (Upstream):**
+- `bind` statements not captured
+- Configuration blocks not handled
+- Interface modport dependencies implicit
+- Generate conditionals not tracked
+- Library mappings not resolved
 
-3. **Edge cases:**
-   - Quoted paths in filelists
-   - Unterminated block comments
-   - Multi-signal declarations
-   - Scoped identifiers (`pkg::outer::Inner`)
-
-4. **Error conditions:**
-   - Missing files in filelist
-   - Parse errors in individual files
-   - Missing declarations for references
-
----
-
-## Files Requiring Immediate Attention
-
-1. `understander/file-understander.ts` - **ROOT CAUSE** of scope issues
-2. `recipe/filelist-parser.ts` - Critical crash bug
-3. `resolver/project-resolver.ts` - Critical crash bug + resolution bugs
-4. `types/directive.ts` - Missing field breaks type consistency
+**Recommendation:** Fix the critical guard tracking issue first, then address high-severity scoped name resolution, include path, and macro dependency issues.
 
 ---
 
-## Conclusion
+## Priority Fix Order
 
-The indexer architecture is **solid** with excellent modular design. However, there are **3 critical bugs** that cause crashes and **1 architectural issue** (scope tracking) that breaks core functionality.
+1. **P0 (Critical):** Fix guard state passing to scanners
+2. **P1 (High):** Fix scoped name resolution (multiple `::` segments)
+3. **P1 (High):** Fix include path resolution order
+4. **P1 (High):** Fix `buildScopeLookup` nested scope handling
+5. **P1 (High):** Fix macro dependency tracking (index macros, resolve usages)
+6. **P2 (Medium):** Fix hierarchy matching (full scope chain)
+7. **P2 (Medium):** Deduplicate adds in declaration index
 
-**Estimated Fix Time:**
-- Critical fixes: 2-4 hours
-- High priority: 4-6 hours
-- Medium priority: 8-12 hours
-- Low priority: 4-6 hours
-- **Total: 18-28 hours**
+---
 
-**Recommendation:** Fix critical issues immediately, then tackle high-priority items before production use.
-
+**Total Issues:** 2 Critical, 7 High, 7 Medium, 4 Low (+ 5 SV upstream limitations)

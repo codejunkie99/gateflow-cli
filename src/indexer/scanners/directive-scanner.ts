@@ -22,7 +22,10 @@ import {
   DPI_PATTERNS,
   copyPattern,
 } from './patterns.js';
-import type { ScopeTracker } from './scope-tracker.js';
+import type { ScopeTracker, IfdefState } from './scope-tracker.js';
+
+// Re-export IfdefState for backwards compatibility
+export type { IfdefState } from './scope-tracker.js';
 
 // ============================================================================
 // Types
@@ -36,14 +39,6 @@ export interface DirectiveScanResult {
   directives: Directive[];
   /** State of ifdef conditions at each line (for other scanners) */
   ifdefState: IfdefState;
-}
-
-/**
- * Tracks the state of ifdef conditions.
- */
-export interface IfdefState {
-  /** Map from line number to active guard condition */
-  lineGuards: Map<number, { condition: string; inverted: boolean }>;
 }
 
 // ============================================================================

@@ -45,6 +45,8 @@ import {
   scanReferences,
   scanInstances,
   ScopeTracker,
+  buildScopeLookup,
+  buildGuardLookup,
 } from '../scanners/index.js';
 
 // ============================================================================
@@ -119,6 +121,13 @@ export class FileUnderstander {
     const { declarations } = scanDeclarations(cleaned, filePath, file.lineOffsets);
 
     // -------------------------------------------------------------------------
+    // Build Lookup Functions
+    // -------------------------------------------------------------------------
+
+    const scopeLookup = buildScopeLookup(declarations);
+    const guardLookup = buildGuardLookup(ifdefState);
+
+    // -------------------------------------------------------------------------
     // Step 6: Scan References
     // -------------------------------------------------------------------------
 
@@ -126,7 +135,9 @@ export class FileUnderstander {
       cleaned,
       filePath,
       file.lineOffsets,
-      declarations
+      declarations,
+      scopeLookup,
+      guardLookup
     );
 
     // -------------------------------------------------------------------------
@@ -137,7 +148,9 @@ export class FileUnderstander {
       cleaned,
       filePath,
       file.lineOffsets,
-      declarations
+      declarations,
+      scopeLookup,
+      guardLookup
     );
 
     // -------------------------------------------------------------------------
@@ -203,10 +216,15 @@ export class FileUnderstander {
 
     // Scan all entities
     const scopeTracker = new ScopeTracker();
-    const { directives } = scanDirectives(cleaned, filePath, lineOffsets, scopeTracker);
+    const { directives, ifdefState } = scanDirectives(cleaned, filePath, lineOffsets, scopeTracker);
     const { declarations } = scanDeclarations(cleaned, filePath, lineOffsets);
-    const { references } = scanReferences(cleaned, filePath, lineOffsets, declarations);
-    const { instances } = scanInstances(cleaned, filePath, lineOffsets, declarations);
+
+    // Build lookup functions
+    const scopeLookup = buildScopeLookup(declarations);
+    const guardLookup = buildGuardLookup(ifdefState);
+
+    const { references } = scanReferences(cleaned, filePath, lineOffsets, declarations, scopeLookup, guardLookup);
+    const { instances } = scanInstances(cleaned, filePath, lineOffsets, declarations, scopeLookup, guardLookup);
 
     const parseTimeMs = Date.now() - startTime;
 

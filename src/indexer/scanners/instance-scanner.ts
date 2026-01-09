@@ -25,7 +25,7 @@ import type {
 import { locationId } from '../ids/index.js';
 import { getLocation } from '../reader/index.js';
 import { INSTANCE_PATTERNS, copyPattern } from './patterns.js';
-import { ScopeTracker, buildScopeLookup, type ScopeLookup } from './scope-tracker.js';
+import { buildScopeLookup, type ScopeLookup, type GuardLookup } from './scope-tracker.js';
 
 // ============================================================================
 // Types
@@ -72,12 +72,16 @@ export function scanInstances(
   filePath: string,
   lineOffsets: LineOffsets,
   declarations: Declaration[],
-  scopeLookup?: ScopeLookup
+  scopeLookup?: ScopeLookup,
+  guardLookup?: GuardLookup
 ): InstanceScanResult {
   const instances: Instance[] = [];
 
   // Build scope lookup from declarations if not provided
   const getScope = scopeLookup || buildScopeLookup(declarations);
+
+  // Default guard lookup returns undefined (no guards)
+  const getGuard: GuardLookup = guardLookup || (() => undefined);
 
   // Build sets for validation
   const moduleNames = new Set(
@@ -90,10 +94,10 @@ export function scanInstances(
     declarations.filter((d) => d.kind === 'function' || d.kind === 'task').map((d) => d.name)
   );
 
-  // Scan different instance types (pass scope lookup)
-  scanBindStatements(content, filePath, lineOffsets, instances, getScope);
-  scanArrayInstances(content, filePath, lineOffsets, moduleNames, functionNames, instances, getScope);
-  scanRegularInstances(content, filePath, lineOffsets, moduleNames, functionNames, instances, getScope);
+  // Scan different instance types (pass scope and guard lookup)
+  scanBindStatements(content, filePath, lineOffsets, instances, getScope, getGuard);
+  scanArrayInstances(content, filePath, lineOffsets, moduleNames, functionNames, instances, getScope, getGuard);
+  scanRegularInstances(content, filePath, lineOffsets, moduleNames, functionNames, instances, getScope, getGuard);
 
   // Sort instances by location
   instances.sort((a, b) => {
@@ -132,13 +136,15 @@ function scanBindStatements(
   filePath: string,
   lineOffsets: LineOffsets,
   instances: Instance[],
-  getScope: ScopeLookup
+  getScope: ScopeLookup,
+  getGuard: GuardLookup
 ): void {
   const pattern = copyPattern(INSTANCE_PATTERNS.bind);
   let match;
 
   while ((match = pattern.exec(content)) !== null) {
     const loc = getLocation(lineOffsets, match.index);
+    const guard = getGuard(loc.line);
 
     const bindTarget = match[1]; // Target module being bound to
     const checkerModule = match[2]; // Checker module being instantiated
@@ -156,6 +162,7 @@ function scanBindStatements(
       location: { file: filePath, line: loc.line, col: loc.col },
       parentScope: getScope(loc.line),
       connections,
+      guard: guard ? { condition: guard.condition, inverted: guard.inverted } : undefined,
     });
   }
 }
@@ -172,7 +179,8 @@ function scanArrayInstances(
   moduleNames: Set<string>,
   functionNames: Set<string>,
   instances: Instance[],
-  getScope: ScopeLookup
+  getScope: ScopeLookup,
+  getGuard: GuardLookup
 ): void {
   // Track matched positions to avoid duplicates
   const matched = new Set<number>();
@@ -209,6 +217,7 @@ function scanArrayInstances(
 
     matched.add(match.index);
     const loc = getLocation(lineOffsets, match.index);
+    const guard = getGuard(loc.line);
     const portStartIdx = afterParams + instanceMatch[0].length - 1;
     const connections = extractPortConnections(content, portStartIdx);
     const paramOverrides = extractParamOverridesFromContent(content, match.index);
@@ -223,6 +232,7 @@ function scanArrayInstances(
       parentScope: getScope(loc.line),
       connections,
       paramOverrides,
+      guard: guard ? { condition: guard.condition, inverted: guard.inverted } : undefined,
     });
   }
 
@@ -244,6 +254,7 @@ function scanArrayInstances(
     }
 
     const loc = getLocation(lineOffsets, match.index);
+    const guard = getGuard(loc.line);
     const connections = extractPortConnections(content, match.index + match[0].length - 1);
 
     instances.push({
@@ -255,6 +266,7 @@ function scanArrayInstances(
       location: { file: filePath, line: loc.line, col: loc.col },
       parentScope: getScope(loc.line),
       connections,
+      guard: guard ? { condition: guard.condition, inverted: guard.inverted } : undefined,
     });
   }
 }
@@ -271,7 +283,8 @@ function scanRegularInstances(
   moduleNames: Set<string>,
   functionNames: Set<string>,
   instances: Instance[],
-  getScope: ScopeLookup
+  getScope: ScopeLookup,
+  getGuard: GuardLookup
 ): void {
   // Track matched positions to avoid duplicates
   const matched = new Set<number>();
@@ -313,6 +326,7 @@ function scanRegularInstances(
 
     matched.add(match.index);
     const loc = getLocation(lineOffsets, match.index);
+    const guard = getGuard(loc.line);
     const portStartIdx = afterParams + instanceMatch[0].length - 1;
     const connections = extractPortConnections(content, portStartIdx);
     const paramOverrides = extractParamOverridesFromContent(content, match.index);
@@ -326,6 +340,7 @@ function scanRegularInstances(
       parentScope: getScope(loc.line),
       connections,
       paramOverrides,
+      guard: guard ? { condition: guard.condition, inverted: guard.inverted } : undefined,
     });
   }
 
@@ -353,6 +368,7 @@ function scanRegularInstances(
     }
 
     const loc = getLocation(lineOffsets, match.index);
+    const guard = getGuard(loc.line);
     const connections = extractPortConnections(content, match.index + match[0].length - 1);
 
     instances.push({
@@ -363,6 +379,7 @@ function scanRegularInstances(
       location: { file: filePath, line: loc.line, col: loc.col },
       parentScope: getScope(loc.line),
       connections,
+      guard: guard ? { condition: guard.condition, inverted: guard.inverted } : undefined,
     });
   }
 }
