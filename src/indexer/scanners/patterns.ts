@@ -241,6 +241,43 @@ export const DECLARATION_PATTERNS = {
   endchecker: /\bendchecker\b/g,
 
   // -------------------------------------------------------------------------
+  // Configuration Block Declarations
+  // -------------------------------------------------------------------------
+
+  /**
+   * Configuration block declaration.
+   *
+   * Groups: [1]=name
+   */
+  config: /\bconfig\s+(\w+)/g,
+
+  /**
+   * End of configuration block.
+   */
+  endconfig: /\bendconfig\b/g,
+
+  /**
+   * Design statement in config block.
+   *
+   * Groups: [1]=design_name
+   */
+  configDesign: /\bdesign\s+(\w+(?:\.\w+)?)/g,
+
+  /**
+   * Default liblist in config block.
+   *
+   * Groups: [1]=library_list
+   */
+  configDefaultLiblist: /\bdefault\s+liblist\s+([\w\s]+?)(?=;)/g,
+
+  /**
+   * Cell use statement in config block.
+   *
+   * Groups: [1]=cell_name, [2]=use_name or liblist
+   */
+  configCellUse: /\bcell\s+(\w+)\s+(?:use\s+(\w+)|liblist\s+([\w\s]+?))(?=;)/g,
+
+  // -------------------------------------------------------------------------
   // Function/Task Declarations
   // -------------------------------------------------------------------------
 

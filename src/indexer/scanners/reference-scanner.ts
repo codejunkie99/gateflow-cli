@@ -38,7 +38,7 @@ import {
   DIRECTIVE_PATTERNS,
   copyPattern,
 } from './patterns.js';
-import { ScopeTracker, buildScopeLookup, type ScopeLookup } from './scope-tracker.js';
+import { buildScopeLookup, type ScopeLookup, type GuardLookup } from './scope-tracker.js';
 
 // ============================================================================
 // Types
@@ -85,23 +85,26 @@ export function scanReferences(
   filePath: string,
   lineOffsets: LineOffsets,
   declarations: Declaration[],
-  scopeLookup?: ScopeLookup
+  scopeLookup?: ScopeLookup,
+  guardLookup?: GuardLookup
 ): ReferenceScanResult {
   const references: Reference[] = [];
-  const scopeTracker = new ScopeTracker();
 
   // Build scope lookup from declarations if not provided
   const getScope = scopeLookup || buildScopeLookup(declarations);
 
+  // Default guard lookup returns undefined (no guards)
+  const getGuard: GuardLookup = guardLookup || (() => undefined);
+
   // Build set of known declaration names for filtering
   const declNames = new Set(declarations.map((d) => d.name));
 
-  // Scan different reference types (pass getScope for scope lookup)
-  scanImports(content, filePath, lineOffsets, scopeTracker, references, getScope);
-  scanExtends(content, filePath, lineOffsets, scopeTracker, references, getScope);
-  scanMacroUsages(content, filePath, lineOffsets, scopeTracker, references, getScope);
-  scanAssertions(content, filePath, lineOffsets, scopeTracker, references, getScope);
-  scanScopedIdentifiers(content, filePath, lineOffsets, scopeTracker, references, getScope);
+  // Scan different reference types (pass getScope and getGuard for lookups)
+  scanImports(content, filePath, lineOffsets, references, getScope, getGuard);
+  scanExtends(content, filePath, lineOffsets, references, getScope, getGuard);
+  scanMacroUsages(content, filePath, lineOffsets, references, getScope, getGuard);
+  scanAssertions(content, filePath, lineOffsets, references, getScope, getGuard);
+  scanScopedIdentifiers(content, filePath, lineOffsets, references, getScope, getGuard);
 
   // Sort references by location
   references.sort((a, b) => {
@@ -125,16 +128,16 @@ function scanImports(
   content: string,
   filePath: string,
   lineOffsets: LineOffsets,
-  scopeTracker: ScopeTracker,
   references: Reference[],
-  getScope: ScopeLookup
+  getScope: ScopeLookup,
+  getGuard: GuardLookup
 ): void {
   const pattern = copyPattern(REFERENCE_PATTERNS.import);
   let match;
 
   while ((match = pattern.exec(content)) !== null) {
     const loc = getLocation(lineOffsets, match.index);
-    const guard = scopeTracker.getGuard();
+    const guard = getGuard(loc.line);
 
     const packageName = match[1];
     const memberName = match[2]; // Could be "*" for wildcard
@@ -163,16 +166,16 @@ function scanExtends(
   content: string,
   filePath: string,
   lineOffsets: LineOffsets,
-  scopeTracker: ScopeTracker,
   references: Reference[],
-  getScope: ScopeLookup
+  getScope: ScopeLookup,
+  getGuard: GuardLookup
 ): void {
   const pattern = copyPattern(REFERENCE_PATTERNS.extends);
   let match;
 
   while ((match = pattern.exec(content)) !== null) {
     const loc = getLocation(lineOffsets, match.index);
-    const guard = scopeTracker.getGuard();
+    const guard = getGuard(loc.line);
 
     references.push({
       id: locationId(filePath, loc.line, loc.col),
@@ -193,9 +196,9 @@ function scanMacroUsages(
   content: string,
   filePath: string,
   lineOffsets: LineOffsets,
-  scopeTracker: ScopeTracker,
   references: Reference[],
-  getScope: ScopeLookup
+  getScope: ScopeLookup,
+  getGuard: GuardLookup
 ): void {
   const pattern = copyPattern(DIRECTIVE_PATTERNS.macroUsage);
   let match;
@@ -226,7 +229,7 @@ function scanMacroUsages(
     }
 
     const loc = getLocation(lineOffsets, match.index);
-    const guard = scopeTracker.getGuard();
+    const guard = getGuard(loc.line);
 
     references.push({
       id: locationId(filePath, loc.line, loc.col),
@@ -246,9 +249,9 @@ function scanAssertions(
   content: string,
   filePath: string,
   lineOffsets: LineOffsets,
-  scopeTracker: ScopeTracker,
   references: Reference[],
-  getScope: ScopeLookup
+  getScope: ScopeLookup,
+  getGuard: GuardLookup
 ): void {
   // Assert property
   let pattern = copyPattern(REFERENCE_PATTERNS.assertProperty);
@@ -256,7 +259,7 @@ function scanAssertions(
 
   while ((match = pattern.exec(content)) !== null) {
     const loc = getLocation(lineOffsets, match.index);
-    const guard = scopeTracker.getGuard();
+    const guard = getGuard(loc.line);
 
     references.push({
       id: locationId(filePath, loc.line, loc.col),
@@ -273,7 +276,7 @@ function scanAssertions(
 
   while ((match = pattern.exec(content)) !== null) {
     const loc = getLocation(lineOffsets, match.index);
-    const guard = scopeTracker.getGuard();
+    const guard = getGuard(loc.line);
 
     references.push({
       id: locationId(filePath, loc.line, loc.col),
@@ -290,7 +293,7 @@ function scanAssertions(
 
   while ((match = pattern.exec(content)) !== null) {
     const loc = getLocation(lineOffsets, match.index);
-    const guard = scopeTracker.getGuard();
+    const guard = getGuard(loc.line);
 
     references.push({
       id: locationId(filePath, loc.line, loc.col),
@@ -310,16 +313,16 @@ function scanScopedIdentifiers(
   content: string,
   filePath: string,
   lineOffsets: LineOffsets,
-  scopeTracker: ScopeTracker,
   references: Reference[],
-  getScope: ScopeLookup
+  getScope: ScopeLookup,
+  getGuard: GuardLookup
 ): void {
   const pattern = copyPattern(REFERENCE_PATTERNS.scopedId);
   let match;
 
   while ((match = pattern.exec(content)) !== null) {
     const loc = getLocation(lineOffsets, match.index);
-    const guard = scopeTracker.getGuard();
+    const guard = getGuard(loc.line);
 
     const scopeName = match[1];
     const memberName = match[2];
