@@ -339,12 +339,13 @@ export interface FileDependency {
    * - 'imports': fromFile imports a package from toFile
    * - 'includes': fromFile `includes toFile
    * - 'extends': fromFile has a class that extends one from toFile
+   * - 'uses_macro': fromFile uses a macro defined in toFile
    */
-  reason: 'instantiates' | 'imports' | 'includes' | 'extends';
+  reason: 'instantiates' | 'imports' | 'includes' | 'extends' | 'uses_macro';
 
   /**
    * Name of the entity causing the dependency.
-   * e.g., module name, package name, included file path, class name
+   * e.g., module name, package name, included file path, class name, macro name
    */
   entityName: string;
 }

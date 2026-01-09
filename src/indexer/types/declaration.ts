@@ -25,7 +25,7 @@ import type { Location, Guard } from './location.js';
  * Grouped by category:
  *
  * **Design Units (top-level constructs):**
- * - module, package, interface, class, program
+ * - module, package, interface, class, program, config
  *
  * **Behavioral Constructs:**
  * - function, task
@@ -58,6 +58,7 @@ export type DeclarationKind =
   | 'interface'
   | 'class'
   | 'program'
+  | 'config'
 
   // Behavioral constructs
   | 'function'
@@ -263,6 +264,7 @@ export type DeclarationData =
   | InterfaceData
   | ClassData
   | ProgramData
+  | ConfigData
 
   // Behavioral
   | FunctionData
@@ -340,6 +342,45 @@ export interface ClassData {
 export interface ProgramData {
   kind: 'program';
   // Programs have no extra data
+}
+
+/**
+ * Data for configuration block declarations.
+ *
+ * Configuration blocks control module binding during elaboration.
+ * They can specify which module implementations to use.
+ *
+ * @example
+ * ```systemverilog
+ * config my_config;
+ *   design top.rtl;
+ *   default liblist rtl_lib;
+ *   cell dff use dff_lp;
+ * endconfig
+ * ```
+ */
+export interface ConfigData {
+  kind: 'config';
+  /** Design statement specifying the top module */
+  designStatement?: string;
+  /** Default library list */
+  defaultLiblist?: string[];
+  /** Cell use statements mapping cells to implementations */
+  cellUseStatements: ConfigCellUse[];
+}
+
+/**
+ * A cell use statement in a configuration block.
+ *
+ * Maps a cell (module) to a specific implementation.
+ */
+export interface ConfigCellUse {
+  /** Cell/module name to configure */
+  cellName: string;
+  /** Library to use */
+  libName?: string;
+  /** Specific module implementation to use */
+  useName?: string;
 }
 
 // Behavioral -----------------------------------------------------------------
