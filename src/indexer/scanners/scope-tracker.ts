@@ -472,8 +472,8 @@ export type ScopeLookup = (line: number) => string[];
  * Build a scope lookup function from declarations.
  *
  * This creates a fast lookup that returns the scope chain for any line number.
- * Uses the declarations' start lines and endLine data (if available) to
- * determine scope boundaries.
+ * Uses the declarations' start lines, endLine data, and scope property to
+ * determine scope boundaries with proper nesting.
  *
  * @param declarations - Array of declarations to build scope from
  * @returns Function that takes a line number and returns scope chain
@@ -490,6 +490,7 @@ export function buildScopeLookup(
   declarations: Array<{
     kind: string;
     name: string;
+    scope?: string[];
     location: { line: number };
     data?: unknown;
   }>
@@ -500,7 +501,14 @@ export function buildScopeLookup(
     'function', 'task', 'generate', 'covergroup', 'clocking',
   ]);
 
-  const ranges: ScopeRange[] = [];
+  // Collect all scope-defining declarations with their metadata
+  const scopeDecls: Array<{
+    name: string;
+    kind: string;
+    startLine: number;
+    endLine: number;
+    parentScope: string[];
+  }> = [];
 
   for (const decl of declarations) {
     if (!scopeKinds.has(decl.kind)) continue;
@@ -509,40 +517,68 @@ export function buildScopeLookup(
     const data = decl.data as { endLine?: number } | undefined;
     const endLine = typeof data?.endLine === 'number' ? data.endLine : 0;
 
-    ranges.push({
+    scopeDecls.push({
       name: decl.name,
       kind: decl.kind,
       startLine: decl.location.line,
       endLine,
+      parentScope: decl.scope || [],
     });
   }
 
-  // Sort by start line for binary search
-  ranges.sort((a, b) => a.startLine - b.startLine);
+  // Sort by start line
+  scopeDecls.sort((a, b) => a.startLine - b.startLine);
+
+  // Group scopes by their parent scope chain for efficient sibling lookup
+  const byParentScope = new Map<string, typeof scopeDecls>();
+  for (const decl of scopeDecls) {
+    const key = decl.parentScope.join('::');
+    if (!byParentScope.has(key)) byParentScope.set(key, []);
+    byParentScope.get(key)!.push(decl);
+  }
 
   // Return the lookup function
   return (line: number): string[] => {
-    const scope: string[] = [];
+    const result: string[] = [];
 
-    for (const range of ranges) {
-      // If this scope starts after our line, it can't contain us
-      if (range.startLine > line) continue;
+    // Recursively find containing scopes starting from root
+    const findContaining = (parentScope: string[]): void => {
+      const key = parentScope.join('::');
+      const siblings = byParentScope.get(key);
+      if (!siblings) return;
 
-      // If we have an end line, check if we're within it
-      if (range.endLine > 0 && range.endLine < line) continue;
+      for (let i = 0; i < siblings.length; i++) {
+        const current = siblings[i];
+        const nextSibling = siblings[i + 1];
 
-      // If no end line, use heuristic: scope extends to next scope start of same level
-      // For now, we only include scopes that definitely contain this line
-      if (range.endLine === 0) {
-        // Without end line, we can only be sure about immediate containment
-        // This is a limitation - properly tracking end lines would be better
-        scope.push(range.name);
-      } else {
-        scope.push(range.name);
+        // Skip if scope starts after our line
+        if (current.startLine > line) continue;
+
+        // Determine if line is contained in this scope
+        let isContained = false;
+
+        if (current.endLine > 0) {
+          // Have explicit end line - use it
+          isContained = line <= current.endLine;
+        } else {
+          // No end line - use next sibling at same level as boundary
+          // If no next sibling, scope extends indefinitely (to EOF)
+          isContained = !nextSibling || nextSibling.startLine > line;
+        }
+
+        if (isContained) {
+          result.push(current.name);
+          // Recursively check for nested scopes (children of this scope)
+          findContaining([...parentScope, current.name]);
+          // Only one scope at each level can contain the line
+          return;
+        }
       }
-    }
+    };
 
-    return scope;
+    // Start search from root level (empty parent scope)
+    findContaining([]);
+    return result;
   };
 }
 
@@ -558,6 +594,7 @@ export function buildScopeRanges(
   declarations: Array<{
     kind: string;
     name: string;
+    scope?: string[];
     location: { line: number };
     data?: unknown;
   }>
@@ -585,4 +622,59 @@ export function buildScopeRanges(
   }
 
   return ranges.sort((a, b) => a.startLine - b.startLine);
+}
+
+// ============================================================================
+// Guard Lookup Utilities
+// ============================================================================
+
+/**
+ * State of ifdef conditions (from directive scanner).
+ */
+export interface IfdefState {
+  /** Map from line number to active guard condition */
+  lineGuards: Map<number, { condition: string; inverted: boolean }>;
+}
+
+/**
+ * A function that looks up the guard condition for a given line number.
+ */
+export type GuardLookup = (line: number) => { condition: string; inverted: boolean } | undefined;
+
+/**
+ * Build a guard lookup function from ifdefState.
+ *
+ * This creates a fast lookup that returns the active guard condition for any line number.
+ * Uses the nearest preceding guard directive to determine the active condition.
+ *
+ * @param ifdefState - State from directive scanning containing lineGuards map
+ * @returns Function that takes a line number and returns guard condition
+ *
+ * @example
+ * ```typescript
+ * const guardLookup = buildGuardLookup(ifdefState);
+ *
+ * // Get guard at line 50
+ * const guard = guardLookup(50);  // { condition: 'DEBUG', inverted: false } if inside `ifdef DEBUG
+ * ```
+ */
+export function buildGuardLookup(ifdefState: IfdefState): GuardLookup {
+  // Get sorted array of [line, guard] pairs for efficient lookup
+  const entries = Array.from(ifdefState.lineGuards.entries())
+    .sort((a, b) => a[0] - b[0]);
+
+  return (line: number): { condition: string; inverted: boolean } | undefined => {
+    // Find the most recent guard that applies to this line
+    let activeGuard: { condition: string; inverted: boolean } | undefined;
+
+    for (const [guardLine, guard] of entries) {
+      if (guardLine <= line) {
+        activeGuard = guard;
+      } else {
+        break; // Past our line, no need to continue
+      }
+    }
+
+    return activeGuard;
+  };
 }

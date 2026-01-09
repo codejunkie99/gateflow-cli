@@ -6,7 +6,7 @@
  * Declarations are "birth certificates" - where things are DEFINED.
  *
  * Declaration kinds scanned:
- * - Containers: module, package, interface, class, program, checker
+ * - Containers: module, package, interface, class, program, checker, config
  * - Functions: function, task
  * - Types: typedef, struct, union, enum, enum_value
  * - Ports/Signals: port, parameter, localparam, signal
@@ -292,6 +292,23 @@ function scanContainerEvents(
       data: {
         kind: 'checker' as const,
         ports: [],
+      },
+    })
+  );
+
+  // Configuration block
+  scanContainerPair(
+    content,
+    lineOffsets,
+    events,
+    DECLARATION_PATTERNS.config,
+    DECLARATION_PATTERNS.endconfig,
+    'config',
+    (match) => ({
+      name: match[1],
+      data: {
+        kind: 'config' as const,
+        cellUseStatements: [],
       },
     })
   );

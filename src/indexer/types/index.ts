@@ -56,6 +56,7 @@ export type {
   InterfaceData,
   ClassData,
   ProgramData,
+  ConfigData,
   FunctionData,
   TaskData,
   TypedefData,
@@ -84,6 +85,7 @@ export type {
   FieldInfo,
   ModportPort,
   ClockingSignal,
+  ConfigCellUse,
 } from './declaration.js';
 
 // ============================================================================

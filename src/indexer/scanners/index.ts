@@ -104,11 +104,14 @@ export {
   createScopeTracker,
   buildScopeLookup,
   buildScopeRanges,
+  buildGuardLookup,
   type ScopeEntry,
   type GuardCondition,
   type ScopeTrackerOptions,
   type ScopeRange,
   type ScopeLookup,
+  type GuardLookup,
+  type IfdefState,
 } from './scope-tracker.js';
 
 // ============================================================================
@@ -118,7 +121,6 @@ export {
 export {
   scanDirectives,
   type DirectiveScanResult,
-  type IfdefState,
 } from './directive-scanner.js';
 
 // ============================================================================
