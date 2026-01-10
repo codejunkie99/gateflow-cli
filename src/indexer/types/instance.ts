@@ -18,6 +18,7 @@
  */
 
 import type { Location, Guard } from './location.js';
+// Note: Location is now also used for resolvedLocation field
 
 // ============================================================================
 // InstanceKind - What type of thing is being instantiated
@@ -202,10 +203,36 @@ export interface Instance {
    * ```
    *
    * This maps parameter names to their override values (as strings).
+   * Note: These are the RAW values from source code.
    *
    * @example { WIDTH: '16', DEPTH: '32' }
    */
   paramOverrides?: Record<string, string>;
+
+  /**
+   * Fully evaluated parameter values from semantic analysis.
+   *
+   * Unlike paramOverrides which contains raw source expressions,
+   * this contains the ACTUAL computed values after elaboration.
+   *
+   * Example:
+   * - paramOverrides: { WIDTH: 'DATA_WIDTH*2' }
+   * - evaluatedParams: { WIDTH: '64' }  // If DATA_WIDTH=32
+   *
+   * Populated by Layer B (slang) semantic analysis.
+   */
+  evaluatedParams?: Record<string, string>;
+
+  /**
+   * Direct location of the resolved module declaration.
+   *
+   * This provides a shortcut for "go to definition" - instead of
+   * looking up the declaration by resolvedId, you can jump directly
+   * to this location.
+   *
+   * Populated by Layer B (slang) semantic analysis.
+   */
+  resolvedLocation?: Location;
 
   // -------------------------------------------------------------------------
   // Port Connections

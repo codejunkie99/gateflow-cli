@@ -265,3 +265,4 @@ If removing legacy code:
 3. **Update types:** `ModuleInfo` → `Declaration` with `kind: 'module'`
 
 
+

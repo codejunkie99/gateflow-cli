@@ -24,6 +24,10 @@ import type { DeclarationIndex } from '../resolver/index.js';
 
 /**
  * Statistics about the hierarchy.
+ *this is basically a summary of the hierarchy.
+ *it includes the number of top-level modules, the total number of unique modules instantiated,
+ *the total number of instances, the maximum hierarchy depth, the modules that are never instantiated,
+ *and the modules that have multiple instantiations.
  */
 export interface HierarchyStats {
   /** Number of top-level modules */

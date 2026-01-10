@@ -14,8 +14,6 @@ import { fileURLToPath } from 'url';
 import { platform, arch, homedir } from 'os';
 import { execSync, exec } from 'child_process';
 import { promisify } from 'util';
-import { createGunzip } from 'zlib';
-import { pipeline } from 'stream/promises';
 import { extract as tarExtract } from 'tar';
 
 const execPromise = promisify(exec);
