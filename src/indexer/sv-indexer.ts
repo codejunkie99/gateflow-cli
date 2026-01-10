@@ -5,6 +5,17 @@
  * declarations, references, instances, and directives, then resolves
  * cross-file connections.
  *
+ * ## Architecture: Two-Layer Indexing
+ *
+ * The indexer uses a two-layer architecture for optimal performance and accuracy:
+ *
+ * - **Layer A (Verible/regex)**: Fast, syntactic parsing for instant feedback
+ * - **Layer B (slang)**: Accurate semantic analysis when available
+ *
+ * Layer A always runs first, providing immediate results. If slang is available,
+ * Layer B runs in parallel and its results are merged to provide accurate
+ * reference resolution, evaluated parameters, and complete type information.
+ *
  * ## Features
  *
  * - **Parses SystemVerilog files** to extract entities
@@ -13,6 +24,7 @@
  * - **Resolves connections** between files
  * - **Builds module hierarchy** tree
  * - **Generates dependency graph** for compile order
+ * - **Semantic analysis** via slang (when available)
  *
  * ## Quick Start
  *
@@ -24,6 +36,11 @@
  *
  * // Index a project from filelist
  * const project = await indexer.indexProject('/path/to/project.f');
+ *
+ * // Check if semantic analysis was performed
+ * if (project.hasSemanticAnalysis) {
+ *   console.log('Semantic analysis available');
+ * }
  *
  * // Query declarations
  * const modules = project.declarations.filter(d => d.kind === 'module');
@@ -68,7 +85,27 @@ export type {
   ResolvedProject,
   HierarchyNode,
   FileDependency,
+  SemanticIndex,
 } from './types/index.js';
+
+// Slang (Layer B)
+export {
+  SlangBackend,
+  canUseSlang,
+  analyzeWithSlang,
+  type SlangBackendResult,
+  type SlangBackendOptions,
+} from './slang/index.js';
+
+// Merge
+export {
+  mergeIndices,
+  combineFileResults,
+  createQueryAPI,
+  QueryAPI,
+  type MergedIndex,
+  type LayerAResult,
+} from './merge/index.js';
 
 // IDs
 export { locationId, declarationId, isLocationId, isDeclarationId } from './ids/index.js';
@@ -110,11 +147,13 @@ export {
 // Main Indexer Class
 // ============================================================================
 
-import type { ResolvedProject, FileUnderstanderResult } from './types/index.js';
+import type { ResolvedProject, FileUnderstanderResult, SemanticIndex } from './types/index.js';
 import { FileUnderstander, understandFiles } from './understander/index.js';
 import { FilelistParser, type Recipe } from './recipe/index.js';
 import { ProjectResolver } from './resolver/index.js';
 import { DependencyGraph } from './analyzer/index.js';
+import { SlangBackend, type SlangBackendOptions, type SlangBackendResult } from './slang/index.js';
+import { mergeIndices, combineFileResults, toResolvedProject, type MergedIndex } from './merge/index.js';
 
 /**
  * Main entry point for indexing SystemVerilog projects.
@@ -138,13 +177,51 @@ import { DependencyGraph } from './analyzer/index.js';
  * );
  * ```
  */
+/**
+ * Options for SVIndexer.
+ */
+export interface SVIndexerOptions {
+  /**
+   * Enable semantic analysis (Layer B) using slang.
+   * When enabled, slang will run in parallel with syntactic parsing
+   * to provide accurate reference resolution and evaluated parameters.
+   *
+   * Default: true (if slang is available)
+   */
+  enableSemanticAnalysis?: boolean;
+
+  /**
+   * Options for slang semantic analysis.
+   */
+  slangOptions?: SlangBackendOptions;
+}
+
 export class SVIndexer {
   private understander: FileUnderstander;
   private filelistParser: FilelistParser;
+  private slangBackend: SlangBackend;
+  private options: SVIndexerOptions;
 
-  constructor() {
+  constructor(options: SVIndexerOptions = {}) {
     this.understander = new FileUnderstander();
     this.filelistParser = new FilelistParser();
+    this.slangBackend = new SlangBackend(options.slangOptions);
+    this.options = {
+      enableSemanticAnalysis: options.enableSemanticAnalysis ?? true,
+      slangOptions: options.slangOptions,
+    };
+  }
+
+  /**
+   * Check if semantic analysis (slang) is available.
+   *
+   * @returns true if slang can be used
+   */
+  async isSemanticAnalysisAvailable(): Promise<boolean> {
+    if (!this.options.enableSemanticAnalysis) {
+      return false;
+    }
+    return this.slangBackend.isAvailable();
   }
 
   // --------------------------------------------------------------------------
@@ -154,6 +231,13 @@ export class SVIndexer {
   /**
    * Index a project from a filelist.
    *
+   * This method:
+   * 1. Parses the filelist to get the recipe
+   * 2. Runs Layer A (syntactic parsing) on all files
+   * 3. Optionally runs Layer B (semantic analysis) via slang
+   * 4. Merges results from both layers
+   * 5. Resolves cross-file connections
+   *
    * @param filelistPath - Path to .f file
    * @returns Resolved project with all entities
    */
@@ -161,18 +245,84 @@ export class SVIndexer {
     // Parse filelist
     const recipe = await this.filelistParser.parse(filelistPath);
 
-    // Parse all files
-    const results = await this.parseFiles(recipe.files);
+    // Run Layer A and Layer B in parallel
+    const [layerAResults, layerBResult] = await Promise.all([
+      // Layer A: Syntactic parsing
+      this.parseFiles(recipe.files),
 
-    // Resolve connections
+      // Layer B: Semantic analysis (if available)
+      this.runSemanticAnalysis(recipe),
+    ]);
+
+    // Check if we should use merged approach or legacy approach
+    if (layerBResult?.success) {
+      // Use new merged approach
+      const fileResults = layerAResults
+        .filter((r) => r.success && r.result)
+        .map((r) => r.result!);
+
+      const layerA = combineFileResults(fileResults);
+      const merged = mergeIndices(layerA, layerBResult);
+
+      // Convert to ResolvedProject format with semantic data
+      const project = toResolvedProject(merged);
+
+      // Add semantic index info
+      return {
+        ...project,
+        semantic: {
+          declarations: layerBResult.declarations,
+          references: layerBResult.references,
+          instances: layerBResult.instances,
+          source: 'slang',
+          stats: {
+            analysisTimeMs: layerBResult.meta.analysisTimeMs,
+            resolvedCount: merged.meta.stats.referencesResolved + merged.meta.stats.instancesResolved,
+            unresolvedCount: layerBResult.references.filter((r) => !r.resolvedId).length,
+          },
+        },
+        hasSemanticAnalysis: true,
+      };
+    }
+
+    // Fallback to legacy approach (Layer A only)
     const resolver = new ProjectResolver(recipe);
-    for (const result of results) {
-      if (result.success) {
-        resolver.addFile(result.result!);
+    for (const result of layerAResults) {
+      if (result.success && result.result) {
+        resolver.addFile(result.result);
       }
     }
 
-    return resolver.resolve();
+    const project = await resolver.resolve();
+    return {
+      ...project,
+      hasSemanticAnalysis: false,
+    };
+  }
+
+  /**
+   * Run semantic analysis (Layer B) if available.
+   *
+   * @param recipe - Project recipe
+   * @returns Semantic analysis result or undefined
+   */
+  private async runSemanticAnalysis(recipe: Recipe): Promise<SlangBackendResult | undefined> {
+    if (!this.options.enableSemanticAnalysis) {
+      return undefined;
+    }
+
+    try {
+      const available = await this.slangBackend.isAvailable();
+      if (!available) {
+        return undefined;
+      }
+
+      return await this.slangBackend.analyzeRecipe(recipe, this.options.slangOptions);
+    } catch (error) {
+      // Semantic analysis failed - continue with Layer A only
+      console.warn('Semantic analysis failed:', error instanceof Error ? error.message : error);
+      return undefined;
+    }
   }
 
   /**
@@ -183,18 +333,62 @@ export class SVIndexer {
    * @returns Resolved project
    */
   async indexFiles(filePaths: string[], recipe?: Recipe): Promise<ResolvedProject> {
-    // Parse all files
-    const results = await this.parseFiles(filePaths);
+    // Create a synthetic recipe if none provided
+    const effectiveRecipe: Recipe = recipe || {
+      id: `files-${filePaths.length}`,
+      sourceFile: filePaths[0],
+      files: filePaths,
+      includePaths: [],
+      defines: {},
+      nestedFilelists: [],
+    };
 
-    // Resolve connections
-    const resolver = new ProjectResolver(recipe);
-    for (const result of results) {
-      if (result.success) {
-        resolver.addFile(result.result!);
+    // Run Layer A and Layer B in parallel
+    const [layerAResults, layerBResult] = await Promise.all([
+      this.parseFiles(filePaths),
+      this.runSemanticAnalysis(effectiveRecipe),
+    ]);
+
+    // Check if we should use merged approach
+    if (layerBResult?.success) {
+      const fileResults = layerAResults
+        .filter((r) => r.success && r.result)
+        .map((r) => r.result!);
+
+      const layerA = combineFileResults(fileResults);
+      const merged = mergeIndices(layerA, layerBResult);
+      const project = toResolvedProject(merged);
+
+      return {
+        ...project,
+        semantic: {
+          declarations: layerBResult.declarations,
+          references: layerBResult.references,
+          instances: layerBResult.instances,
+          source: 'slang',
+          stats: {
+            analysisTimeMs: layerBResult.meta.analysisTimeMs,
+            resolvedCount: merged.meta.stats.referencesResolved + merged.meta.stats.instancesResolved,
+            unresolvedCount: layerBResult.references.filter((r) => !r.resolvedId).length,
+          },
+        },
+        hasSemanticAnalysis: true,
+      };
+    }
+
+    // Fallback to legacy approach
+    const resolver = new ProjectResolver(effectiveRecipe);
+    for (const result of layerAResults) {
+      if (result.success && result.result) {
+        resolver.addFile(result.result);
       }
     }
 
-    return resolver.resolve();
+    const project = await resolver.resolve();
+    return {
+      ...project,
+      hasSemanticAnalysis: false,
+    };
   }
 
   /**
@@ -282,8 +476,26 @@ export interface ParseFileResult {
 /**
  * Create a new SVIndexer instance.
  *
+ * @param options - Optional configuration
  * @returns New SVIndexer
+ *
+ * @example
+ * ```typescript
+ * // Default (semantic analysis enabled if slang available)
+ * const indexer = createSVIndexer();
+ *
+ * // Disable semantic analysis
+ * const fastIndexer = createSVIndexer({ enableSemanticAnalysis: false });
+ *
+ * // With custom slang options
+ * const customIndexer = createSVIndexer({
+ *   slangOptions: {
+ *     topModule: 'top',
+ *     timeout: 120000,
+ *   }
+ * });
+ * ```
  */
-export function createSVIndexer(): SVIndexer {
-  return new SVIndexer();
+export function createSVIndexer(options?: SVIndexerOptions): SVIndexer {
+  return new SVIndexer(options);
 }

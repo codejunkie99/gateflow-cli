@@ -181,7 +181,7 @@ export const NODE_TAGS = {
   TASK_HEADER: 'kTaskHeader',
 
   // Types
-  TYPEDEF_DECLARATION: 'kTypedefDeclaration',
+  TYPEDEF_DECLARATION: 'kTypeDeclaration',
   STRUCT_TYPE: 'kStructType',
   UNION_TYPE: 'kUnionType',
   ENUM_TYPE: 'kEnumType',
@@ -213,6 +213,7 @@ export const NODE_TAGS = {
 
   // Interface
   MODPORT_DECLARATION: 'kModportDeclaration',
+  MODPORT_ITEM_LIST: 'kModportItemList',
   MODPORT_ITEM: 'kModportItem',
   CLOCKING_DECLARATION: 'kClockingDeclaration',
 

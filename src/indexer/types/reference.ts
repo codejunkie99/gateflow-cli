@@ -177,6 +177,17 @@ export interface Reference {
    */
   resolvedId?: string;
 
+  /**
+   * Direct location of the resolved declaration.
+   *
+   * This provides a shortcut for "go to definition" - instead of
+   * looking up the declaration by resolvedId, you can jump directly
+   * to this location.
+   *
+   * Populated by Layer B (slang) semantic analysis.
+   */
+  resolvedLocation?: Location;
+
   // -------------------------------------------------------------------------
   // Conditional Compilation
   // -------------------------------------------------------------------------

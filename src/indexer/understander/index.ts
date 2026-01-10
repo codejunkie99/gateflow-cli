@@ -73,4 +73,8 @@ export {
   // Batch processing
   understandFiles,
   type UnderstandFilesResult,
+
+  // Options and types
+  type FileUnderstanderOptions,
+  type ParserBackend,
 } from './file-understander.js';

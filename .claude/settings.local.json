@@ -3,7 +3,8 @@
     "allow": [
       "Bash(git push:*)",
       "WebSearch",
-      "Bash(node dist/cli/main.js:*)"
+      "Bash(node dist/cli/main.js:*)",
+      "Bash(cat:*)"
     ]
   }
 }

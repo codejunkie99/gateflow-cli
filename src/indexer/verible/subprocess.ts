@@ -94,11 +94,12 @@ async function execVerible(
     });
 
     // Handle abort signal
+    const abortHandler = () => {
+      killed = true;
+      proc.kill('SIGTERM');
+    };
     if (signal) {
-      signal.addEventListener('abort', () => {
-        killed = true;
-        proc.kill('SIGTERM');
-      });
+      signal.addEventListener('abort', abortHandler);
     }
 
     // Set timeout
@@ -122,12 +123,14 @@ async function execVerible(
     // Handle errors
     proc.on('error', (err) => {
       if (timeoutId) clearTimeout(timeoutId);
+      if (signal) signal.removeEventListener('abort', abortHandler);
       reject(new Error(`Failed to execute ${binary}: ${err.message}`));
     });
 
     // Handle completion
     proc.on('close', (exitCode) => {
       if (timeoutId) clearTimeout(timeoutId);
+      if (signal) signal.removeEventListener('abort', abortHandler);
 
       resolve({
         exitCode,
@@ -154,7 +157,7 @@ export async function parseFile(
   filePath: string,
   options: VeribleExecOptions = {}
 ): Promise<VeribleParseResult> {
-  const args = ['--export_json', '--printtree', filePath];
+  const args = ['--printtree', '--export_json', filePath];
 
   const result = await execVerible('verible-verilog-syntax', args, options);
 
@@ -302,15 +305,38 @@ export async function formatContent(
   content: string,
   options: VeribleExecOptions = {}
 ): Promise<string> {
+  const { timeout = DEFAULT_TIMEOUT, cwd, env, signal } = options;
   const args = ['-'];
 
   const location = await findVeribleBinary('verible-verilog-format');
 
   return new Promise((resolve, reject) => {
+    let killed = false;
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
     const proc = spawn(location.path, args, {
+      cwd,
+      env: { ...process.env, ...env },
       stdio: ['pipe', 'pipe', 'pipe'],
       shell: false,
     });
+
+    // Handle abort signal
+    const abortHandler = () => {
+      killed = true;
+      proc.kill('SIGTERM');
+    };
+    if (signal) {
+      signal.addEventListener('abort', abortHandler);
+    }
+
+    // Set timeout
+    if (timeout > 0) {
+      timeoutId = setTimeout(() => {
+        killed = true;
+        proc.kill('SIGTERM');
+      }, timeout);
+    }
 
     let stdout = '';
     let stderr = '';
@@ -324,11 +350,18 @@ export async function formatContent(
     });
 
     proc.on('error', (err) => {
+      if (timeoutId) clearTimeout(timeoutId);
+      if (signal) signal.removeEventListener('abort', abortHandler);
       reject(new Error(`Failed to format: ${err.message}`));
     });
 
     proc.on('close', (exitCode) => {
-      if (exitCode === 0) {
+      if (timeoutId) clearTimeout(timeoutId);
+      if (signal) signal.removeEventListener('abort', abortHandler);
+
+      if (killed) {
+        reject(new Error('Format operation timed out or was aborted'));
+      } else if (exitCode === 0) {
         resolve(stdout);
       } else {
         reject(new Error(`Formatter failed: ${stderr}`));

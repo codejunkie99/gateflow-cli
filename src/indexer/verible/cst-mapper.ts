@@ -252,6 +252,18 @@ export class CSTMapper {
         this.visitBindDirective(node, context);
         break;
 
+      // Preprocessor directives
+      case NODE_TAGS.PREPROCESS_INCLUDE:
+        this.visitPreprocessorInclude(node, context);
+        break;
+      case NODE_TAGS.PREPROCESS_DEFINE:
+        this.visitPreprocessorDefine(node, context);
+        break;
+      case NODE_TAGS.PREPROCESS_IFDEF:
+      case NODE_TAGS.PREPROCESS_IFNDEF:
+        this.visitPreprocessorIfdef(node, context);
+        break;
+
       // Default: recurse into children
       default:
         this.visitChildren(node, context);
@@ -292,7 +304,7 @@ export class CSTMapper {
       location,
       scope: [...context.scope],
       parentId: context.parentId,
-      guard: context.guard,
+
       data: {
         kind: 'module',
         params,
@@ -326,7 +338,7 @@ export class CSTMapper {
       location,
       scope: [...context.scope],
       parentId: context.parentId,
-      guard: context.guard,
+
       data: { kind: 'package' } as PackageData,
     };
 
@@ -359,11 +371,10 @@ export class CSTMapper {
       location,
       scope: [...context.scope],
       parentId: context.parentId,
-      guard: context.guard,
+
       data: {
         kind: 'interface',
         params,
-        modports: [],
       } as InterfaceData,
     };
 
@@ -399,7 +410,6 @@ export class CSTMapper {
         targetName: extendsClass,
         location: extendsLoc,
         scope: [...context.scope],
-        guard: context.guard,
       });
     }
 
@@ -411,12 +421,11 @@ export class CSTMapper {
       location,
       scope: [...context.scope],
       parentId: context.parentId,
-      guard: context.guard,
+
       data: {
         kind: 'class',
-        extendsClass,
+        extendsName: extendsClass,
         isVirtual: this.hasKeyword(node, 'virtual'),
-        isAbstract: this.hasKeyword(node, 'pure'),
       } as ClassData,
     };
 
@@ -447,7 +456,7 @@ export class CSTMapper {
       location,
       scope: [...context.scope],
       parentId: context.parentId,
-      guard: context.guard,
+
       data: { kind: 'program' },
     };
 
@@ -478,7 +487,7 @@ export class CSTMapper {
       location,
       scope: [...context.scope],
       parentId: context.parentId,
-      guard: context.guard,
+
       data: { kind: 'checker', ports: [] },
     };
 
@@ -509,7 +518,7 @@ export class CSTMapper {
       location,
       scope: [...context.scope],
       parentId: context.parentId,
-      guard: context.guard,
+
       data: { kind: 'config', cellUseStatements: [] },
     };
 
@@ -539,13 +548,11 @@ export class CSTMapper {
       location,
       scope: [...context.scope],
       parentId: context.parentId,
-      guard: context.guard,
+
       data: {
         kind: 'function',
         returnType,
         args,
-        isAutomatic: this.hasKeyword(node, 'automatic'),
-        isStatic: this.hasKeyword(node, 'static'),
       } as FunctionData,
     };
 
@@ -578,12 +585,10 @@ export class CSTMapper {
       location,
       scope: [...context.scope],
       parentId: context.parentId,
-      guard: context.guard,
+
       data: {
         kind: 'task',
         args,
-        isAutomatic: this.hasKeyword(node, 'automatic'),
-        isStatic: this.hasKeyword(node, 'static'),
       } as TaskData,
     };
 
@@ -620,7 +625,7 @@ export class CSTMapper {
       location,
       scope: [...context.scope],
       parentId: context.parentId,
-      guard: context.guard,
+
       data: {
         kind: 'typedef',
         underlyingType: baseType,
@@ -657,7 +662,7 @@ export class CSTMapper {
       location,
       scope: [...context.scope],
       parentId: context.parentId,
-      guard: context.guard,
+
       data: kind === 'parameter'
         ? { kind: 'parameter', paramType, defaultValue }
         : { kind: 'localparam', paramType, value: defaultValue || '' },
@@ -685,7 +690,7 @@ export class CSTMapper {
       location,
       scope: [...context.scope],
       parentId: context.parentId,
-      guard: context.guard,
+
       data: {
         kind: 'port',
         direction,
@@ -728,7 +733,7 @@ export class CSTMapper {
         parentScope: [...context.scope],
         connections,
         paramOverrides,
-        guard: context.guard,
+        
       };
 
       context.instances.push(instance);
@@ -740,7 +745,6 @@ export class CSTMapper {
         targetName,
         location,
         scope: [...context.scope],
-        guard: context.guard,
       });
     }
   }
@@ -765,7 +769,7 @@ export class CSTMapper {
       bindTarget,
       location,
       parentScope: [...context.scope],
-      guard: context.guard,
+      
     };
 
     context.instances.push(instance);
@@ -792,7 +796,6 @@ export class CSTMapper {
       targetName: packageName,
       location,
       scope: [...context.scope],
-      guard: context.guard,
       data: {
         kind: 'import',
         memberName,
@@ -820,7 +823,7 @@ export class CSTMapper {
       location,
       scope: [...context.scope],
       parentId: context.parentId,
-      guard: context.guard,
+
       data: { kind: 'sequence' },
     };
 
@@ -843,7 +846,7 @@ export class CSTMapper {
       location,
       scope: [...context.scope],
       parentId: context.parentId,
-      guard: context.guard,
+
       data: { kind: 'property' },
     };
 
@@ -866,7 +869,7 @@ export class CSTMapper {
       location,
       scope: [...context.scope],
       parentId: context.parentId,
-      guard: context.guard,
+
       data: { kind: 'covergroup' },
     };
 
@@ -878,26 +881,36 @@ export class CSTMapper {
   // ---------------------------------------------------------------------------
 
   private visitModportDeclaration(node: VeribleNode, context: MapperContext): void {
-    const name = this.findIdentifier(node);
-    if (!name) return;
+    // Modport structure: kModportDeclaration -> kModportItemList -> kModportItem -> SymbolIdentifier
+    // There can be multiple modport items in a single declaration
+    for (const child of node.children) {
+      if (isNode(child) && (child.tag === 'kModportItemList' || child.tag === NODE_TAGS.MODPORT_ITEM_LIST)) {
+        for (const itemChild of child.children) {
+          if (isNode(itemChild) && (itemChild.tag === 'kModportItem' || itemChild.tag === NODE_TAGS.MODPORT_ITEM)) {
+            const name = this.findIdentifier(itemChild);
+            if (!name) continue;
 
-    const location = this.getNodeLocation(node, context);
-    const id = declarationId(context.filePath, 'modport', name, context.scope);
-    const locId = locationId(context.filePath, location.line, location.col);
+            const location = this.getNodeLocation(itemChild, context);
+            const id = declarationId(context.filePath, 'modport', name, context.scope);
+            const locId = locationId(context.filePath, location.line, location.col);
 
-    const declaration: Declaration = {
-      id,
-      locationId: locId,
-      kind: 'modport',
-      name,
-      location,
-      scope: [...context.scope],
-      parentId: context.parentId,
-      guard: context.guard,
-      data: { kind: 'modport', ports: [] },
-    };
+            const declaration: Declaration = {
+              id,
+              locationId: locId,
+              kind: 'modport',
+              name,
+              location,
+              scope: [...context.scope],
+              parentId: context.parentId,
 
-    context.declarations.push(declaration);
+              data: { kind: 'modport', ports: [] },
+            };
+
+            context.declarations.push(declaration);
+          }
+        }
+      }
+    }
   }
 
   private visitClockingDeclaration(node: VeribleNode, context: MapperContext): void {
@@ -916,7 +929,7 @@ export class CSTMapper {
       location,
       scope: [...context.scope],
       parentId: context.parentId,
-      guard: context.guard,
+
       data: { kind: 'clocking', clockEvent: '', signals: [] },
     };
 
@@ -950,7 +963,7 @@ export class CSTMapper {
       location,
       scope: [...context.scope],
       parentId: context.parentId,
-      guard: context.guard,
+
       data: { kind: 'always_block', blockType },
     };
 
@@ -972,7 +985,7 @@ export class CSTMapper {
       location,
       scope: [...context.scope],
       parentId: context.parentId,
-      guard: context.guard,
+
       data: { kind: 'initial_block' },
     };
 
@@ -994,7 +1007,7 @@ export class CSTMapper {
       location,
       scope: [...context.scope],
       parentId: context.parentId,
-      guard: context.guard,
+
       data: { kind: 'generate_block', generateType: 'for', label },
     };
 
@@ -1007,6 +1020,107 @@ export class CSTMapper {
       parentId: id,
     };
     this.visitChildren(node, childContext);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Preprocessor Handlers
+  // ---------------------------------------------------------------------------
+
+  private visitPreprocessorInclude(node: VeribleNode, context: MapperContext): void {
+    const location = this.getNodeLocation(node, context);
+    const id = locationId(context.filePath, location.line, location.col);
+
+    // Find the include path (string literal)
+    let includePath = '';
+    for (const child of node.children) {
+      if (isToken(child) && (child.tag === 'TK_StringLiteral' || child.tag === TOKEN_TAGS.STRING)) {
+        includePath = child.text.replace(/^["']|["']$/g, '');
+        break;
+      }
+    }
+
+    context.directives.push({
+      id,
+      kind: 'include',
+      location,
+      data: {
+        kind: 'include',
+        path: includePath,
+      },
+    });
+  }
+
+  private visitPreprocessorDefine(node: VeribleNode, context: MapperContext): void {
+    const location = this.getNodeLocation(node, context);
+    const id = locationId(context.filePath, location.line, location.col);
+
+    // Find the macro name and body
+    let name = '';
+    let foundDefine = false;
+    let foundName = false;
+    const bodyParts: string[] = [];
+
+    for (const child of node.children) {
+      if (isToken(child)) {
+        if (child.tag === '`define' || child.text === '`define') {
+          foundDefine = true;
+          continue;
+        }
+        if (foundDefine && !foundName && child.tag === TOKEN_TAGS.SYMBOL_IDENTIFIER) {
+          name = child.text;
+          foundName = true;
+          continue;
+        }
+        // Collect body tokens after the name
+        if (foundName) {
+          bodyParts.push(child.text);
+        }
+      }
+    }
+
+    const body = bodyParts.join(' ').trim();
+
+    context.directives.push({
+      id,
+      kind: 'define',
+      location,
+      data: {
+        kind: 'define',
+        name,
+        body,
+      },
+    });
+  }
+
+  private visitPreprocessorIfdef(node: VeribleNode, context: MapperContext): void {
+    const location = this.getNodeLocation(node, context);
+    const id = locationId(context.filePath, location.line, location.col);
+
+    // Determine if ifdef or ifndef
+    let kind: 'ifdef' | 'ifndef' = 'ifdef';
+    let condition = '';
+
+    for (const child of node.children) {
+      if (isToken(child)) {
+        if (child.tag === '`ifdef' || child.text === '`ifdef') {
+          kind = 'ifdef';
+        } else if (child.tag === '`ifndef' || child.text === '`ifndef') {
+          kind = 'ifndef';
+        } else if (child.tag === TOKEN_TAGS.SYMBOL_IDENTIFIER) {
+          condition = child.text;
+        }
+      }
+    }
+
+    context.directives.push({
+      id,
+      kind,
+      location,
+      data: {
+        kind,
+        condition,
+      },
+    });
   }
 
   // ---------------------------------------------------------------------------

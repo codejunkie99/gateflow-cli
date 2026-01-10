@@ -4,7 +4,21 @@
  * The FileUnderstander is the main orchestrator that parses a single
  * SystemVerilog file and extracts all entities from it.
  *
- * ## 7-Step Pipeline
+ * ## Parser Backends
+ *
+ * Two parser backends are available:
+ *
+ * 1. **Verible** (recommended) - Uses Verible's production-grade parser
+ *    - Full IEEE 1800-2017 compliance
+ *    - Accurate syntax tree
+ *    - Includes linting and formatting
+ *
+ * 2. **Regex** (fallback) - Uses pattern-based scanning
+ *    - No external dependencies
+ *    - Good for simple cases
+ *    - Falls back automatically if Verible unavailable
+ *
+ * ## 7-Step Regex Pipeline (when Verible unavailable)
  *
  * 1. **Read File** - Read content, compute hash, build line index
  * 2. **Line Continuation** - Join backslash-continued lines
@@ -48,6 +62,48 @@ import {
   buildScopeLookup,
   buildGuardLookup,
 } from '../scanners/index.js';
+import {
+  VeribleAdapter,
+  isVeribleAvailable,
+  type VeribleAdapterOptions,
+} from '../verible/index.js';
+
+// ============================================================================
+// Types
+// ============================================================================
+
+/**
+ * Parser backend to use.
+ */
+export type ParserBackend = 'verible' | 'regex' | 'auto';
+
+/**
+ * Options for FileUnderstander.
+ */
+export interface FileUnderstanderOptions {
+  /**
+   * Parser backend to use.
+   * - 'verible': Use Verible parser (requires Verible installed)
+   * - 'regex': Use regex-based scanners (no dependencies)
+   * - 'auto': Try Verible first, fall back to regex (default)
+   */
+  backend?: ParserBackend;
+
+  /**
+   * Include lint results when using Verible.
+   */
+  includeLint?: boolean;
+
+  /**
+   * Lint rules to enable (when includeLint is true).
+   */
+  lintRules?: string[];
+
+  /**
+   * Timeout for Verible operations in milliseconds.
+   */
+  timeout?: number;
+}
 
 // ============================================================================
 // FileUnderstander Class
@@ -56,9 +112,18 @@ import {
 /**
  * Parses SystemVerilog files and extracts all entities.
  *
+ * Supports two parser backends:
+ * - **Verible** (default): Production-grade parser with full SV support
+ * - **Regex**: Pattern-based fallback when Verible is unavailable
+ *
  * @example
  * ```typescript
+ * // Use auto-detection (tries Verible first)
  * const understander = new FileUnderstander();
+ *
+ * // Or explicitly choose backend
+ * const veribleOnly = new FileUnderstander({ backend: 'verible' });
+ * const regexOnly = new FileUnderstander({ backend: 'regex' });
  *
  * // Parse a single file
  * const result = await understander.understand('/path/to/counter.sv');
@@ -76,6 +141,18 @@ import {
  * ```
  */
 export class FileUnderstander {
+  private readonly options: FileUnderstanderOptions;
+  private verible?: VeribleAdapter;
+  private veribleChecked = false;
+  private veribleAvailable = false;
+
+  constructor(options: FileUnderstanderOptions = {}) {
+    this.options = {
+      backend: 'auto',
+      ...options,
+    };
+  }
+
   // --------------------------------------------------------------------------
   // Main Method
   // --------------------------------------------------------------------------
@@ -87,6 +164,70 @@ export class FileUnderstander {
    * @returns Complete parse result with all entities
    */
   async understand(filePath: string): Promise<FileUnderstanderResult> {
+    const backend = await this.resolveBackend();
+
+    if (backend === 'verible') {
+      return this.understandWithVerible(filePath);
+    } else {
+      return this.understandWithRegex(filePath);
+    }
+  }
+
+  /**
+   * Get the current parser backend being used.
+   */
+  async getBackend(): Promise<ParserBackend> {
+    return this.resolveBackend();
+  }
+
+  /**
+   * Check if Verible is available.
+   */
+  async isVeribleAvailable(): Promise<boolean> {
+    if (!this.veribleChecked) {
+      this.veribleAvailable = await isVeribleAvailable();
+      this.veribleChecked = true;
+    }
+    return this.veribleAvailable;
+  }
+
+  // --------------------------------------------------------------------------
+  // Verible Backend
+  // --------------------------------------------------------------------------
+
+  /**
+   * Parse a file using Verible.
+   */
+  private async understandWithVerible(filePath: string): Promise<FileUnderstanderResult> {
+    if (!this.verible) {
+      this.verible = new VeribleAdapter({
+        timeout: this.options.timeout,
+        includeLint: this.options.includeLint,
+        lintRules: this.options.lintRules,
+      });
+    }
+
+    const result = await this.verible.parseFile(filePath);
+
+    return {
+      file: result.file,
+      declarations: result.declarations,
+      references: result.references,
+      instances: result.instances,
+      directives: result.directives,
+      errors: result.errors,
+      stats: result.stats,
+    };
+  }
+
+  // --------------------------------------------------------------------------
+  // Regex Backend
+  // --------------------------------------------------------------------------
+
+  /**
+   * Parse a file using regex-based scanners.
+   */
+  private async understandWithRegex(filePath: string): Promise<FileUnderstanderResult> {
     const errors: ParseError[] = [];
     const startTime = Date.now();
 
@@ -176,6 +317,34 @@ export class FileUnderstander {
       errors,
       stats,
     };
+  }
+
+  // --------------------------------------------------------------------------
+  // Backend Resolution
+  // --------------------------------------------------------------------------
+
+  /**
+   * Resolve which backend to use based on options and availability.
+   */
+  private async resolveBackend(): Promise<'verible' | 'regex'> {
+    if (this.options.backend === 'regex') {
+      return 'regex';
+    }
+
+    if (this.options.backend === 'verible') {
+      const available = await this.isVeribleAvailable();
+      if (!available) {
+        throw new Error(
+          'Verible backend requested but Verible is not available. ' +
+          'Install Verible or use backend: "auto" to fall back to regex.'
+        );
+      }
+      return 'verible';
+    }
+
+    // Auto mode: try Verible first
+    const available = await this.isVeribleAvailable();
+    return available ? 'verible' : 'regex';
   }
 
   /**

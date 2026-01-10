@@ -65,6 +65,8 @@
         "prepublishOnly": "npm run build",
         "postinstall": "node scripts/download-verible.js || echo 'Verible download skipped'",
         "verible:download": "node scripts/download-verible.js",
-        "verible:check": "verible-verilog-syntax --version || echo 'Verible not found'"
+        "verible:check": "verible-verilog-syntax --version || echo 'Verible not found'",
+        "slang:download": "node scripts/download-slang.js",
+        "slang:check": "slang --version || echo 'slang not found'"
     }
 }

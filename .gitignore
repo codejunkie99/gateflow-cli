@@ -87,3 +87,6 @@ out/
 *.pem
 .certificates/
 
+# Verible binaries (downloaded at install time)
+binaries/
+

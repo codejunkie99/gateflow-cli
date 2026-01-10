@@ -148,4 +148,5 @@ export type {
   ResolvedProject,
   HierarchyNode,
   FileDependency,
+  SemanticIndex,
 } from './result.js';

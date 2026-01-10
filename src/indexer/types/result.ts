@@ -144,6 +144,51 @@ export interface ParseStats {
 }
 
 // ============================================================================
+// SemanticIndex - Layer B semantic analysis results
+// ============================================================================
+
+/**
+ * Results from semantic analysis (Layer B).
+ *
+ * This represents the output from slang or other semantic analyzers
+ * that provide accurate resolution information not available from
+ * syntactic parsing alone.
+ *
+ * @example
+ * ```typescript
+ * if (project.semantic) {
+ *   console.log(`Semantic analysis from: ${project.semantic.source}`);
+ *   console.log(`Resolved ${project.semantic.stats.resolvedCount} references`);
+ * }
+ * ```
+ */
+export interface SemanticIndex {
+  /** Declarations found by semantic analysis */
+  declarations: Declaration[];
+
+  /** References with resolvedId populated */
+  references: Reference[];
+
+  /** Instances with resolvedId and evaluatedParams */
+  instances: Instance[];
+
+  /** Source of semantic analysis */
+  source: 'slang' | 'verible' | 'regex';
+
+  /** Analysis statistics */
+  stats: {
+    /** Time taken for analysis (milliseconds) */
+    analysisTimeMs: number;
+
+    /** Number of references that were resolved */
+    resolvedCount: number;
+
+    /** Number of references that couldn't be resolved */
+    unresolvedCount: number;
+  };
+}
+
+// ============================================================================
 // ResolvedProject - All files connected together
 // ============================================================================
 
@@ -220,6 +265,28 @@ export interface ResolvedProject {
    * Shows which files depend on which other files.
    */
   dependencies: FileDependency[];
+
+  // -------------------------------------------------------------------------
+  // Semantic Analysis (Layer B)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Results from semantic analysis (Layer B).
+   *
+   * This is populated when slang or another semantic analyzer
+   * has processed the project. It contains more accurate resolution
+   * information than syntactic parsing alone.
+   *
+   * If undefined, only syntactic (Layer A) analysis was performed.
+   */
+  semantic?: SemanticIndex;
+
+  /**
+   * Whether semantic analysis (Layer B) was performed.
+   *
+   * This is a convenience flag - equivalent to checking `semantic !== undefined`.
+   */
+  hasSemanticAnalysis: boolean;
 }
 
 // ============================================================================
