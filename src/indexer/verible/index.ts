@@ -84,3 +84,14 @@ export {
   type VeribleLintResult,
   type VeribleLintViolation,
 } from './types.js';
+
+// Cache
+export {
+  VeribleCache,
+  getVeribleCache,
+  createVeriblePersistentCache,
+  type VeribleCacheOptions,
+  type VeribleCacheEntry,
+  type VeribleMappedResult,
+  type VeribleCacheStats,
+} from './verible-cache.js';

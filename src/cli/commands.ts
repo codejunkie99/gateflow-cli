@@ -12,7 +12,7 @@ import { EventBus, ExitCodes, type ExitCode } from '../events/index.js';
 import { PolicyEngine, initPolicyEngine } from '../approval/index.js';
 import { createTools } from '../fileops/index.js';
 import { DiffEngine } from '../diff/index.js';
-import { ProjectIndexer } from '../indexer/index.js';
+import { SVIndexerAdapter } from '../indexer/sv-indexer-adapter.js';
 import { GateFlowAgent, type ToolContext, type PromptMode } from '../agent/index.js';
 import { Verilator } from '../verification/index.js';
 import { FixLoop } from '../verification/fix-loop.js';
@@ -45,7 +45,7 @@ export interface CommandContext {
     policy: PolicyEngine;
     tools: ReturnType<typeof createTools>;
     diffEngine: DiffEngine;
-    indexer: ProjectIndexer;
+    indexer: SVIndexerAdapter;
     verilator: Verilator;
     renderer: TerminalRenderer;
     options: GlobalOptions;
@@ -109,8 +109,8 @@ export async function setupContext(options: GlobalOptions): Promise<CommandConte
     // Create diff engine
     const diffEngine = new DiffEngine(projectRoot);
 
-    // Create indexer
-    const indexer = new ProjectIndexer(projectRoot, bus);
+    // Create indexer (using new SVIndexer via adapter)
+    const indexer = new SVIndexerAdapter(projectRoot, bus);
 
     // Create Verilator instance (use VERILATOR_PATH env var if set)
     const verilatorPath = process.env.VERILATOR_PATH;
