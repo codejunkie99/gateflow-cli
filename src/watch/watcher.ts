@@ -6,7 +6,7 @@
 import chokidar, { type FSWatcher } from 'chokidar';
 import path from 'path';
 import type { EventBus } from '../events/index.js';
-import type { ProjectIndexer } from '../indexer/index.js';
+import type { SVIndexerAdapter } from '../indexer/sv-indexer-adapter.js';
 import type { Verilator } from '../verification/index.js';
 
 // ============================================================================
@@ -56,7 +56,7 @@ export class WatchManager {
     constructor(
         private rootPath: string,
         private bus: EventBus,
-        private indexer: ProjectIndexer,
+        private indexer: SVIndexerAdapter,
         private verilator?: Verilator,
         config?: Partial<WatchConfig>
     ) {

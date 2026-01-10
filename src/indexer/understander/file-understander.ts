@@ -28,6 +28,7 @@
  * @module understander/file-understander
  */
 
+import { readFile } from 'fs/promises';
 import type {
   FileUnderstanderResult,
   Declaration,
@@ -44,6 +45,11 @@ import {
   runSlangOnFiles,
   mapSlangAst,
 } from '../slang/index.js';
+import {
+  FileResultCache,
+  getFileResultCache,
+  type FileResultCacheOptions,
+} from '../cache/index.js';
 
 /**
  * Result from Slang parsing with errors included.
@@ -77,6 +83,16 @@ export interface FileUnderstanderOptions {
    * Timeout for parser operations in milliseconds.
    */
   timeout?: number;
+
+  /**
+   * Enable caching (default: true).
+   */
+  caching?: boolean;
+
+  /**
+   * Custom cache instance (uses default if not provided).
+   */
+  cache?: FileResultCache;
 }
 
 // ============================================================================
@@ -110,6 +126,7 @@ export interface FileUnderstanderOptions {
  */
 export class FileUnderstander {
   private readonly options: FileUnderstanderOptions;
+  private readonly cache: FileResultCache | null;
   private verible?: VeribleAdapter;
   private veribleChecked = false;
   private veribleAvailable = false;
@@ -118,6 +135,11 @@ export class FileUnderstander {
 
   constructor(options: FileUnderstanderOptions = {}) {
     this.options = options;
+
+    // Initialize cache (default: enabled)
+    this.cache = options.caching !== false
+      ? (options.cache ?? getFileResultCache())
+      : null;
   }
 
   // --------------------------------------------------------------------------
@@ -136,6 +158,47 @@ export class FileUnderstander {
    * @throws Error if Verible is not available (required for directives)
    */
   async understand(filePath: string): Promise<FileUnderstanderResult> {
+    // Check cache first (if enabled)
+    if (this.cache) {
+      const content = await readFile(filePath, 'utf-8');
+      const contentHash = this.cache.hashContent(content);
+
+      const cachedResult = this.cache.get(contentHash);
+      if (cachedResult) {
+        // Cache hit - rebuild lineOffsets if needed
+        if (cachedResult.file.lineOffsets.length === 0) {
+          cachedResult.file.lineOffsets = this.buildLineOffsets(content);
+        }
+        return cachedResult;
+      }
+
+      // Cache miss - parse and cache
+      const result = await this.parseAndMerge(filePath);
+      this.cache.set(contentHash, filePath, result);
+      return result;
+    }
+
+    // Caching disabled - just parse
+    return this.parseAndMerge(filePath);
+  }
+
+  /**
+   * Build line offset array from content.
+   */
+  private buildLineOffsets(content: string): number[] {
+    const offsets: number[] = [0];
+    for (let i = 0; i < content.length; i++) {
+      if (content[i] === '\n') {
+        offsets.push(i + 1);
+      }
+    }
+    return offsets;
+  }
+
+  /**
+   * Parse a file using both parsers and merge results.
+   */
+  private async parseAndMerge(filePath: string): Promise<FileUnderstanderResult> {
     // Run both parsers in parallel - both auto-download if needed
     const [slangResult, veribleResult] = await Promise.allSettled([
       this.parseWithSlang(filePath),

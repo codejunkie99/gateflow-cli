@@ -7,7 +7,7 @@ import { z } from 'zod';
 import type { EventBus } from '../events/index.js';
 import type { PolicyEngine } from '../approval/index.js';
 import type { FileTools, EditTools } from '../fileops/index.js';
-import type { ProjectIndexer } from '../indexer/index.js';
+import type { SVIndexerAdapter } from '../indexer/sv-indexer-adapter.js';
 import type { DiffEngine } from '../diff/index.js';
 import type { Verilator } from '../verification/verilator.js';
 import type { ToolRegistry, ContextFileManager, TerminalSessionManager } from '../context/index.js';
@@ -24,7 +24,7 @@ export interface ToolContext {
     policy: PolicyEngine;
     fileTools: FileTools;
     editTools: EditTools;
-    indexer: ProjectIndexer;
+    indexer: SVIndexerAdapter;
     diffEngine: DiffEngine;
     verilator?: Verilator;
     projectRoot: string;
