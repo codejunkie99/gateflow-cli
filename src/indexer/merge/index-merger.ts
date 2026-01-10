@@ -1,17 +1,17 @@
 /**
  * Index Merger Module
  *
- * Combines Layer A (Verible/regex) and Layer B (slang) results into a
- * unified index. This module is the heart of the two-layer architecture,
+ * Combines Slang (primary) and Verible (directives) results into a
+ * unified index. This module is the heart of the two-parser architecture,
  * taking the best of both worlds:
  *
- * - Layer A provides instant, syntactic-level indexing
- * - Layer B provides accurate, semantic-level resolution
+ * - Slang provides full semantic analysis (declarations, references, instances)
+ * - Verible provides directive extraction (the one thing Slang can't do)
  *
  * The merger:
- * 1. Takes Layer A as the base (always available)
- * 2. Overlays Layer B data where available (resolved references, evaluated params)
- * 3. Produces a unified view with the best possible data
+ * 1. Uses Slang results for semantics (when available)
+ * 2. Uses Verible results for directives (always)
+ * 3. Falls back to Verible for other data if Slang unavailable
  *
  * @module merge/index-merger
  */
@@ -29,7 +29,7 @@ import type { SlangBackendResult } from '../slang/slang-backend.js';
 // ============================================================================
 
 /**
- * Layer A result - syntactic parsing from Verible/regex.
+ * Layer A result - syntactic parsing from Verible (or Slang fallback).
  */
 export interface LayerAResult {
   /** File records */
@@ -119,10 +119,10 @@ export interface MergeMeta {
  *
  * @example
  * ```typescript
- * // Layer A from Verible/regex
+ * // Layer A from Verible
  * const layerA = combineFileResults(fileResults);
  *
- * // Layer B from slang (if available)
+ * // Layer B from Slang (if available)
  * const layerB = await slangBackend.analyzeRecipe(recipe);
  *
  * // Merge
