@@ -28,7 +28,15 @@ import {
   visitConfigDeclaration,
   visitFunctionDeclaration,
   visitTaskDeclaration,
+  visitDpiFunctionDeclaration,
   visitTypedefDeclaration,
+  processEnumTypedef,
+  processStructTypedef,
+  processUnionTypedef,
+  visitNetDeclaration,
+  visitDataDeclaration,
+  visitVariableDeclaration,
+  visitRegDeclaration,
   visitParameterDeclaration,
   visitPortDeclaration,
   visitAlwaysStatement,
@@ -39,22 +47,41 @@ import {
   visitSequenceDeclaration,
   visitPropertyDeclaration,
   visitCovergroupDeclaration,
+  visitConstraintDeclaration,
 } from './mappers/declaration/index.js';
 
 // Instance mapper
 import {
   visitModuleInstantiation,
   visitBindDirective,
+  registerInterface,
+  registerChecker,
 } from './mappers/instance-mapper.js';
 
 // Reference mapper
-import { visitPackageImport } from './mappers/reference-mapper.js';
+import {
+  visitPackageImport,
+  visitMacroCall,
+  visitAssertStatement,
+  visitAssumeStatement,
+  visitCoverStatement,
+  visitQualifiedId,
+} from './mappers/reference-mapper.js';
 
 // Directive mapper
 import {
   visitPreprocessorInclude,
   visitPreprocessorDefine,
   visitPreprocessorIfdef,
+  visitPreprocessorElsif,
+  visitPreprocessorElse,
+  visitPreprocessorEndif,
+  visitPreprocessorUndef,
+  visitTimescale,
+  visitDefaultNettype,
+  visitPragma,
+  visitDpiImport,
+  visitDpiExport,
 } from './mappers/directive-mapper.js';
 
 // Re-export types for external use
@@ -93,6 +120,7 @@ export class CSTMapper {
     }
 
     // Traverse the CST
+    const treeWasNull = !result.tree;
     if (result.tree) {
       this.visitNode(result.tree, context);
     }
@@ -103,6 +131,7 @@ export class CSTMapper {
       instances: context.instances,
       directives: context.directives,
       errors: context.errors,
+      treeWasNull,
     };
   }
 
@@ -123,6 +152,8 @@ export class CSTMapper {
         visitPackageDeclaration(node, context, visitChildren);
         break;
       case NODE_TAGS.INTERFACE_DECLARATION:
+        // Register interface for kind discrimination
+        registerInterface(this.getNodeName(node) || '');
         visitInterfaceDeclaration(node, context, visitChildren);
         break;
       case NODE_TAGS.CLASS_DECLARATION:
@@ -132,6 +163,9 @@ export class CSTMapper {
         visitProgramDeclaration(node, context, visitChildren);
         break;
       case NODE_TAGS.CHECKER_DECLARATION:
+      case 'kCheckerDeclaration':
+        // Register checker for kind discrimination
+        registerChecker(this.getNodeName(node) || '');
         visitCheckerDeclaration(node, context, visitChildren);
         break;
       case NODE_TAGS.CONFIG_DECLARATION:
@@ -146,16 +180,49 @@ export class CSTMapper {
         visitTaskDeclaration(node, context, visitChildren);
         break;
 
-      // Types
+      // Types - typedef with enum/struct/union detection
       case NODE_TAGS.TYPEDEF_DECLARATION:
-        visitTypedefDeclaration(node, context);
+      case 'kTypeDeclaration':
+        // Check for enum, struct, or union within typedef
+        if (!processEnumTypedef(node, context) &&
+            !processStructTypedef(node, context) &&
+            !processUnionTypedef(node, context)) {
+          // Fall back to regular typedef
+          visitTypedefDeclaration(node, context);
+        }
+        break;
+
+      // Net/Signal declarations
+      case NODE_TAGS.NET_DECLARATION:
+      case 'kNetDeclaration':
+        visitNetDeclaration(node, context);
+        break;
+      case NODE_TAGS.DATA_DECLARATION:
+      case 'kDataDeclaration':
+        visitDataDeclaration(node, context);
+        break;
+      case NODE_TAGS.VARIABLE_DECLARATION:
+      case 'kVariableDeclaration':
+        visitVariableDeclaration(node, context);
+        break;
+      case NODE_TAGS.REG_DECLARATION:
+      case 'kRegDeclaration':
+        visitRegDeclaration(node, context);
         break;
 
       // Parameters
       case NODE_TAGS.PARAMETER_DECLARATION:
+      case 'kParamDeclaration':
+      case 'kParameterDeclaration':
+        // Debug log
+        if (process.env.DEBUG_PARAMS === 'true') {
+          console.log(`[CST] Found parameter node: ${node.tag}, context scope: ${context.scope.join('.')}`);
+        }
         visitParameterDeclaration(node, context, 'parameter');
         break;
       case NODE_TAGS.LOCALPARAM_DECLARATION:
+      case 'kLocalparamDeclaration':
+      case 'kLocalParamDeclaration':
         visitParameterDeclaration(node, context, 'localparam');
         break;
 
@@ -174,7 +241,42 @@ export class CSTMapper {
         visitPackageImport(node, context);
         break;
 
-      // Assertions
+      // Macro calls
+      case NODE_TAGS.MACRO_CALL:
+      case 'kMacroCall':
+        visitMacroCall(node, context);
+        break;
+
+      // Assertions (as references)
+      case NODE_TAGS.ASSERT_STATEMENT:
+      case 'kAssertStatement':
+      case 'kAssertPropertyStatement':
+      case 'kAssertionStatement':
+      case 'kConcurrentAssertionStatement':
+        visitAssertStatement(node, context);
+        this.visitChildren(node, context);
+        break;
+      case NODE_TAGS.ASSUME_STATEMENT:
+      case 'kAssumeStatement':
+      case 'kAssumePropertyStatement':
+        visitAssumeStatement(node, context);
+        this.visitChildren(node, context);
+        break;
+      case NODE_TAGS.COVER_STATEMENT:
+      case 'kCoverStatement':
+      case 'kCoverPropertyStatement':
+      case 'kCoverSequenceStatement':
+        visitCoverStatement(node, context);
+        this.visitChildren(node, context);
+        break;
+
+      // Qualified identifiers (scoped references)
+      case NODE_TAGS.QUALIFIED_ID:
+      case 'kQualifiedId':
+        visitQualifiedId(node, context);
+        break;
+
+      // Assertion declarations
       case NODE_TAGS.SEQUENCE_DECLARATION:
         visitSequenceDeclaration(node, context);
         break;
@@ -185,6 +287,12 @@ export class CSTMapper {
       // Coverage
       case NODE_TAGS.COVERGROUP_DECLARATION:
         visitCovergroupDeclaration(node, context);
+        break;
+
+      // Constraints
+      case NODE_TAGS.CONSTRAINT_DECLARATION:
+      case 'kConstraintDeclaration':
+        visitConstraintDeclaration(node, context);
         break;
 
       // Interface
@@ -213,20 +321,85 @@ export class CSTMapper {
 
       // Preprocessor directives
       case NODE_TAGS.PREPROCESS_INCLUDE:
+      case 'kPreprocessorInclude':
         visitPreprocessorInclude(node, context);
         break;
       case NODE_TAGS.PREPROCESS_DEFINE:
+      case 'kPreprocessorDefine':
         visitPreprocessorDefine(node, context);
         break;
       case NODE_TAGS.PREPROCESS_IFDEF:
       case NODE_TAGS.PREPROCESS_IFNDEF:
+      case 'kPreprocessorIfdef':
+      case 'kPreprocessorIfndef':
         visitPreprocessorIfdef(node, context);
+        this.visitChildren(node, context);
+        break;
+      case 'kPreprocessorElsif':
+        visitPreprocessorElsif(node, context);
+        this.visitChildren(node, context);
+        break;
+      case 'kPreprocessorElse':
+        visitPreprocessorElse(node, context);
+        this.visitChildren(node, context);
+        break;
+      case 'kPreprocessorEndif':
+        visitPreprocessorEndif(node, context);
+        break;
+      case 'kPreprocessorUndef':
+        visitPreprocessorUndef(node, context);
+        break;
+      case 'kPreprocessorTimescale':
+        visitTimescale(node, context);
+        break;
+      case 'kPreprocessorDefaultNettype':
+        visitDefaultNettype(node, context);
+        break;
+      case 'kPreprocessorPragma':
+        visitPragma(node, context);
+        break;
+
+      // DPI declarations
+      case 'kDpiImportItem':
+      case 'kDPIImportItem':
+      case 'kDPIImport':
+      case 'kDpiImport':
+        visitDpiImport(node, context);
+        visitDpiFunctionDeclaration(node, context);
+        break;
+      case 'kDpiExportItem':
+      case 'kDPIExportItem':
+      case 'kDPIExport':
+      case 'kDpiExport':
+        visitDpiExport(node, context);
         break;
 
       // Default: recurse into children
       default:
+        // Log unhandled tags for debugging (only when debugging enabled)
+        if (process.env.DEBUG_CST_MAPPER === 'true') {
+          console.log(`[CST] Unhandled tag: ${node.tag}`);
+        }
         this.visitChildren(node, context);
     }
+  }
+
+  /**
+   * Get the name of a node (for registration purposes).
+   */
+  private getNodeName(node: VeribleNode): string | undefined {
+    for (const child of node.children) {
+      if (isNode(child)) {
+        if (child.tag === NODE_TAGS.UNQUALIFIED_ID || child.tag === 'kUnqualifiedId') {
+          for (const grandChild of child.children) {
+            if (!isNode(grandChild) && grandChild && 'text' in grandChild) {
+              return grandChild.text;
+            }
+          }
+        }
+      }
+    }
+    return undefined;
   }
 
   /**

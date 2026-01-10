@@ -21,6 +21,12 @@ export interface CSTMapperResult {
   instances: Instance[];
   directives: Directive[];
   errors: ParseError[];
+
+  /**
+   * True if Verible returned null tree (complete parse failure).
+   * This happens with checker constructs and some advanced SV features.
+   */
+  treeWasNull?: boolean;
 }
 
 /**

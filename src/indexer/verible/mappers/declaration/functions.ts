@@ -80,6 +80,7 @@ export function visitTaskDeclaration(
     location,
     scope: [...context.scope],
     parentId: context.parentId,
+    guard: context.guard,
     data: {
       kind: 'task',
       args,
@@ -91,4 +92,47 @@ export function visitTaskDeclaration(
   // Visit children with updated scope
   const childContext = createChildContext(context, name, id);
   visitChildren(node, childContext);
+}
+
+/**
+ * Visit a DPI import function declaration.
+ *
+ * Creates a function declaration for imported DPI-C functions.
+ * This allows go-to-definition and find-references to work on DPI functions.
+ *
+ * Handles patterns like:
+ * - import "DPI-C" function int add(int a, int b);
+ * - import "DPI-C" context function void callback();
+ */
+export function visitDpiFunctionDeclaration(
+  node: VeribleNode,
+  context: MapperContext
+): void {
+  const name = findIdentifier(node);
+  if (!name) return;
+
+  const location = getNodeLocation(node, context);
+  const id = declarationId(context.filePath, 'function', name, context.scope);
+  const locId = locationId(context.filePath, location.line, location.col);
+
+  const returnType = extractReturnType(node);
+  const args = extractFunctionArgs(node);
+
+  const declaration: Declaration = {
+    id,
+    locationId: locId,
+    kind: 'function',
+    name,
+    location,
+    scope: [...context.scope],
+    parentId: context.parentId,
+    guard: context.guard,
+    data: {
+      kind: 'function',
+      returnType,
+      args,
+    } as FunctionData,
+  };
+
+  context.declarations.push(declaration);
 }
