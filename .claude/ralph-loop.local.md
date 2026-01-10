@@ -1,9 +1,9 @@
 ---
 active: true
 iteration: 1
-max_iterations: 15
-completion_promise: "AUDIT COMMAND COMPLETE"
-started_at: "2026-01-09T19:15:13Z"
+max_iterations: 0
+completion_promise: null
+started_at: "2026-01-10T22:21:36Z"
 ---
 
-Write an audit command that analyzes code quality, identifies issues, and generates reports. Signal completion with promise tag AUDIT COMMAND COMPLETE when fully implemented and tested.
+Keep going through src/indexer and keep running tests on it to see if it is working
