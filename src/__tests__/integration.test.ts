@@ -71,7 +71,7 @@ describe('Integration Tests', () => {
 
             const refactoring = createRefactoringAgent(mockTools as any);
             expect(refactoring.name).toBe('refactoring');
-        });
+        }, 15000);  // Increase timeout for dynamic import of heavy modules
     });
 });
 

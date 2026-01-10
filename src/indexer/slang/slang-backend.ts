@@ -13,6 +13,8 @@
  * @module slang/slang-backend
  */
 
+import { homedir } from 'os';
+import { join } from 'path';
 import type { Recipe } from '../recipe/index.js';
 import type { Declaration } from '../types/declaration.js';
 import type { Reference } from '../types/reference.js';
@@ -27,6 +29,9 @@ import {
   type SlangMappingResult,
 } from './slang-mapper.js';
 import { SlangCache, createPersistentCache, type CacheOptions } from './slang-cache.js';
+
+// Default cache directory under ~/.gateflow/cache/slang/
+const DEFAULT_SLANG_CACHE_DIR = join(homedir(), '.gateflow', 'cache', 'slang');
 
 // ============================================================================
 // Types
@@ -120,14 +125,19 @@ export class SlangBackend {
 
   constructor(options: SlangBackendOptions = {}) {
     const caching = options.caching ?? true;
-    this.cache = caching
-      ? options.cacheOptions?.persistent
-        ? createPersistentCache(
-            options.cacheOptions.cacheDir || '.sv-indexer-cache',
-            options.cacheOptions.slangVersion
-          )
-        : new SlangCache(options.cacheOptions)
-      : new SlangCache({ maxEntries: 0 }); // Effectively disabled
+
+    if (!caching) {
+      // Caching explicitly disabled
+      this.cache = new SlangCache({ maxEntries: 0 });
+    } else if (options.cacheOptions?.persistent === false) {
+      // Persistent explicitly disabled, use memory-only cache
+      this.cache = new SlangCache(options.cacheOptions);
+    } else {
+      // Default: persistent caching enabled
+      // Use provided cacheDir or default to ~/.gateflow/cache/slang/
+      const cacheDir = options.cacheOptions?.cacheDir || DEFAULT_SLANG_CACHE_DIR;
+      this.cache = createPersistentCache(cacheDir, options.cacheOptions?.slangVersion);
+    }
   }
 
   // ---------------------------------------------------------------------------

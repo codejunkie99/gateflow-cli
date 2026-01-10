@@ -13,6 +13,7 @@ import { readFile } from 'fs/promises';
 import { parseFile, parseFiles, lintFile, formatContent, type VeribleExecOptions } from './subprocess.js';
 import { createCSTMapper, type CSTMapperResult } from './cst-mapper.js';
 import { isVeribleAvailable, binaryManager } from './binary-manager.js';
+import { getVeribleCache, type VeribleCache, type VeribleMappedResult } from './verible-cache.js';
 import type { VeribleLintResult } from './types.js';
 import type { FileRecord } from '../types/file.js';
 import type { Declaration } from '../types/declaration.js';
@@ -38,6 +39,12 @@ export interface VeribleAdapterOptions {
 
   /** Lint rules to enable (if includeLint is true) */
   lintRules?: string[];
+
+  /** Enable caching (default: true) */
+  caching?: boolean;
+
+  /** Custom cache instance (uses default if not provided) */
+  cache?: VeribleCache;
 }
 
 /**
@@ -106,13 +113,21 @@ export interface VeribleParseFileResult {
 export class VeribleAdapter {
   private readonly options: VeribleAdapterOptions;
   private readonly mapper = createCSTMapper();
+  private readonly cache: VeribleCache | null;
+  private veribleVersionChecked = false;
 
   constructor(options: VeribleAdapterOptions = {}) {
     this.options = {
       timeout: 30000,
       includeLint: false,
+      caching: true,
       ...options,
     };
+
+    // Initialize cache (default: enabled)
+    this.cache = this.options.caching !== false
+      ? (this.options.cache ?? getVeribleCache())
+      : null;
   }
 
   /**
@@ -145,7 +160,73 @@ export class VeribleAdapter {
     // Create file record
     const fileRecord = this.createFileRecord(filePath, content, lineOffsets);
 
-    // Parse with Verible
+    // Check cache first (if enabled)
+    if (this.cache) {
+      // Ensure Verible version is set for cache validation
+      await this.ensureVeribleVersion();
+
+      const contentHash = this.cache.hashContent(content);
+      const cachedEntry = this.cache.get(contentHash);
+
+      if (cachedEntry?.mapped) {
+        // Cache hit with mapped results - use directly
+        const parseTimeMs = Date.now() - startTime;
+        return {
+          file: fileRecord,
+          declarations: cachedEntry.mapped.declarations,
+          references: cachedEntry.mapped.references,
+          instances: cachedEntry.mapped.instances,
+          directives: cachedEntry.mapped.directives,
+          errors: cachedEntry.mapped.errors,
+          stats: {
+            parseTimeMs,
+            declarationCount: cachedEntry.mapped.declarations.length,
+            referenceCount: cachedEntry.mapped.references.length,
+            instanceCount: cachedEntry.mapped.instances.length,
+            directiveCount: cachedEntry.mapped.directives.length,
+          },
+          treeWasNull: cachedEntry.mapped.treeWasNull,
+        };
+      } else if (cachedEntry) {
+        // Cache hit with CST only - need to re-map
+        const mapperResult = this.mapper.map(
+          { file: filePath, tree: cachedEntry.parseResult.tree, errors: cachedEntry.parseResult.errors },
+          content,
+          lineOffsets
+        );
+
+        // Update cache with mapped results
+        const mapped: VeribleMappedResult = {
+          declarations: mapperResult.declarations,
+          references: mapperResult.references,
+          instances: mapperResult.instances,
+          directives: mapperResult.directives,
+          errors: mapperResult.errors,
+          treeWasNull: mapperResult.treeWasNull,
+        };
+        this.cache.set(contentHash, filePath, cachedEntry.parseResult, mapped);
+
+        const parseTimeMs = Date.now() - startTime;
+        return {
+          file: fileRecord,
+          declarations: mapperResult.declarations,
+          references: mapperResult.references,
+          instances: mapperResult.instances,
+          directives: mapperResult.directives,
+          errors: mapperResult.errors,
+          stats: {
+            parseTimeMs,
+            declarationCount: mapperResult.declarations.length,
+            referenceCount: mapperResult.references.length,
+            instanceCount: mapperResult.instances.length,
+            directiveCount: mapperResult.directives.length,
+          },
+          treeWasNull: mapperResult.treeWasNull,
+        };
+      }
+    }
+
+    // Cache miss - parse with Verible
     const execOptions: VeribleExecOptions = {
       timeout: this.options.timeout,
     };
@@ -154,6 +235,25 @@ export class VeribleAdapter {
 
     // Map CST to our types
     const mapperResult = this.mapper.map(parseResult, content, lineOffsets);
+
+    // Cache the result (if caching enabled)
+    if (this.cache) {
+      const contentHash = this.cache.hashContent(content);
+      const mapped: VeribleMappedResult = {
+        declarations: mapperResult.declarations,
+        references: mapperResult.references,
+        instances: mapperResult.instances,
+        directives: mapperResult.directives,
+        errors: mapperResult.errors,
+        treeWasNull: mapperResult.treeWasNull,
+      };
+      this.cache.set(
+        contentHash,
+        filePath,
+        { tree: parseResult.tree, errors: parseResult.errors },
+        mapped
+      );
+    }
 
     // Optionally lint
     let lintViolations: VeribleLintResult['violations'] | undefined;
@@ -181,6 +281,26 @@ export class VeribleAdapter {
       },
       treeWasNull: mapperResult.treeWasNull,
     };
+  }
+
+  /**
+   * Ensure Verible version is set for cache validation.
+   */
+  private async ensureVeribleVersion(): Promise<void> {
+    if (this.veribleVersionChecked || !this.cache) {
+      return;
+    }
+
+    try {
+      const version = await binaryManager.getVersion();
+      if (version) {
+        this.cache.setVeribleVersion(version);
+      }
+    } catch {
+      // Version detection failed, continue with 'unknown'
+    }
+
+    this.veribleVersionChecked = true;
   }
 
   /**
