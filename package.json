@@ -42,12 +42,14 @@
         "glob": "^10.3.0",
         "ora": "^8.1.1",
         "readline-sync": "^1.4.10",
+        "tar": "^7.5.2",
         "zod": "^3.23.0"
     },
     "devDependencies": {
         "@types/diff": "^5.2.0",
         "@types/node": "^20.10.0",
         "@types/readline-sync": "^1.4.8",
+        "@types/tar": "^6.1.13",
         "tsx": "^4.19.0",
         "typescript": "^5.3.3",
         "vitest": "^2.0.0"
@@ -60,6 +62,9 @@
         "lint": "tsc --noEmit",
         "test": "vitest",
         "test:unit": "vitest run",
-        "prepublishOnly": "npm run build"
+        "prepublishOnly": "npm run build",
+        "postinstall": "node scripts/download-verible.js || echo 'Verible download skipped'",
+        "verible:download": "node scripts/download-verible.js",
+        "verible:check": "verible-verilog-syntax --version || echo 'Verible not found'"
     }
 }
