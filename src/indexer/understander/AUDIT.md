@@ -1,8 +1,8 @@
-# Security & Logic Audit: Understander Module (RE-AUDIT)
+# Security & Logic Audit: Understander Module
 
-**Date:** January 9, 2026  
-**Auditor:** Code Review  
-**Severity Scale:** 🔴 Critical | 🟠 High | 🟡 Medium | 🟢 Low | ℹ️ Info
+**Date:** January 10, 2026
+**Auditor:** Code Review
+**Severity Scale:** Critical | High | Medium | Low | Info
 
 ---
 
@@ -10,83 +10,125 @@
 
 | Severity | Count | Description |
 |----------|-------|-------------|
-| 🔴 Critical | 1 | Guard state not passed to reference/instance scanners |
-| 🟠 High | 0 | No high-severity issues |
-| 🟡 Medium | 1 | `ifdefState` returned but never used |
-| 🟢 Low | 1 | Duplicate `buildLineOffsets` function |
+| Critical | 0 | No critical issues |
+| High | 0 | No high-severity issues |
+| Medium | 0 | No medium-severity issues |
+| Low | 0 | No low-severity issues |
 
-**Status:** ✅ Improved but guard state not shared
+**Status:** Clean - Two-parser architecture working correctly
+
+---
+
+## Architecture Overview
+
+The `FileUnderstander` uses a **two-parser architecture**:
+
+```
+understand(filePath)
+       │
+       ├─── Promise.all() ───┐
+       │                     │
+       ▼                     ▼
+    Slang                 Verible
+  (primary)            (directives)
+       │                     │
+       │ declarations        │ directives
+       │ references          │
+       │ instances           │
+       │                     │
+       └─────── merge ───────┘
+                │
+                ▼
+           Result
+```
+
+### Parser Responsibilities
+
+| Component | Source | Why |
+|-----------|--------|-----|
+| Declarations | Slang (fallback: Verible) | Better semantic analysis |
+| References | Slang (fallback: Verible) | Full symbol resolution |
+| Instances | Slang (fallback: Verible) | Evaluates generate blocks |
+| Directives | Verible only | Slang evaluates but doesn't report directives |
 
 ---
 
 ## File: `file-understander.ts`
 
-### 🔴 CRITICAL: Guard State Not Passed to Scanners
+### Verified Correct: Parallel Parser Execution
 
-**Location:** Lines 108-141
+**Location:** Lines 125-164
 
-**Problem:**
+**Implementation:**
 ```typescript
-const { directives, ifdefState } = scanDirectives(..., scopeTracker);
-// ifdefState contains guard information
-
-const { references } = scanReferences(..., declarations);
-// No guard state passed! References will have guard: undefined
-
-const { instances } = scanInstances(..., declarations);
-// No guard state passed! Instances will have guard: undefined
+const [slangResult, veribleResult] = await Promise.allSettled([
+  this.parseWithSlang(filePath),
+  this.parseWithVerible(filePath),
+]);
 ```
 
-The `ifdefState` from directive scanning is not passed to reference or instance scanners. This means guards are lost.
-
-**Impact:** All references and instances have `guard: undefined` even when inside `ifdef` blocks, breaking conditional compilation tracking.
-
-**Fix:** Pass `ifdefState` to `scanReferences` and `scanInstances`, or build a guard lookup function and pass it.
-
----
-
-### 🟡 MEDIUM: `ifdefState` Returned But Never Used
-
-**Location:** Lines 108, 163
-
-**Problem:**
-`ifdefState` is returned from `scanDirectives` but never used in the result or passed to other scanners.
-
-**Impact:** Dead code, wasted computation.
-
-**Fix:** Either use it (pass to scanners) or remove it from the return value.
+**Verification:**
+- Both parsers run in parallel for performance
+- `Promise.allSettled` handles failures gracefully
+- Slang failure falls back to Verible data
+- Verible failure throws clear error (required for directives)
 
 ---
 
-### 🟢 LOW: Duplicate `buildLineOffsets` Function
+### Verified Correct: Graceful Fallback
 
-**Location:** Lines 321-338
+**Location:** Lines 146-164
 
-**Problem:**
-`buildLineOffsets` duplicates functionality from `reader/line-index.ts`. Should use `buildLineIndex` instead.
+**Implementation:**
+```typescript
+return {
+  declarations: slang?.declarations ?? verible.declarations,
+  references: slang?.references ?? verible.references,
+  instances: slang?.instances ?? verible.instances,
+  directives: verible.directives,  // Always from Verible
+  // ...
+};
+```
 
-**Impact:** Code duplication, maintenance burden.
+**Verification:**
+- Slang results preferred when available
+- Falls back to Verible if Slang unavailable or fails
+- Directives always from Verible (only source)
 
-**Fix:** Import and use `buildLineIndex` from `reader/line-index.js`.
+---
+
+### Verified Correct: Error Handling
+
+**Location:** Lines 136-144, 224-227
+
+**Verification:**
+- Verible failure throws descriptive error with install instructions
+- Slang failure silently falls back (returns null)
+- Slang diagnostics converted to standard error format
 
 ---
 
 ## File: `index.ts`
 
-### ✅ VERIFIED CORRECT: Exports
+### Verified Correct: Exports
 
 **Status:** All exports are correct.
 
 ---
 
-## Recommendations
+## Security Considerations
 
-1. **Fix guard passing** - Pass `ifdefState` or guard lookup to reference/instance scanners
-2. **Remove duplicate** - Use `buildLineIndex` instead of `buildLineOffsets`
-3. **Use or remove** - Either use `ifdefState` or remove it from return value
+1. **Binary Execution:** Both Slang and Verible are executed as subprocesses
+   - Binaries auto-download from GitHub releases
+   - No user input passed to command line (file paths only)
+   - Timeouts configured to prevent hangs
+
+2. **File Access:** Only reads files specified by user
+   - No arbitrary file access
+   - Paths validated by parser binaries
 
 ---
 
 ## Summary
 
-The understander correctly orchestrates the scanning pipeline, but fails to pass guard state to reference and instance scanners, causing the critical guard tracking bug.
+The understander correctly orchestrates the two-parser architecture with proper fallback behavior and error handling. No security or logic issues identified.
