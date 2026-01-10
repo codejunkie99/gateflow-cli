@@ -15,7 +15,7 @@
 
 import { createHash } from 'crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, statSync, unlinkSync, readdirSync } from 'fs';
-import { join, dirname } from 'path';
+import { join, dirname, resolve, isAbsolute } from 'path';
 import type { Recipe } from '../recipe/index.js';
 import type { SlangMappingResult } from './slang-mapper.js';
 
@@ -289,6 +289,9 @@ export class SlangCache {
    * Also includes the configured Slang version to ensure cache
    * invalidation when Slang is upgraded.
    *
+   * IMPORTANT: This now also tracks included files (via `include directives)
+   * to ensure cache invalidation when headers change.
+   *
    * @param recipe - Recipe to hash
    * @param slangVersion - Optional Slang version override (uses configured version if not provided)
    * @returns Hash string that includes mtimes and version
@@ -296,6 +299,7 @@ export class SlangCache {
   hashRecipeWithMtimes(recipe: Recipe, slangVersion?: string): string {
     const fileMtimes: Record<string, number> = {};
 
+    // Track main source files
     for (const file of recipe.files) {
       try {
         const stat = statSync(file);
@@ -303,6 +307,19 @@ export class SlangCache {
       } catch {
         // File doesn't exist or can't be accessed
         fileMtimes[file] = 0;
+      }
+    }
+
+    // Track included files (resolves `include directives)
+    const includedFiles = this.findIncludedFiles(recipe);
+    for (const file of includedFiles) {
+      if (!fileMtimes[file]) { // Don't duplicate if already tracked
+        try {
+          const stat = statSync(file);
+          fileMtimes[file] = stat.mtimeMs;
+        } catch {
+          fileMtimes[file] = 0;
+        }
       }
     }
 
@@ -314,6 +331,7 @@ export class SlangCache {
       defines: Object.entries(recipe.defines).sort(),
       includePaths: [...recipe.includePaths].sort(),
       mtimes: Object.entries(fileMtimes).sort(),
+      includedFiles: [...includedFiles].sort(), // Track which files were included
       slangVersion: effectiveVersion,
     };
 
@@ -383,6 +401,82 @@ export class SlangCache {
     for (const [key] of toRemove) {
       this.memoryCache.delete(key);
     }
+  }
+
+  // ---------------------------------------------------------------------------
+  // Private: Include File Detection
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Find all files included via `include directives in the recipe.
+   *
+   * This scans source files for `include statements and resolves them
+   * using the recipe's include paths.
+   *
+   * @param recipe - Recipe to scan
+   * @returns Set of absolute paths to included files
+   */
+  private findIncludedFiles(recipe: Recipe): Set<string> {
+    const includedFiles = new Set<string>();
+    const includePattern = /`include\s+"([^"]+)"/g;
+
+    for (const sourceFile of recipe.files) {
+      try {
+        const content = readFileSync(sourceFile, 'utf-8');
+        let match: RegExpExecArray | null;
+
+        while ((match = includePattern.exec(content)) !== null) {
+          const includePath = match[1];
+          const resolvedPath = this.resolveIncludePath(includePath, sourceFile, recipe.includePaths);
+
+          if (resolvedPath && existsSync(resolvedPath)) {
+            includedFiles.add(resolvedPath);
+          }
+        }
+      } catch {
+        // Failed to read source file, skip
+        continue;
+      }
+    }
+
+    return includedFiles;
+  }
+
+  /**
+   * Resolve an include path using recipe include directories.
+   *
+   * @param includePath - Path from `include directive
+   * @param sourceFile - File containing the include
+   * @param includePaths - Include directories to search
+   * @returns Resolved absolute path or undefined
+   */
+  private resolveIncludePath(
+    includePath: string,
+    sourceFile: string,
+    includePaths: string[]
+  ): string | undefined {
+    // Try as absolute path first
+    if (isAbsolute(includePath) && existsSync(includePath)) {
+      return includePath;
+    }
+
+    // Try relative to source file directory
+    const sourceDir = dirname(sourceFile);
+    const relativeToSource = resolve(sourceDir, includePath);
+    if (existsSync(relativeToSource)) {
+      return relativeToSource;
+    }
+
+    // Try each include path in order
+    for (const incDir of includePaths) {
+      const candidatePath = resolve(incDir, includePath);
+      if (existsSync(candidatePath)) {
+        return candidatePath;
+      }
+    }
+
+    // Not found
+    return undefined;
   }
 
   // ---------------------------------------------------------------------------

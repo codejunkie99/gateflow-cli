@@ -194,6 +194,14 @@ export interface SVIndexerOptions {
    * Options for slang semantic analysis.
    */
   slangOptions?: SlangBackendOptions;
+
+  /**
+   * Enable verbose logging for debugging and performance analysis.
+   * When enabled, logs detailed timing information and Layer B status.
+   *
+   * Default: false
+   */
+  verbose?: boolean;
 }
 
 export class SVIndexer {
@@ -242,10 +250,20 @@ export class SVIndexer {
    * @returns Resolved project with all entities
    */
   async indexProject(filelistPath: string): Promise<ResolvedProject> {
+    const startTime = performance.now();
+
     // Parse filelist
+    const parseStart = performance.now();
     const recipe = await this.filelistParser.parse(filelistPath);
+    const parseTime = performance.now() - parseStart;
+
+    if (this.options.verbose) {
+      console.log(`[Perf] Filelist parsing: ${parseTime.toFixed(2)}ms`);
+      console.log(`[Perf] Files to index: ${recipe.files.length}`);
+    }
 
     // Run Layer A and Layer B in parallel
+    const parallelStart = performance.now();
     const [layerAResults, layerBResult] = await Promise.all([
       // Layer A: Syntactic parsing
       this.parseFiles(recipe.files),
@@ -253,19 +271,40 @@ export class SVIndexer {
       // Layer B: Semantic analysis (if available)
       this.runSemanticAnalysis(recipe),
     ]);
+    const parallelTime = performance.now() - parallelStart;
+
+    if (this.options.verbose) {
+      console.log(`[Perf] Parallel analysis completed: ${parallelTime.toFixed(2)}ms`);
+    }
 
     // Check if we should use merged approach or legacy approach
     if (layerBResult?.success) {
       // Use new merged approach
+      const mergeStart = performance.now();
       const fileResults = layerAResults
         .filter((r) => r.success && r.result)
         .map((r) => r.result!);
 
       const layerA = combineFileResults(fileResults);
       const merged = mergeIndices(layerA, layerBResult);
+      const mergeTime = performance.now() - mergeStart;
+
+      if (this.options.verbose) {
+        console.log(`[Perf] Index merging: ${mergeTime.toFixed(2)}ms`);
+      }
 
       // Convert to ResolvedProject format with semantic data
+      const buildStart = performance.now();
       const project = toResolvedProject(merged);
+      const buildTime = performance.now() - buildStart;
+
+      const totalTime = performance.now() - startTime;
+
+      if (this.options.verbose) {
+        console.log(`[Perf] Project building: ${buildTime.toFixed(2)}ms`);
+        console.log(`[Perf] Total indexing time: ${totalTime.toFixed(2)}ms`);
+        console.log(`[Perf] Breakdown: parse=${parseTime.toFixed(0)}ms, analysis=${parallelTime.toFixed(0)}ms, merge=${mergeTime.toFixed(0)}ms, build=${buildTime.toFixed(0)}ms`);
+      }
 
       // Add semantic index info
       return {
@@ -286,6 +325,7 @@ export class SVIndexer {
     }
 
     // Fallback to legacy approach (Layer A only)
+    const resolveStart = performance.now();
     const resolver = new ProjectResolver(recipe);
     for (const result of layerAResults) {
       if (result.success && result.result) {
@@ -294,6 +334,14 @@ export class SVIndexer {
     }
 
     const project = await resolver.resolve();
+    const resolveTime = performance.now() - resolveStart;
+    const totalTime = performance.now() - startTime;
+
+    if (this.options.verbose) {
+      console.log(`[Perf] Project resolution: ${resolveTime.toFixed(2)}ms`);
+      console.log(`[Perf] Total indexing time: ${totalTime.toFixed(2)}ms`);
+    }
+
     return {
       ...project,
       hasSemanticAnalysis: false,
@@ -308,19 +356,52 @@ export class SVIndexer {
    */
   private async runSemanticAnalysis(recipe: Recipe): Promise<SlangBackendResult | undefined> {
     if (!this.options.enableSemanticAnalysis) {
+      if (this.options.verbose) {
+        console.log('[Layer B] Semantic analysis disabled - using syntactic analysis only');
+      }
       return undefined;
     }
 
     try {
       const available = await this.slangBackend.isAvailable();
       if (!available) {
+        console.warn('[Layer B] Slang not available - falling back to syntactic analysis');
+        console.warn('[Layer B] Install Slang for improved accuracy: https://github.com/MikePopoloski/slang');
         return undefined;
       }
 
-      return await this.slangBackend.analyzeRecipe(recipe, this.options.slangOptions);
+      if (this.options.verbose) {
+        console.log('[Layer B] Running semantic analysis with Slang...');
+      }
+
+      const result = await this.slangBackend.analyzeRecipe(recipe, this.options.slangOptions);
+
+      if (!result.success) {
+        console.warn('[Layer B] Semantic analysis completed with errors:');
+        console.warn(`[Layer B] ${result.diagnostics.filter(d => d.severity === 'error').length} errors, ${result.diagnostics.filter(d => d.severity === 'warning').length} warnings`);
+        if (this.options.verbose && result.diagnostics.length > 0) {
+          result.diagnostics.slice(0, 5).forEach(d => {
+            console.warn(`[Layer B]   ${d.severity}: ${d.message}`);
+          });
+          if (result.diagnostics.length > 5) {
+            console.warn(`[Layer B]   ... and ${result.diagnostics.length - 5} more diagnostics`);
+          }
+        }
+        return result; // Still return result even if not fully successful
+      }
+
+      if (this.options.verbose) {
+        console.log(`[Layer B] Semantic analysis successful (cached: ${result.meta.cached})`);
+        console.log(`[Layer B] Analysis time: ${result.meta.analysisTimeMs}ms`);
+      }
+
+      return result;
     } catch (error) {
       // Semantic analysis failed - continue with Layer A only
-      console.warn('Semantic analysis failed:', error instanceof Error ? error.message : error);
+      console.error('[Layer B] Semantic analysis error:', error instanceof Error ? error.message : error);
+      if (error instanceof Error && error.stack && this.options.verbose) {
+        console.error('[Layer B] Stack trace:', error.stack);
+      }
       return undefined;
     }
   }
