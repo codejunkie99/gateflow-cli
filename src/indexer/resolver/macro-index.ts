@@ -32,7 +32,10 @@ export interface MacroDefinition {
   params?: string[];
   /** Macro body/replacement text */
   body: string;
-  /** Original directive ID */
+  /**
+   * Original directive ID (declaration ID format: "decl:...")
+   * Computed from file + 'macro' + name, enabling cross-file macro lookup.
+   */
   directiveId: string;
 }
 

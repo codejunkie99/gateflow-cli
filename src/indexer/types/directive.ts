@@ -90,27 +90,33 @@ export type DirectiveKind =
  * Unlike declarations (which create entities in the design),
  * directives control how code is processed and what code is visible.
  *
+ * ID Strategy:
+ * - Macro directives (define, undef): Use declaration IDs (decl:...) because
+ *   they declare/reference named entities that can be looked up across files.
+ * - All other directives: Use location IDs (loc:...) because they are
+ *   location-specific actions without named entities.
+ *
  * @example
  * ```typescript
- * // For: `define WIDTH 8
+ * // For: `define WIDTH 8 (uses declaration ID - named macro)
  * const defineDir: Directive = {
- *   id: 'loc:abc123',
+ *   id: 'decl:abc123def456',
  *   kind: 'define',
  *   location: { file: '/path/defs.svh', line: 5, col: 1 },
  *   data: { kind: 'define', name: 'WIDTH', body: '8' }
  * };
  *
- * // For: `include "utils.svh"
+ * // For: `include "utils.svh" (uses location ID - no named entity)
  * const includeDir: Directive = {
- *   id: 'loc:def456',
+ *   id: 'loc:def456abc123',
  *   kind: 'include',
  *   location: { file: '/path/top.sv', line: 2, col: 1 },
  *   data: { kind: 'include', path: 'utils.svh' }
  * };
  *
- * // For: `ifdef DEBUG
+ * // For: `ifdef DEBUG (uses location ID - conditional marker)
  * const ifdefDir: Directive = {
- *   id: 'loc:ghi789',
+ *   id: 'loc:ghi789jkl012',
  *   kind: 'ifdef',
  *   location: { file: '/path/top.sv', line: 10, col: 1 },
  *   data: { kind: 'ifdef', condition: 'DEBUG' }
@@ -119,14 +125,21 @@ export type DirectiveKind =
  */
 export interface Directive {
   // -------------------------------------------------------------------------
-  // ID - Location identifier
+  // ID - Directive identifier
   // -------------------------------------------------------------------------
 
   /**
-   * Location ID - Identifies WHERE this directive is.
-   * Format: "loc:<16-char-hash>"
+   * Unique identifier for this directive.
    *
-   * Computed from: file + line + col
+   * For macro directives (define, undef):
+   *   Declaration ID - Format: "decl:<16-char-hash>"
+   *   Computed from: file + kind ('macro') + name + scope
+   *   Enables lookup of macro definitions by name across files.
+   *
+   * For all other directives:
+   *   Location ID - Format: "loc:<16-char-hash>"
+   *   Computed from: file + line + col
+   *   Identifies the specific location of the directive.
    */
   id: string;
 

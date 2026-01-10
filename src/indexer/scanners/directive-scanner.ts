@@ -11,11 +11,17 @@
  * - DPI: import "DPI-C", export "DPI-C"
  * - Line control: `line
  *
+ * ID Strategy:
+ * - Macro directives (define, undef) use declarationId() because they
+ *   declare named entities that can be referenced across files.
+ * - All other directives use locationId() because they are location-specific
+ *   actions without named entities to track.
+ *
  * @module scanners/directive-scanner
  */
 
 import type { Directive, DirectiveData, LineOffsets } from '../types/index.js';
-import { locationId } from '../ids/index.js';
+import { locationId, declarationId } from '../ids/index.js';
 import { getLocation } from '../reader/index.js';
 import {
   DIRECTIVE_PATTERNS,
@@ -137,7 +143,7 @@ function scanDefines(
     };
 
     directives.push({
-      id: locationId(filePath, loc.line, loc.col),
+      id: declarationId(filePath, 'macro', match[1], []),
       kind: 'define',
       location: { file: filePath, line: loc.line, col: loc.col },
       data,
@@ -167,7 +173,7 @@ function scanUndefs(
     };
 
     directives.push({
-      id: locationId(filePath, loc.line, loc.col),
+      id: declarationId(filePath, 'macro', match[1], []),
       kind: 'undef',
       location: { file: filePath, line: loc.line, col: loc.col },
       data,
