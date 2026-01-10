@@ -154,7 +154,7 @@ export async function parseFile(
   filePath: string,
   options: VeribleExecOptions = {}
 ): Promise<VeribleParseResult> {
-  const args = ['--export_json', filePath];
+  const args = ['--export_json', '--printtree', filePath];
 
   const result = await execVerible('verible-verilog-syntax', args, options);
 
@@ -357,12 +357,41 @@ function parseVeribleJsonOutput(
   let tree: VeribleNode | null = null;
 
   if (typeof json === 'object' && json !== null) {
-    // Check for tree in different locations
-    if ('tree' in json) {
-      tree = (json as { tree: VeribleNode }).tree;
-    } else if ('tag' in json && 'children' in json) {
-      // Direct tree node
+    const jsonObj = json as Record<string, unknown>;
+
+    // Verible outputs: { "filepath": { "tree": {...} } }
+    // Check if the json has the filepath as a key
+    if (filePath in jsonObj) {
+      const fileData = jsonObj[filePath] as Record<string, unknown> | null;
+      if (fileData && typeof fileData === 'object' && 'tree' in fileData) {
+        tree = fileData.tree as VeribleNode;
+      }
+    }
+    // Also check for normalized path (forward slashes)
+    const normalizedPath = filePath.replace(/\\/g, '/');
+    if (!tree && normalizedPath in jsonObj) {
+      const fileData = jsonObj[normalizedPath] as Record<string, unknown> | null;
+      if (fileData && typeof fileData === 'object' && 'tree' in fileData) {
+        tree = fileData.tree as VeribleNode;
+      }
+    }
+    // Fallback: Check for tree directly
+    if (!tree && 'tree' in jsonObj) {
+      tree = jsonObj.tree as VeribleNode;
+    }
+    // Fallback: Check if json itself is a tree node
+    if (!tree && 'tag' in jsonObj && 'children' in jsonObj) {
       tree = json as VeribleNode;
+    }
+    // Fallback: Check first key if it's the only one and contains tree
+    if (!tree) {
+      const keys = Object.keys(jsonObj);
+      if (keys.length === 1) {
+        const firstValue = jsonObj[keys[0]] as Record<string, unknown> | null;
+        if (firstValue && typeof firstValue === 'object' && 'tree' in firstValue) {
+          tree = firstValue.tree as VeribleNode;
+        }
+      }
     }
   }
 
