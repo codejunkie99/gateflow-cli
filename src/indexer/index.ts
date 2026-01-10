@@ -861,6 +861,5 @@ export {
   createFileUnderstander,
   understandFiles,
   type FileUnderstanderOptions,
-  type ParserBackend,
   type UnderstandFilesResult,
 } from './understander/index.js';

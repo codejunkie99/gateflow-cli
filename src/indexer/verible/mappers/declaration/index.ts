@@ -22,10 +22,33 @@ export {
 export {
   visitFunctionDeclaration,
   visitTaskDeclaration,
+  visitDpiFunctionDeclaration,
 } from './functions.js';
 
 // Typedefs
 export { visitTypedefDeclaration } from './typedefs.js';
+
+// Enums
+export {
+  visitEnumType,
+  processEnumTypedef,
+} from './enums.js';
+
+// Structs and Unions
+export {
+  visitStructType,
+  visitUnionType,
+  processStructTypedef,
+  processUnionTypedef,
+} from './structs.js';
+
+// Variables/Signals
+export {
+  visitNetDeclaration,
+  visitDataDeclaration,
+  visitVariableDeclaration,
+  visitRegDeclaration,
+} from './variables.js';
 
 // Parameters and ports
 export {
@@ -43,4 +66,5 @@ export {
   visitSequenceDeclaration,
   visitPropertyDeclaration,
   visitCovergroupDeclaration,
+  visitConstraintDeclaration,
 } from './procedural.js';

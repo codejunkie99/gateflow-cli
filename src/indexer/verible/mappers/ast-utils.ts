@@ -11,19 +11,35 @@ import { isNode, isToken, NODE_TAGS, TOKEN_TAGS } from '../types.js';
 
 /**
  * Find the first identifier in a node.
+ * Searches for SymbolIdentifier tokens in common locations.
  */
 export function findIdentifier(node: VeribleNode): string | undefined {
   for (const child of node.children) {
-    if (isToken(child) && child.tag === TOKEN_TAGS.SYMBOL_IDENTIFIER) {
-      return child.text;
+    // Check for identifier tokens (various tag names Verible uses)
+    if (isToken(child)) {
+      if (child.tag === TOKEN_TAGS.SYMBOL_IDENTIFIER ||
+          child.tag === 'SymbolIdentifier') {
+        return child.text;
+      }
     }
     if (isNode(child)) {
+      // Check kUnqualifiedId nodes
       if (child.tag === NODE_TAGS.UNQUALIFIED_ID || child.tag === 'kUnqualifiedId') {
         const id = findIdentifier(child);
         if (id) return id;
       }
-      // Check first few children of header nodes
+      // Check header nodes (kModuleHeader, kFunctionHeader, etc.)
       if (child.tag.includes('Header')) {
+        const id = findIdentifier(child);
+        if (id) return id;
+      }
+      // Check kParamType for parameters
+      if (child.tag === 'kParamType') {
+        const id = findIdentifier(child);
+        if (id) return id;
+      }
+      // Check kTypeInfo for type declarations
+      if (child.tag === 'kTypeInfo') {
         const id = findIdentifier(child);
         if (id) return id;
       }
@@ -271,20 +287,39 @@ export function extractParameters(node: VeribleNode): Array<{
 
 /**
  * Find instance names in module instantiation.
+ * Handles Verible's structure: kInstantiationBase -> kGateInstanceRegisterVariableList -> kGateInstance
  */
 export function findInstanceNames(node: VeribleNode): string[] {
   const names: string[] = [];
-  const instanceNode = findChildByTag(node, NODE_TAGS.INSTANCE_NAME);
-  if (instanceNode) {
-    const name = findIdentifier(instanceNode);
-    if (name) names.push(name);
-  } else {
-    // Look for identifiers that are not the module type
+
+  // Look for kGateInstanceRegisterVariableList which contains kGateInstance nodes
+  const gateListNode = findChildByTag(node, NODE_TAGS.GATE_INSTANCE_LIST);
+  if (gateListNode) {
+    for (const child of gateListNode.children) {
+      if (isNode(child) && (child.tag === NODE_TAGS.INSTANCE_NAME || child.tag === 'kGateInstance')) {
+        const name = findIdentifier(child);
+        if (name) names.push(name);
+      }
+    }
+  }
+
+  // Fallback: look for NODE_TAGS.INSTANCE_NAME directly
+  if (names.length === 0) {
+    const instanceNode = findChildByTag(node, NODE_TAGS.INSTANCE_NAME);
+    if (instanceNode) {
+      const name = findIdentifier(instanceNode);
+      if (name) names.push(name);
+    }
+  }
+
+  // Fallback: look for identifiers that are not the module type
+  if (names.length === 0) {
     const allIds = findAllIdentifiers(node);
     if (allIds.length > 1) {
       names.push(allIds[1]); // Second identifier is typically the instance name
     }
   }
+
   return names;
 }
 

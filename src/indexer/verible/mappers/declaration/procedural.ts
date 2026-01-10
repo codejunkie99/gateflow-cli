@@ -262,3 +262,36 @@ export function visitCovergroupDeclaration(
 
   context.declarations.push(declaration);
 }
+
+/**
+ * Visit a constraint declaration.
+ *
+ * Handles patterns like:
+ * - constraint c_valid { data < 100; }
+ * - constraint c_range { data inside {[0:255]}; }
+ */
+export function visitConstraintDeclaration(
+  node: VeribleNode,
+  context: MapperContext
+): void {
+  const name = findIdentifier(node);
+  if (!name) return;
+
+  const location = getNodeLocation(node, context);
+  const id = declarationId(context.filePath, 'constraint', name, context.scope);
+  const locId = locationId(context.filePath, location.line, location.col);
+
+  const declaration: Declaration = {
+    id,
+    locationId: locId,
+    kind: 'constraint',
+    name,
+    location,
+    scope: [...context.scope],
+    parentId: context.parentId,
+    guard: context.guard,
+    data: { kind: 'constraint' },
+  };
+
+  context.declarations.push(declaration);
+}

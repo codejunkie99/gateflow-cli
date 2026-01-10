@@ -90,3 +90,6 @@ out/
 # Verible binaries (downloaded at install time)
 binaries/
 
+# Deprecated code (kept for reference, not for production use)
+deprecated/
+

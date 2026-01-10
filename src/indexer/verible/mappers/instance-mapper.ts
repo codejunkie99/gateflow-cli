@@ -1,14 +1,19 @@
 /**
  * Instance Mapper
  *
- * Handles module instantiation and bind directive mapping.
+ * Handles module instantiation and bind directive mapping:
+ * - Module instances
+ * - Interface instances
+ * - Checker instances
+ * - Array instances (inst[3:0])
+ * - Bind directives
  *
  * @module verible/mappers/instance-mapper
  */
 
 import type { VeribleNode } from '../types.js';
-import { isNode, NODE_TAGS } from '../types.js';
-import type { Instance, PortConnection } from '../../types/instance.js';
+import { isNode, isToken, NODE_TAGS } from '../types.js';
+import type { Instance, InstanceKind, PortConnection } from '../../types/instance.js';
 import type { MapperContext } from './types.js';
 import { getNodeLocation } from './location-utils.js';
 import {
@@ -18,8 +23,62 @@ import {
   findChildByTag,
   findInstanceNames,
   extractParameterOverrides,
+  nodeToText,
 } from './ast-utils.js';
 import { locationId } from '../../ids/index.js';
+
+// Track known interfaces and checkers for kind discrimination
+const knownInterfaces = new Set<string>();
+const knownCheckers = new Set<string>();
+
+/**
+ * Register an interface declaration for kind discrimination.
+ */
+export function registerInterface(name: string): void {
+  knownInterfaces.add(name);
+}
+
+/**
+ * Register a checker declaration for kind discrimination.
+ */
+export function registerChecker(name: string): void {
+  knownCheckers.add(name);
+}
+
+/**
+ * Determine instance kind based on target name.
+ */
+function determineInstanceKind(targetName: string): InstanceKind {
+  if (knownInterfaces.has(targetName)) {
+    return 'interface';
+  }
+  if (knownCheckers.has(targetName)) {
+    return 'checker';
+  }
+  return 'module';
+}
+
+/**
+ * Extract array range from instance name node.
+ * Returns range string like "[3:0]" or undefined if not an array instance.
+ */
+function extractArrayRange(node: VeribleNode): string | undefined {
+  for (const child of node.children) {
+    if (isNode(child)) {
+      // Look for dimension/range nodes
+      if (child.tag === 'kDimensionRange' || child.tag === 'kPackedDimensions' || child.tag === 'kUnpackedDimensions') {
+        return nodeToText(child);
+      }
+      // Look for bracket expressions
+      if (child.tag === NODE_TAGS.BRACKET_GROUP || child.tag === 'kBracketGroup') {
+        return nodeToText(child);
+      }
+      const range = extractArrayRange(child);
+      if (range) return range;
+    }
+  }
+  return undefined;
+}
 
 /**
  * Extract port connections from instantiation.
@@ -60,6 +119,12 @@ export function visitModuleInstantiation(
   // Find all instance names
   const instanceNames = findInstanceNames(node);
 
+  // Determine instance kind (module, interface, or checker)
+  const instanceKind = determineInstanceKind(targetName);
+
+  // Try to extract array range
+  const arrayRange = extractArrayRange(node);
+
   for (const instanceName of instanceNames) {
     const location = getNodeLocation(node, context);
     const id = locationId(context.filePath, location.line, location.col);
@@ -72,24 +137,26 @@ export function visitModuleInstantiation(
 
     const instance: Instance = {
       id,
-      instanceKind: 'module',
-      instanceName,
+      instanceKind,
+      instanceName: arrayRange ? `${instanceName}${arrayRange}` : instanceName,
       targetName,
       location,
       parentScope: [...context.scope],
       connections,
       paramOverrides,
+      guard: context.guard,
     };
 
     context.instances.push(instance);
 
-    // Add reference to the target module
+    // Add reference to the target module/interface/checker
     context.references.push({
       id: locationId(context.filePath, location.line, location.col + 1),
       kind: 'type_usage',
       targetName,
       location,
       scope: [...context.scope],
+      guard: context.guard,
     });
   }
 }

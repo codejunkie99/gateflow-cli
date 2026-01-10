@@ -169,10 +169,11 @@ export const NODE_TAGS = {
   PORT_ITEM: 'kPortItem',
   PORT_REFERENCE: 'kPortReference',
 
-  // Parameters
-  PARAMETER_DECLARATION: 'kParameterDeclaration',
+  // Parameters (Verible uses kParamDeclaration, not kParameterDeclaration)
+  PARAMETER_DECLARATION: 'kParamDeclaration',
   LOCALPARAM_DECLARATION: 'kLocalparamDeclaration',
   PARAMETER_PORT_LIST: 'kParameterPortList',
+  PARAM_TYPE: 'kParamType',
 
   // Functions/Tasks
   FUNCTION_DECLARATION: 'kFunctionDeclaration',
@@ -195,14 +196,15 @@ export const NODE_TAGS = {
   VARIABLE_DECLARATION: 'kVariableDeclaration',
   REG_DECLARATION: 'kRegDeclaration',
 
-  // Instantiation
-  MODULE_INSTANTIATION: 'kModuleInstantiation',
+  // Instantiation (Verible uses kInstantiationBase, not kModuleInstantiation)
+  MODULE_INSTANTIATION: 'kInstantiationBase',
   GATE_INSTANTIATION: 'kGateInstantiation',
   INSTANTIATION_TYPE: 'kInstantiationType',
-  INSTANCE_NAME: 'kInstanceName',
-  NAMED_PORT_CONNECTION: 'kNamedPortConnection',
+  INSTANCE_NAME: 'kGateInstance',
+  GATE_INSTANCE_LIST: 'kGateInstanceRegisterVariableList',
+  NAMED_PORT_CONNECTION: 'kActualNamedPort',
   POSITIONAL_PORT_CONNECTION: 'kPositionalPortConnection',
-  PARAMETER_VALUE_ASSIGNMENT: 'kParameterValueAssignment',
+  PARAMETER_VALUE_ASSIGNMENT: 'kActualParameterByNameList',
 
   // Preprocessor
   PREPROCESS_INCLUDE: 'kPreprocessorInclude',
@@ -322,6 +324,8 @@ export const TOKEN_TAGS = {
   ESCAPED_IDENTIFIER: 'EscapedIdentifier',
   SYSTEM_TF_IDENTIFIER: 'SystemTFIdentifier',
   MACRO_IDENTIFIER: 'MacroIdentifier',
+  PP_IDENTIFIER: 'PP_Identifier',
+  PP_DEFINE_BODY: 'PP_define_body',
 
   // Operators and punctuation
   SEMICOLON: ';',

@@ -2,19 +2,15 @@
  * Understander Module - Main File Parser
  *
  * The Understander module provides the main entry point for parsing
- * SystemVerilog files and extracting all entities.
+ * SystemVerilog files and extracting all entities using Verible.
  *
  * ## What It Does
  *
- * The FileUnderstander orchestrates a 7-step pipeline:
- *
- * 1. **Read File** - Load content, compute hash, build line index
- * 2. **Line Continuation** - Join lines ending with backslash
- * 3. **Strip Comments** - Remove // and block comments
- * 4. **Scan Directives** - Extract define, include, ifdef, etc.
- * 5. **Scan Declarations** - Extract module, class, function, etc.
- * 6. **Scan References** - Extract imports, type usages, etc.
- * 7. **Scan Instances** - Extract module instantiations
+ * The FileUnderstander uses Verible's production-grade parser to extract:
+ * - Declarations (modules, classes, functions, etc.)
+ * - References (imports, type usages, etc.)
+ * - Instances (module instantiations)
+ * - Directives (preprocessor directives)
  *
  * ## Output
  *
@@ -76,5 +72,4 @@ export {
 
   // Options and types
   type FileUnderstanderOptions,
-  type ParserBackend,
 } from './file-understander.js';

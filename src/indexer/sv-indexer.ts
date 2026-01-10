@@ -113,18 +113,6 @@ export { locationId, declarationId, isLocationId, isDeclarationId } from './ids/
 // Reader
 export { readFile, readFiles, buildLineIndex, getLineNumber, getLocation } from './reader/index.js';
 
-// Preprocessor
-export { preprocess, stripComments, handleLineContinuation } from './preprocessor/index.js';
-
-// Scanners
-export {
-  scanDirectives,
-  scanDeclarations,
-  scanReferences,
-  scanInstances,
-  ScopeTracker,
-} from './scanners/index.js';
-
 // Understander
 export { FileUnderstander, understandFiles } from './understander/index.js';
 

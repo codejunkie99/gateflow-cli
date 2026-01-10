@@ -73,6 +73,12 @@ export interface VeribleParseFileResult {
     instanceCount: number;
     directiveCount: number;
   };
+
+  /**
+   * True if Verible returned null tree (complete parse failure).
+   * Indicates Verible couldn't parse the file (e.g., checker constructs).
+   */
+  treeWasNull?: boolean;
 }
 
 // ============================================================================
@@ -173,6 +179,7 @@ export class VeribleAdapter {
         instanceCount: mapperResult.instances.length,
         directiveCount: mapperResult.directives.length,
       },
+      treeWasNull: mapperResult.treeWasNull,
     };
   }
 
