@@ -160,6 +160,7 @@ export class ProjectResolver {
       directives: this.directives,
       hierarchy,
       dependencies,
+      hasSemanticAnalysis: false, // Layer A only - no semantic analysis
     };
   }
 

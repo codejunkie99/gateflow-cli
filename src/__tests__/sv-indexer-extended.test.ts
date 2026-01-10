@@ -15,6 +15,11 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
+// Import types for discriminated union narrowing
+import type { ClassData, FunctionData, AlwaysBlockData } from '../indexer/types/declaration.js';
+import type { ImportReferenceData } from '../indexer/types/reference.js';
+import type { DefineData } from '../indexer/types/directive.js';
+
 // Import modules under test
 import { stripComments, handleLineContinuation, preprocess } from '../indexer/preprocessor/index.js';
 import { buildLineIndex, getLineNumber, getLocation } from '../indexer/reader/index.js';
@@ -258,7 +263,11 @@ describe('Declaration Scanner - Inline Content', () => {
       const classes = declarations.filter(d => d.kind === 'class');
       expect(classes.length).toBe(1);
       expect(classes[0].name).toBe('base_class');
-      expect(classes[0].data.isVirtual).toBe(true);
+      const classData = classes[0].data;
+      expect(classData.kind).toBe('class');
+      if (classData.kind === 'class') {
+        expect(classData.isVirtual).toBe(true);
+      }
     });
 
     it('should parse class with extends', () => {
@@ -273,7 +282,10 @@ describe('Declaration Scanner - Inline Content', () => {
       const classes = declarations.filter(d => d.kind === 'class');
       expect(classes.length).toBe(1);
       expect(classes[0].name).toBe('derived_class');
-      expect(classes[0].data.extendsName).toBe('base_class');
+      const classData = classes[0].data;
+      if (classData.kind === 'class') {
+        expect(classData.extendsName).toBe('base_class');
+      }
     });
 
     it('should parse class with scoped extends', () => {
@@ -286,7 +298,10 @@ describe('Declaration Scanner - Inline Content', () => {
 
       const classes = declarations.filter(d => d.kind === 'class');
       expect(classes.length).toBe(1);
-      expect(classes[0].data.extendsName).toBe('pkg::parent_class');
+      const classData = classes[0].data;
+      if (classData.kind === 'class') {
+        expect(classData.extendsName).toBe('pkg::parent_class');
+      }
     });
   });
 
@@ -305,7 +320,10 @@ describe('Declaration Scanner - Inline Content', () => {
       const functions = declarations.filter(d => d.kind === 'function');
       expect(functions.length).toBe(1);
       expect(functions[0].name).toBe('calculate');
-      expect(functions[0].data.returnType).toBe('int');
+      const funcData = functions[0].data;
+      if (funcData.kind === 'function') {
+        expect(funcData.returnType).toBe('int');
+      }
     });
 
     it('should parse automatic function', () => {
@@ -430,7 +448,10 @@ describe('Declaration Scanner - Inline Content', () => {
 
       const alwaysBlocks = declarations.filter(d => d.kind === 'always_block');
       expect(alwaysBlocks.length).toBe(1);
-      expect(alwaysBlocks[0].data.blockType).toBe('always_ff');
+      const blockData = alwaysBlocks[0].data;
+      if (blockData.kind === 'always_block') {
+        expect(blockData.blockType).toBe('always_ff');
+      }
     });
 
     it('should parse always_comb block', () => {
@@ -446,7 +467,10 @@ describe('Declaration Scanner - Inline Content', () => {
 
       const alwaysBlocks = declarations.filter(d => d.kind === 'always_block');
       expect(alwaysBlocks.length).toBe(1);
-      expect(alwaysBlocks[0].data.blockType).toBe('always_comb');
+      const blockData = alwaysBlocks[0].data;
+      if (blockData.kind === 'always_block') {
+        expect(blockData.blockType).toBe('always_comb');
+      }
     });
   });
 
@@ -567,7 +591,10 @@ describe('Reference Scanner - Inline Content', () => {
       const imports = references.filter(r => r.kind === 'import');
       expect(imports.length).toBe(1);
       expect(imports[0].targetName).toBe('my_pkg');
-      expect(imports[0].data?.memberName).toBe('*');
+      const importData = imports[0].data;
+      if (importData && importData.kind === 'import') {
+        expect(importData.memberName).toBe('*');
+      }
     });
 
     it('should parse specific import', () => {
@@ -583,7 +610,10 @@ describe('Reference Scanner - Inline Content', () => {
       const imports = references.filter(r => r.kind === 'import');
       expect(imports.length).toBe(1);
       expect(imports[0].targetName).toBe('my_pkg');
-      expect(imports[0].data?.memberName).toBe('my_type');
+      const importData = imports[0].data;
+      if (importData && importData.kind === 'import') {
+        expect(importData.memberName).toBe('my_type');
+      }
     });
 
     it('should parse multiple imports', () => {
@@ -931,8 +961,8 @@ describe('Directive Scanner', () => {
 
     const defines = directives.filter(d => d.kind === 'define');
     expect(defines.length).toBe(2);
-    expect(defines.some(d => d.data.name === 'WIDTH')).toBe(true);
-    expect(defines.some(d => d.data.name === 'MACRO')).toBe(true);
+    expect(defines.some(d => d.data.kind === 'define' && d.data.name === 'WIDTH')).toBe(true);
+    expect(defines.some(d => d.data.kind === 'define' && d.data.name === 'MACRO')).toBe(true);
   });
 
   it('should parse include directives', () => {
@@ -1158,14 +1188,18 @@ describe('FileUnderstander - Advanced Fixtures', () => {
       d => d.kind === 'class' && d.name === 'base_transaction'
     );
     expect(virtualClass).toBeDefined();
-    expect(virtualClass?.data.isVirtual).toBe(true);
+    if (virtualClass && virtualClass.data.kind === 'class') {
+      expect(virtualClass.data.isVirtual).toBe(true);
+    }
 
     // Should find derived classes
     const readTx = result.declarations.find(
       d => d.kind === 'class' && d.name === 'read_transaction'
     );
     expect(readTx).toBeDefined();
-    expect(readTx?.data.extendsName).toBe('base_transaction');
+    if (readTx && readTx.data.kind === 'class') {
+      expect(readTx.data.extendsName).toBe('base_transaction');
+    }
 
     // Should find constraints
     const constraints = result.declarations.filter(d => d.kind === 'constraint');
