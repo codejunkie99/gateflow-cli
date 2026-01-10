@@ -204,6 +204,7 @@ export class SVIndexer {
     this.options = {
       enableSemanticAnalysis: options.enableSemanticAnalysis ?? true,
       slangOptions: options.slangOptions,
+      verbose: options.verbose ?? false,
     };
   }
 

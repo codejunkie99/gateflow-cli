@@ -132,7 +132,7 @@ export function getHierarchyStats(
 
   return {
     topModuleCount: hierarchy.length,
-    uniqueModules: new Set(instances.filter((i) => i.resolvedId).map((i) => i.targetName)).size,
+    uniqueModules: new Set(instances.filter((i) => i.resolvedId).map((i) => i.resolvedId!)).size,
     totalInstances,
     maxDepth,
     unusedModules,
