@@ -312,11 +312,25 @@ function mergeInstances(
         resolvedCount++;
       }
 
+      // Apply resolved location if Layer B has it
+      if (layerBInst.resolvedLocation && !inst.resolvedLocation) {
+        updates.resolvedLocation = layerBInst.resolvedLocation;
+      }
+
       // Apply evaluated parameters from Layer B
+      // Layer B provides both raw param overrides AND evaluated values
       if (layerBInst.paramOverrides) {
         updates.paramOverrides = {
           ...inst.paramOverrides,
-          ...layerBInst.paramOverrides,
+          ...layerBInst.paramOverrides, // Layer B values take precedence
+        };
+      }
+
+      // Apply evaluated params (computed values after elaboration)
+      if (layerBInst.evaluatedParams) {
+        updates.evaluatedParams = {
+          ...inst.evaluatedParams,
+          ...layerBInst.evaluatedParams, // Layer B values take precedence
         };
       }
 
