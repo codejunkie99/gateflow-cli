@@ -4,7 +4,11 @@
       "Bash(git push:*)",
       "WebSearch",
       "Bash(node dist/cli/main.js:*)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(npm run build:*)",
+      "Bash(npm test)",
+      "Bash(grep:*)",
+      "Bash(npm test:*)"
     ]
   }
 }
