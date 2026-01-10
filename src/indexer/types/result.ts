@@ -141,6 +141,9 @@ export interface ParseStats {
 
   /** Number of directives found */
   directiveCount: number;
+
+  /** Whether Slang was used for semantic analysis */
+  slangUsed?: boolean;
 }
 
 // ============================================================================
