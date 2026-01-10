@@ -176,7 +176,7 @@ export interface SemanticIndex {
   instances: Instance[];
 
   /** Source of semantic analysis */
-  source: 'slang' | 'verible' | 'regex';
+  source: 'slang' | 'verible';
 
   /** Analysis statistics */
   stats: {

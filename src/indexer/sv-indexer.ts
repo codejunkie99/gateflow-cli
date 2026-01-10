@@ -5,16 +5,15 @@
  * declarations, references, instances, and directives, then resolves
  * cross-file connections.
  *
- * ## Architecture: Two-Layer Indexing
+ * ## Architecture: Slang-Primary with Verible
  *
- * The indexer uses a two-layer architecture for optimal performance and accuracy:
+ * The indexer uses a two-parser architecture:
  *
- * - **Layer A (Verible/regex)**: Fast, syntactic parsing for instant feedback
- * - **Layer B (slang)**: Accurate semantic analysis when available
+ * - **Slang (primary)**: Full SV 2017 semantic analysis - declarations, references, instances
+ * - **Verible (directives)**: Fast CST parsing for preprocessor directives only
  *
- * Layer A always runs first, providing immediate results. If slang is available,
- * Layer B runs in parallel and its results are merged to provide accurate
- * reference resolution, evaluated parameters, and complete type information.
+ * Both parsers run in parallel. Slang provides better semantic analysis while
+ * Verible extracts directives (which Slang evaluates but doesn't report).
  *
  * ## Features
  *
