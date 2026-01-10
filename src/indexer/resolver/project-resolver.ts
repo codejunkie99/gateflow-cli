@@ -108,10 +108,8 @@ export class ProjectResolver {
     // Index macro definitions for dependency tracking
     for (const directive of result.directives) {
       if (directive.data.kind === 'define' && directive.data.name) {
-        // Store first definition of each macro (later definitions would override)
-        if (!this.macroIndex.has(directive.data.name)) {
-          this.macroIndex.set(directive.data.name, directive.location.file);
-        }
+        // Store latest definition (matches SV include-order semantics where later defs win)
+        this.macroIndex.set(directive.data.name, directive.location.file);
       }
     }
   }
@@ -501,9 +499,9 @@ export class ProjectResolver {
     const newVisited = new Set(visited);
     newVisited.add(module.id);
 
-    // Find instances inside this module
+    // Find instances inside this module (use last scope element for immediate parent)
     const childInstances = this.instances.filter(
-      (i) => i.parentScope.length > 0 && i.parentScope[0] === module.name
+      (i) => i.parentScope.length > 0 && i.parentScope[i.parentScope.length - 1] === module.name
     );
 
     const children: HierarchyNode[] = [];
@@ -545,6 +543,9 @@ export class ProjectResolver {
       const target = this.index.getById(inst.resolvedId);
       if (!target) continue;
 
+      // Skip self-dependencies (same file)
+      if (inst.location.file === target.location.file) continue;
+
       const key = `${inst.location.file}|${target.location.file}|instantiates`;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -564,6 +565,9 @@ export class ProjectResolver {
       const target = this.index.getById(ref.resolvedId);
       if (!target) continue;
 
+      // Skip self-dependencies (same file)
+      if (ref.location.file === target.location.file) continue;
+
       const key = `${ref.location.file}|${target.location.file}|imports`;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -579,6 +583,9 @@ export class ProjectResolver {
     // From includes
     for (const dir of this.directives) {
       if (dir.data.kind !== 'include' || !dir.data.resolvedPath) continue;
+
+      // Skip self-dependencies (same file)
+      if (dir.location.file === dir.data.resolvedPath) continue;
 
       const key = `${dir.location.file}|${dir.data.resolvedPath}|includes`;
       if (seen.has(key)) continue;
@@ -598,6 +605,9 @@ export class ProjectResolver {
 
       const target = this.index.getById(ref.resolvedId);
       if (!target) continue;
+
+      // Skip self-dependencies (same file)
+      if (ref.location.file === target.location.file) continue;
 
       const key = `${ref.location.file}|${target.location.file}|extends`;
       if (seen.has(key)) continue;

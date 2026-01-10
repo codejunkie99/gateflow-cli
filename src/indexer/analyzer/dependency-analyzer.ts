@@ -332,7 +332,7 @@ export class DependencyGraph {
       return minRotation;
     };
 
-    const dfs = (file: string, path: string[]): boolean => {
+    const dfs = (file: string, path: string[]): void => {
       visited.add(file);
       recStack.add(file);
       path.push(file);
@@ -341,9 +341,7 @@ export class DependencyGraph {
       if (deps) {
         for (const dep of deps) {
           if (!visited.has(dep)) {
-            if (dfs(dep, path)) {
-              return true;
-            }
+            dfs(dep, path);
           } else if (recStack.has(dep)) {
             // Found a cycle
             const cycleStart = path.indexOf(dep);
@@ -373,13 +371,13 @@ export class DependencyGraph {
 
       path.pop();
       recStack.delete(file);
-      return false;
     };
 
+    // Reset visited per starting node to find cycles reachable via different paths
     for (const file of this.files) {
-      if (!visited.has(file)) {
-        dfs(file, []);
-      }
+      visited.clear();
+      recStack.clear();
+      dfs(file, []);
     }
 
     return cycles;
