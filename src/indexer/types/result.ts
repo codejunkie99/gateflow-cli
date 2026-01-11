@@ -13,7 +13,7 @@ import type { Declaration } from './declaration.js';
 import type { Reference } from './reference.js';
 import type { Instance } from './instance.js';
 import type { Directive } from './directive.js';
-import type { ParseError } from './location.js';
+import type { ParseError, Guard } from './location.js';
 
 // ============================================================================
 // FileUnderstanderResult - Output from parsing a single file
@@ -418,4 +418,20 @@ export interface FileDependency {
    * e.g., module name, package name, included file path, class name, macro name
    */
   entityName: string;
+
+  /**
+   * If this dependency is inside an `ifdef/`ifndef block,
+   * this records the condition.
+   *
+   * Conditional dependencies may not always be required - they depend
+   * on which macros are defined at compile time.
+   *
+   * @example
+   * ```systemverilog
+   * `ifdef DEBUG
+   *   `include "debug_utils.svh"  // Conditional dependency
+   * `endif
+   * ```
+   */
+  guard?: Guard;
 }

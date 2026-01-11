@@ -40,6 +40,7 @@ export function visitPreprocessorInclude(
     kind: 'include',
     location,
     data: { kind: 'include', path: includePath },
+    guard: context.guard,
   });
 }
 
@@ -114,6 +115,7 @@ export function visitPreprocessorDefine(
     kind: 'define',
     location,
     data: { kind: 'define', name, body },
+    guard: context.guard,
   });
 }
 

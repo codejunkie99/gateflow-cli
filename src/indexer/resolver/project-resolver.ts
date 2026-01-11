@@ -565,6 +565,33 @@ export class ProjectResolver {
         toFile: target.location.file,
         reason: 'instantiates',
         entityName: inst.targetName,
+        guard: inst.guard,
+      });
+    }
+
+    // From bind targets (the module being bound TO, not the bound module)
+    for (const inst of this.instances) {
+      if (inst.instanceKind !== 'bind' || !inst.bindTarget) continue;
+
+      // Look up the bind target module by name
+      const bindTargetModules = this.index.getByNameAndKind(inst.bindTarget, 'module');
+      if (bindTargetModules.length === 0) continue;
+
+      const bindTargetModule = bindTargetModules[0];
+
+      // Skip self-dependencies (same file)
+      if (inst.location.file === bindTargetModule.location.file) continue;
+
+      const key = `${inst.location.file}|${bindTargetModule.location.file}|instantiates`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      deps.push({
+        fromFile: inst.location.file,
+        toFile: bindTargetModule.location.file,
+        reason: 'instantiates',
+        entityName: inst.bindTarget,
+        guard: inst.guard,
       });
     }
 
@@ -587,12 +614,17 @@ export class ProjectResolver {
         toFile: target.location.file,
         reason: 'imports',
         entityName: ref.targetName,
+        guard: ref.guard,
       });
     }
 
-    // From includes
+    // From includes (skip conditional includes inside ifdef blocks)
     for (const dir of this.directives) {
       if (dir.data.kind !== 'include' || !dir.data.resolvedPath) continue;
+
+      // Skip conditional includes (inside ifdef/ifndef blocks)
+      // These dependencies may not be required depending on compile-time macros
+      if (dir.guard) continue;
 
       // Skip self-dependencies (same file)
       if (dir.location.file === dir.data.resolvedPath) continue;
@@ -628,6 +660,7 @@ export class ProjectResolver {
         toFile: target.location.file,
         reason: 'extends',
         entityName: ref.targetName,
+        guard: ref.guard,
       });
     }
 
@@ -650,6 +683,7 @@ export class ProjectResolver {
         toFile: macro.file,
         reason: 'uses_macro',
         entityName: ref.targetName,
+        guard: ref.guard,
       });
     }
 

@@ -152,3 +152,4 @@ The indexer module is architecturally clean with proper separation between:
 - **Query layer:** Query API for lookups
 
 No critical or high-severity issues. One medium issue (compile order fallback) noted for future improvement.
+

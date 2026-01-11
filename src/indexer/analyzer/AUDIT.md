@@ -14,9 +14,10 @@
 |----------|-------|-------------|
 | 🔴 Critical | 0 | No critical issues |
 | 🟠 High | 1 | Macro dependencies not resolved (compile order risk) |
-| 🟡 Medium | 2 | Unused import; conditional includes over-estimated |
+| 🟡 Medium | 1 | Unused import |
 | 🟢 Low | 2 | Cycle detection behavior; duplicate cycle reports |
-| ℹ️ Info | 5 | SV features not captured (upstream limitations) |
+| ℹ️ Info | 4 | SV features not captured (upstream limitations) |
+| ✅ Fixed | 2 | Conditional includes; bind target dependencies |
 
 **Status:** ⚠️ Functional with known limitations - see SystemVerilog-Specific Analysis section
 
@@ -85,17 +86,19 @@ See `CODE_REVIEW.md` for detailed findings:
 
 ---
 
-#### 🟡 Medium: Conditional Compilation Over-Estimates Dependencies
+#### ~~🟡 Medium: Conditional Compilation Over-Estimates Dependencies~~ ✅ Fixed (2026-01-11)
 
-**Finding:** Guards are tracked but NOT used for dependency filtering.
+**Finding:** ~~Guards are tracked but NOT used for dependency filtering.~~
 
-- `directive-scanner.ts` tracks `ifdefState` with guard conditions
-- References store guard info (condition + inverted flag)
-- BUT `project-resolver.ts:529-542` adds include dependencies unconditionally
+~~- `directive-scanner.ts` tracks `ifdefState` with guard conditions~~
+~~- References store guard info (condition + inverted flag)~~
+~~- BUT `project-resolver.ts:529-542` adds include dependencies unconditionally~~
 
-**Behavior:** ALL `` `include`` directives become dependencies, even inside `` `ifdef`` blocks.
-
-**Impact:** Safe (over-estimates) but may include unnecessary files in compile order.
+**Fix:** Conditional includes are now skipped during dependency building:
+- Added `guard` field to `Directive` interface
+- `visitPreprocessorInclude` now captures `context.guard`
+- `project-resolver.ts` skips includes with guards: `if (dir.guard) continue`
+- Only unconditional includes create dependencies
 
 ---
 
@@ -117,7 +120,7 @@ These require changes to the **parser/resolver**, not this analyzer:
 
 | Feature | Description | Impact |
 |---------|-------------|--------|
-| `bind` statements | Insert modules without traditional instantiation | Missing dependencies |
+| ~~`bind` statements~~ | ~~Insert modules without traditional instantiation~~ | ✅ Fixed (2026-01-11) |
 | Configuration blocks | Alter module binding at elaboration time | Wrong module resolved |
 | Interface modports | Implicit dependencies through interface connections | Missing dependencies |
 | Generate conditionals | Dependencies may be compile-time conditional | Over/under-estimation |
@@ -136,16 +139,18 @@ These require changes to the **parser/resolver**, not this analyzer:
 | Issue | Severity | Status |
 |-------|----------|--------|
 | Macro dependencies not resolved | 🟠 High | Needs fix |
-| Conditional includes over-estimated | 🟡 Medium | Acceptable |
+| ~~Conditional includes over-estimated~~ | ~~🟡 Medium~~ | ✅ Fixed |
 | Duplicate cycle reports | 🟢 Low | Minor cosmetic |
 | Package imports | ✅ | Working |
 | Multi-module files | ✅ | Working |
+| ~~Bind target dependencies~~ | ~~🟠 High~~ | ✅ Fixed |
 
 ---
 
 ## No Additional Issues Found
 
 This module is well-integrated and follows the patterns established in other modules. The issues documented in CODE_REVIEW.md are minor and don't affect functionality.
+
 
 
 
