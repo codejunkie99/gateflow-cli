@@ -534,6 +534,68 @@ Requirements:
 }
 
 // ============================================================================
+// Setup Command
+// ============================================================================
+
+export async function setupCommand(ctx: CommandContext, tools?: string[]): Promise<ExitCode> {
+    const { runToolSetupFlow } = await import('../indexer/setup/setup-flow.js');
+
+    // Determine which tools to set up
+    const toolsToSetup: ('verible' | 'slang')[] = [];
+    if (!tools || tools.length === 0) {
+        toolsToSetup.push('verible', 'slang');
+    } else {
+        for (const tool of tools) {
+            if (tool === 'verible' || tool === 'slang') {
+                toolsToSetup.push(tool);
+            } else {
+                console.error(chalk.red(`Unknown tool: ${tool}. Valid options: verible, slang`));
+                return ExitCodes.CONFIG_ERROR;
+            }
+        }
+    }
+
+    console.log('\n' + chalk.blue.bold('SystemVerilog Tool Setup'));
+    console.log(chalk.dim('   Setting up: ' + toolsToSetup.join(', ') + '\n'));
+
+    try {
+        const result = await runToolSetupFlow(
+            ctx.bus,
+            ctx.policy,
+            ctx.projectRoot,
+            { interactive: true, tools: toolsToSetup }
+        );
+
+        if (result.success) {
+            console.log('\n' + chalk.green.bold('Setup Complete'));
+
+            if (result.tools.verible) {
+                const v = result.tools.verible;
+                const status = v.action === 'installed' || v.action === 'existing'
+                    ? chalk.green('✓') : chalk.yellow('○');
+                console.log(`   ${status} Verible: ${v.action}${v.version ? ` (${v.version})` : ''}`);
+            }
+
+            if (result.tools.slang) {
+                const s = result.tools.slang;
+                const status = s.action === 'built' || s.action === 'existing'
+                    ? chalk.green('✓') : chalk.yellow('○');
+                console.log(`   ${status} Slang: ${s.action}${s.version ? ` (${s.version})` : ''}`);
+            }
+
+            console.log('');
+            return ExitCodes.SUCCESS;
+        } else {
+            console.error(chalk.red('\nSetup failed: ' + (result.error || 'Unknown error')));
+            return ExitCodes.TOOL_ERROR;
+        }
+    } catch (error) {
+        console.error(chalk.red('\nSetup error: ' + String(error)));
+        return ExitCodes.TOOL_ERROR;
+    }
+}
+
+// ============================================================================
 // Doctor Command
 // ============================================================================
 
