@@ -15,16 +15,35 @@ import type { Location } from '../../types/location.js';
 
 /**
  * Map slang location to our Location type.
+ *
+ * Validates all fields and normalizes invalid line/column values.
  */
 export function mapLocation(slangLoc: SlangLocation | undefined): Location | null {
-  if (!slangLoc || !slangLoc.file) {
+  // Require slangLoc and a valid file path
+  if (!slangLoc || typeof slangLoc.file !== 'string' || slangLoc.file.length === 0) {
     return null;
   }
 
+  // Normalize line: must be positive integer, default to 1
+  const line =
+    typeof slangLoc.line === 'number' &&
+    Number.isInteger(slangLoc.line) &&
+    slangLoc.line > 0
+      ? slangLoc.line
+      : 1;
+
+  // Normalize column: must be positive integer, default to 1
+  const col =
+    typeof slangLoc.column === 'number' &&
+    Number.isInteger(slangLoc.column) &&
+    slangLoc.column > 0
+      ? slangLoc.column
+      : 1;
+
   return {
     file: slangLoc.file,
-    line: slangLoc.line,
-    col: slangLoc.column,
+    line,
+    col,
   };
 }
 
