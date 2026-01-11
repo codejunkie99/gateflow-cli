@@ -8,7 +8,14 @@
  */
 
 import { streamText, tool, zodSchema } from 'ai';
+
+// Message type for conversation history
+interface Message {
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+}
 import { anthropic } from '@ai-sdk/anthropic';
+import * as readline from 'readline';
 import type { EventBus } from '../../events/index.js';
 import type { PolicyEngine } from '../../approval/index.js';
 import type { ToolName } from '../../approval/types.js';
@@ -110,47 +117,157 @@ export async function runToolSetupFlow(
   const toolsToSetup = options.tools || ['verible', 'slang'];
   const initialMessage = `Please help me set up the following SystemVerilog tools: ${toolsToSetup.join(', ')}`;
 
+  // Conversation state
+  const messages: Message[] = [{ role: 'user', content: initialMessage }];
+  const model = options.model || 'claude-sonnet-4-20250514';
+  const maxTurns = 20; // Prevent infinite loops
+
   try {
-    // Run the agent with streaming
-    const model = options.model || 'claude-sonnet-4-20250514';
-    const result = await streamText({
-      model: anthropic(model) as any,
-      system: TOOL_SETUP_SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: initialMessage }],
-      tools,
-      maxSteps: 25,
-    } as any);
+    // Conversation loop - keep going until setup complete or user exits
+    for (let turn = 0; turn < maxTurns; turn++) {
+      // Run agent turn
+      const result = await streamText({
+        model: anthropic(model) as any,
+        system: TOOL_SETUP_SYSTEM_PROMPT,
+        messages,
+        tools,
+        maxSteps: 25,
+      } as any);
 
-    // Process the full stream
-    for await (const part of result.fullStream) {
-      if (part.type === 'text-delta') {
-        bus.emit({ type: 'token', text: part.text });
+      // Collect assistant response
+      let assistantText = '';
+      for await (const part of result.fullStream) {
+        if (part.type === 'text-delta') {
+          assistantText += part.text;
+          bus.emit({ type: 'token', text: part.text });
+        }
       }
+
+      // Add assistant message to history
+      messages.push({ role: 'assistant', content: assistantText });
+
+      // Check if setup is complete
+      const setupComplete = await checkSetupComplete(toolsToSetup);
+      if (setupComplete.allDone) {
+        bus.emit({ type: 'token', text: '\n\nSetup complete!\n' });
+        return buildFinalResult(setupComplete);
+      }
+
+      // Get user input for next turn
+      const userInput = await getUserInput(bus);
+
+      // Check for exit commands
+      if (isExitCommand(userInput)) {
+        bus.emit({ type: 'token', text: '\nExiting setup.\n' });
+        return buildFinalResult(setupComplete);
+      }
+
+      // Add user message and continue
+      messages.push({ role: 'user', content: userInput });
     }
 
-    // Check final status
-    const finalResult: ToolSetupResult = { success: true, tools: {} };
+    // Max turns reached
+    bus.emit({ type: 'token', text: '\n\nMax conversation turns reached.\n' });
+    const finalStatus = await checkSetupComplete(toolsToSetup);
+    return buildFinalResult(finalStatus);
 
-    // Check Verible
-    veribleBinaryManager.clearCache();
-    if (await veribleBinaryManager.isAvailable('verible-verilog-syntax')) {
-      const loc = await veribleBinaryManager.findBinary('verible-verilog-syntax', false);
-      finalResult.tools.verible = { action: 'installed', path: loc.path, version: loc.version };
-    }
-
-    // Check Slang
-    slangBinaryManager.clearCache();
-    if (await slangBinaryManager.isAvailable()) {
-      const loc = await slangBinaryManager.findBinary(false);
-      finalResult.tools.slang = { action: 'built', path: loc.path, version: loc.version };
-    }
-
-    return finalResult;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     bus.emit({ type: 'error', message: `Setup failed: ${message}` });
     return { success: false, tools: {}, error: message };
   }
+}
+
+/**
+ * Check if requested tools are set up.
+ */
+async function checkSetupComplete(toolsToSetup: ('verible' | 'slang')[]): Promise<{
+  allDone: boolean;
+  verible?: { available: boolean; path?: string; version?: string };
+  slang?: { available: boolean; path?: string; version?: string };
+}> {
+  const result: {
+    allDone: boolean;
+    verible?: { available: boolean; path?: string; version?: string };
+    slang?: { available: boolean; path?: string; version?: string };
+  } = { allDone: true };
+
+  if (toolsToSetup.includes('verible')) {
+    veribleBinaryManager.clearCache();
+    const available = await veribleBinaryManager.isAvailable('verible-verilog-syntax');
+    if (available) {
+      const loc = await veribleBinaryManager.findBinary('verible-verilog-syntax', false);
+      result.verible = { available: true, path: loc.path, version: loc.version };
+    } else {
+      result.verible = { available: false };
+      result.allDone = false;
+    }
+  }
+
+  if (toolsToSetup.includes('slang')) {
+    slangBinaryManager.clearCache();
+    const available = await slangBinaryManager.isAvailable();
+    if (available) {
+      const loc = await slangBinaryManager.findBinary(false);
+      result.slang = { available: true, path: loc.path, version: loc.version };
+    } else {
+      result.slang = { available: false };
+      result.allDone = false;
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Build final result from setup status.
+ */
+function buildFinalResult(status: {
+  verible?: { available: boolean; path?: string; version?: string };
+  slang?: { available: boolean; path?: string; version?: string };
+}): ToolSetupResult {
+  const result: ToolSetupResult = { success: true, tools: {} };
+
+  if (status.verible) {
+    result.tools.verible = status.verible.available
+      ? { action: 'installed', path: status.verible.path, version: status.verible.version }
+      : { action: 'skipped' };
+  }
+
+  if (status.slang) {
+    result.tools.slang = status.slang.available
+      ? { action: 'built', path: status.slang.path, version: status.slang.version }
+      : { action: 'skipped' };
+  }
+
+  return result;
+}
+
+/**
+ * Get user input from terminal.
+ */
+async function getUserInput(bus: EventBus): Promise<string> {
+  return new Promise((resolve) => {
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout,
+    });
+
+    bus.emit({ type: 'status', phase: 'tool', label: 'Waiting for input...' });
+
+    rl.question('\n> ', (answer) => {
+      rl.close();
+      resolve(answer.trim());
+    });
+  });
+}
+
+/**
+ * Check if user wants to exit.
+ */
+function isExitCommand(input: string): boolean {
+  const exitCommands = ['exit', 'quit', 'q', 'done', 'skip', 'cancel', 'bye'];
+  return exitCommands.includes(input.toLowerCase());
 }
 
 // ============================================================================

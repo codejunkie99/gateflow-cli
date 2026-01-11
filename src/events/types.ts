@@ -198,6 +198,48 @@ export interface ThoughtEvent {
 }
 
 /**
+ * Setup stage events - for tool installation progress
+ */
+export type SetupStage =
+    | 'checking'      // Checking prerequisites
+    | 'downloading'   // Downloading files
+    | 'extracting'    // Extracting archive
+    | 'cloning'       // Git clone
+    | 'configuring'   // CMake configure
+    | 'building'      // CMake build (long)
+    | 'linking'       // Final linking
+    | 'verifying'     // Running --version
+    | 'saving';       // Saving to .env
+
+export interface SetupStageEvent {
+    type: 'setup_stage';
+    tool: 'verible' | 'slang';
+    stage: SetupStage;
+    status: 'started' | 'completed' | 'failed';
+    message?: string;
+}
+
+/**
+ * Prerequisite installation stage events
+ */
+export type PrereqInstallStage =
+    | 'detecting'     // Detecting package managers
+    | 'checking'      // Checking prerequisite status
+    | 'installing'    // Running install command
+    | 'verifying'     // Verifying installation
+    | 'manual';       // Manual installation guidance
+
+export type Prerequisite = 'git' | 'cmake' | 'compiler';
+
+export interface PrereqInstallStageEvent {
+    type: 'prereq_install_stage';
+    prerequisite: Prerequisite;
+    stage: PrereqInstallStage;
+    status: 'started' | 'completed' | 'failed';
+    message?: string;
+}
+
+/**
  * Agent lifecycle events
  */
 export interface AgentStartEvent {
@@ -251,6 +293,9 @@ export type UiEvent =
     // Waveform
     | WaveformLoadedEvent
     | WaveformAnalysisEvent
+    // Setup
+    | SetupStageEvent
+    | PrereqInstallStageEvent
     // Completion
     | ErrorEvent
     | FinalEvent
@@ -293,6 +338,14 @@ export function isWaveformEvent(event: UiEvent): event is WaveformLoadedEvent | 
 
 export function isSimEvent(event: UiEvent): event is SimStageEvent | SimProgressEvent {
     return event.type === 'sim_stage' || event.type === 'sim_progress';
+}
+
+export function isSetupEvent(event: UiEvent): event is SetupStageEvent {
+    return event.type === 'setup_stage';
+}
+
+export function isPrereqInstallEvent(event: UiEvent): event is PrereqInstallStageEvent {
+    return event.type === 'prereq_install_stage';
 }
 
 // ============================================================================

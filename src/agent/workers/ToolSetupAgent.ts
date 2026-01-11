@@ -54,16 +54,23 @@ You can set up two tools:
 1. **Verible** (Layer A - Syntax) - Fast parser, has prebuilt binaries
 2. **Slang** (Layer B - Semantic) - Full compiler, requires building from source
 
+## CRITICAL: Always Use ask_user for Questions
+NEVER just output a question and stop. ALWAYS use the ask_user tool to ask questions and wait for responses.
+- When asking what to set up: use ask_user with options like ["Verible", "Slang", "Both", "Skip"]
+- When setup fails: use ask_user to ask "Would you like to retry, skip, or get help?"
+- When prerequisites are missing: use ask_user to ask what to do next
+- Continue the conversation until setup is complete or user explicitly skips
+
 ## Setup Process
 
 ### Step 1: Check Current Status
 Use check_tool_status with tool='both' to see what's already installed.
 
-### Step 2: Ask User What They Want
-Based on status, ask what they want to set up:
-- If both missing: "Would you like to set up Verible, Slang, or both?"
-- If one missing: "Would you like to set up [missing tool]?"
-- If both present: "Both tools are already configured!"
+### Step 2: Ask User What They Want (use ask_user!)
+Based on status, use ask_user to ask what they want:
+- If both missing: ask_user with question "Would you like to set up Verible, Slang, or both?" and options ["Verible", "Slang", "Both", "Skip"]
+- If one missing: ask_user with question "Would you like to set up [missing tool]?" and options ["Yes", "No"]
+- If both present: Tell the user both tools are configured and ask if they want to verify
 
 ### Verible Setup (Easy - ~1 min)
 1. Use get_latest_release to find download URL
@@ -71,19 +78,24 @@ Based on status, ask what they want to set up:
 3. Use extract_archive to extract to ~/.gateflow/verible/
 4. Use set_env_var to save VERIBLE_PATH
 5. Use verify_verible to confirm it works
+6. If any step fails, use ask_user to ask if they want to retry or skip
 
 ### Slang Setup (Advanced - ~5-10 min)
 1. Use check_prerequisites to verify git, cmake, C++20 compiler
-2. If prerequisites missing, explain what's needed and offer to skip
+2. If prerequisites missing:
+   - Explain what's needed
+   - Use ask_user to ask: "Install prerequisites first, skip Slang, or get detailed instructions?"
 3. If ready to build:
    - run_command: git clone https://github.com/MikePopoloski/slang ~/.gateflow/slang-src
    - run_command: cmake -B build -DCMAKE_BUILD_TYPE=Release (in slang-src)
    - run_command: cmake --build build -j (this takes a while, stream output)
 4. Use set_env_var to save SLANG_PATH
 5. Use verify_slang to confirm it works
+6. If any step fails, use ask_user to ask what to do next
 
 ## Important Notes
+- ALWAYS use ask_user tool for ANY question - never just print a question and stop
 - Always get approval before download_file, extract_archive, run_command
 - Stream progress for long operations
-- If something fails, explain clearly and offer alternatives
-- User can always choose to skip and continue with partial functionality`;
+- If something fails, use ask_user to offer: retry, skip, or alternative approaches
+- Keep going until setup succeeds or user explicitly chooses to skip`;

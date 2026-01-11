@@ -224,6 +224,12 @@ export const setupVeribleSchema = z.object({});
 // Setup Slang - Build and configure Slang
 export const setupSlangSchema = z.object({});
 
+// Help Setup Tools - Interactive helper for setting up missing tools
+export const helpSetupToolsSchema = z.object({
+    tools: z.array(z.enum(['verible', 'slang'])).optional()
+        .describe('Specific tools to help with (default: all missing tools)')
+});
+
 // ============================================================================
 // Tool Implementations
 // ============================================================================
@@ -1424,73 +1430,230 @@ export function createToolExecutors(ctx: ToolContext) {
         },
 
         setup_verible: async (_args: z.infer<typeof setupVeribleSchema>) => {
-            ctx.bus.emit({
-                type: 'status',
-                phase: 'setup',
-                label: 'Setting up Verible...'
-            });
-
+            // First check if already installed
             try {
-                const { runToolSetupFlow } = await import('../indexer/setup/setup-flow.js');
-                const result = await runToolSetupFlow(ctx.bus, ctx.policy, ctx.projectRoot, {
-                    interactive: true,
-                    tools: ['verible']
-                });
-
-                if (result.success && result.tools.verible) {
+                const { binaryManager: veribleManager } = await import('../indexer/verible/binary-manager.js');
+                const available = await veribleManager.isAvailable('verible-verilog-syntax');
+                if (available) {
+                    const loc = await veribleManager.findBinary('verible-verilog-syntax', false);
                     return {
-                        success: true,
-                        action: result.tools.verible.action,
-                        version: result.tools.verible.version,
-                        path: result.tools.verible.path,
-                        message: `Verible ${result.tools.verible.action} successfully${result.tools.verible.version ? ` (version ${result.tools.verible.version})` : ''}`
+                        alreadyInstalled: true,
+                        version: loc.version,
+                        path: loc.path,
+                        message: `Verible is already installed (version ${loc.version})`
                     };
                 }
+            } catch {
+                // Continue with setup
+            }
 
-                return {
-                    success: false,
-                    error: result.error || 'Setup failed'
-                };
+            // Run interactive setup flow
+            try {
+                const { runToolSetupFlow } = await import('../indexer/setup/setup-flow.js');
+                const result = await runToolSetupFlow(
+                    ctx.bus,
+                    ctx.policy,
+                    ctx.projectRoot,
+                    { interactive: true, tools: ['verible'] }
+                );
+
+                if (result.success && result.tools.verible) {
+                    const v = result.tools.verible;
+                    return {
+                        success: true,
+                        action: v.action,
+                        version: v.version,
+                        path: v.path,
+                        message: `Verible ${v.action}${v.version ? ` (version ${v.version})` : ''}`
+                    };
+                } else {
+                    return {
+                        success: false,
+                        error: result.error || 'Setup did not complete',
+                        message: 'Verible setup was not completed. You can retry or run "gateflow setup" manually.'
+                    };
+                }
             } catch (err) {
                 return {
                     success: false,
-                    error: `Setup failed: ${err}`
+                    error: String(err),
+                    message: 'Failed to run interactive setup. Try running "gateflow setup" manually.'
                 };
             }
         },
 
         setup_slang: async (_args: z.infer<typeof setupSlangSchema>) => {
-            ctx.bus.emit({
-                type: 'status',
-                phase: 'setup',
-                label: 'Setting up Slang...'
-            });
-
+            // First check if already installed
             try {
-                const { runToolSetupFlow } = await import('../indexer/setup/setup-flow.js');
-                const result = await runToolSetupFlow(ctx.bus, ctx.policy, ctx.projectRoot, {
-                    interactive: true,
-                    tools: ['slang']
-                });
-
-                if (result.success && result.tools.slang) {
+                const { slangBinaryManager } = await import('../indexer/slang/binary-manager.js');
+                const available = await slangBinaryManager.isAvailable();
+                if (available) {
+                    const loc = await slangBinaryManager.findBinary(false);
                     return {
-                        success: true,
-                        action: result.tools.slang.action,
-                        version: result.tools.slang.version,
-                        path: result.tools.slang.path,
-                        message: `Slang ${result.tools.slang.action} successfully${result.tools.slang.version ? ` (version ${result.tools.slang.version})` : ''}`
+                        alreadyInstalled: true,
+                        version: loc.version,
+                        path: loc.path,
+                        message: `Slang is already installed (version ${loc.version})`
                     };
                 }
+            } catch {
+                // Continue with setup
+            }
+
+            // Check prerequisites first
+            const { execSync } = await import('child_process');
+            const prerequisites: Record<string, boolean> = {};
+
+            try {
+                execSync('git --version', { stdio: 'pipe' });
+                prerequisites.git = true;
+            } catch {
+                prerequisites.git = false;
+            }
+
+            try {
+                execSync('cmake --version', { stdio: 'pipe' });
+                prerequisites.cmake = true;
+            } catch {
+                prerequisites.cmake = false;
+            }
+
+            const { platform } = await import('os');
+            const os = platform();
+
+            if (os === 'win32') {
+                try {
+                    execSync('"C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe" -latest -property installationVersion', { stdio: 'pipe' });
+                    prerequisites.compiler = true;
+                } catch {
+                    prerequisites.compiler = false;
+                }
+            } else {
+                try {
+                    execSync('g++ --version', { stdio: 'pipe' });
+                    prerequisites.compiler = true;
+                } catch {
+                    try {
+                        execSync('clang++ --version', { stdio: 'pipe' });
+                        prerequisites.compiler = true;
+                    } catch {
+                        prerequisites.compiler = false;
+                    }
+                }
+            }
+
+            const allPrereqsMet = prerequisites.git && prerequisites.cmake && prerequisites.compiler;
+
+            // If prerequisites are missing, return error with guidance
+            if (!allPrereqsMet) {
+                const missing = [
+                    !prerequisites.git ? 'git' : null,
+                    !prerequisites.cmake ? 'cmake' : null,
+                    !prerequisites.compiler ? 'C++20 compiler' : null
+                ].filter(Boolean);
 
                 return {
                     success: false,
-                    error: result.error || 'Setup failed'
+                    prerequisites,
+                    missing,
+                    message: `Cannot install Slang - missing prerequisites: ${missing.join(', ')}. Please install them first.`,
+                    instructions: {
+                        git: !prerequisites.git ? 'Install from https://git-scm.com/' : null,
+                        cmake: !prerequisites.cmake ? 'Install from https://cmake.org/ (version 3.15+)' : null,
+                        compiler: !prerequisites.compiler ? (os === 'win32' ? 'Install Visual Studio 2019+ with C++ workload' : 'Install g++ or clang++ with C++20 support') : null
+                    }
+                };
+            }
+
+            // Run interactive setup flow
+            try {
+                const { runToolSetupFlow } = await import('../indexer/setup/setup-flow.js');
+                const result = await runToolSetupFlow(
+                    ctx.bus,
+                    ctx.policy,
+                    ctx.projectRoot,
+                    { interactive: true, tools: ['slang'] }
+                );
+
+                if (result.success && result.tools.slang) {
+                    const s = result.tools.slang;
+                    return {
+                        success: true,
+                        action: s.action,
+                        version: s.version,
+                        path: s.path,
+                        message: `Slang ${s.action}${s.version ? ` (version ${s.version})` : ''}`
+                    };
+                } else {
+                    return {
+                        success: false,
+                        error: result.error || 'Setup did not complete',
+                        message: 'Slang setup was not completed. You can retry or run "gateflow setup" manually.'
+                    };
+                }
+            } catch (err) {
+                return {
+                    success: false,
+                    error: String(err),
+                    message: 'Failed to run interactive setup. Try running "gateflow setup" manually.'
+                };
+            }
+        },
+
+        help_setup_tools: async (args: z.infer<typeof helpSetupToolsSchema>) => {
+            // Check current status
+            const { binaryManager: veribleManager } = await import('../indexer/verible/binary-manager.js');
+            const { slangBinaryManager } = await import('../indexer/slang/binary-manager.js');
+
+            const veribleAvailable = await veribleManager.isAvailable('verible-verilog-syntax');
+            const slangAvailable = await slangBinaryManager.isAvailable();
+
+            // Determine which tools need setup
+            let toolsToSetup: ('verible' | 'slang')[] = [];
+
+            if (args.tools && args.tools.length > 0) {
+                // User specified which tools
+                toolsToSetup = args.tools;
+            } else {
+                // Auto-detect missing tools
+                if (!veribleAvailable) toolsToSetup.push('verible');
+                if (!slangAvailable) toolsToSetup.push('slang');
+            }
+
+            // If all requested tools are installed, return success
+            if (toolsToSetup.length === 0) {
+                return {
+                    success: true,
+                    message: 'All analysis tools are already configured!',
+                    status: {
+                        verible: veribleAvailable ? 'installed' : 'missing',
+                        slang: slangAvailable ? 'installed' : 'missing'
+                    }
+                };
+            }
+
+            // Run interactive setup flow for missing tools
+            try {
+                const { runToolSetupFlow } = await import('../indexer/setup/setup-flow.js');
+                const result = await runToolSetupFlow(
+                    ctx.bus,
+                    ctx.policy,
+                    ctx.projectRoot,
+                    { interactive: true, tools: toolsToSetup }
+                );
+
+                return {
+                    success: result.success,
+                    tools: result.tools,
+                    message: result.success
+                        ? `Setup complete for: ${toolsToSetup.join(', ')}`
+                        : `Setup incomplete. ${result.error || ''}`
                 };
             } catch (err) {
                 return {
                     success: false,
-                    error: `Setup failed: ${err}`
+                    error: String(err),
+                    message: 'Setup failed. Try running "gateflow setup" manually.'
                 };
             }
         }
@@ -1650,6 +1813,10 @@ export function getToolSpecs() {
         setup_slang: {
             description: 'Build and configure Slang (SystemVerilog semantic analyzer). Use this when the user wants to install Slang, asks to set up semantic analysis, or needs help getting Slang working. WARNING: Requires git, cmake, and a C++20 compiler. Takes several minutes to build from source. Requires user approval for build commands.',
             parameters: setupSlangSchema
+        },
+        help_setup_tools: {
+            description: 'Interactive helper for setting up missing analysis tools. Use this when the user asks for help setting up tools, when a tool operation fails due to missing tools, when the user asks "why isnt X working", or when they want guided setup assistance. Automatically detects which tools are missing and runs an interactive setup conversation. Preferred over individual setup_verible/setup_slang for general setup help.',
+            parameters: helpSetupToolsSchema
         }
     };
 }
