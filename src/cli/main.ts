@@ -19,6 +19,7 @@ import {
     watchCommand,
     generateCommand,
     doctorCommand,
+    setupCommand,
     versionCommand,
     waveCommand,
     waveWebCommand,
@@ -254,6 +255,20 @@ program
         const opts = program.opts() as GlobalOptions;
         const ctx = await setupContext(opts);
         const exitCode = await doctorCommand(ctx);
+        process.exit(exitCode);
+    });
+
+// ============================================================================
+// Setup Command
+// ============================================================================
+
+program
+    .command('setup [tools...]')
+    .description('Set up SystemVerilog analysis tools (Verible, Slang)')
+    .action(async (tools: string[]) => {
+        const opts = program.opts() as GlobalOptions;
+        const ctx = await setupContext(opts);
+        const exitCode = await setupCommand(ctx, tools);
         process.exit(exitCode);
     });
 

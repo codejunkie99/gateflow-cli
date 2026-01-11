@@ -22,7 +22,17 @@ export interface TokenDoneEvent {
 /**
  * Status events - current phase
  */
-export type StatusPhase = 'thinking' | 'tool' | 'verifying' | 'fixing' | 'indexing' | 'watching';
+export type StatusPhase =
+    | 'thinking'
+    | 'tool'
+    | 'verifying'
+    | 'fixing'
+    | 'indexing'
+    | 'watching'
+    | 'setup'
+    | 'downloading'
+    | 'extracting'
+    | 'executing';
 
 export interface StatusEvent {
     type: 'status';
