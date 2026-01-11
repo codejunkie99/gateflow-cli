@@ -63,9 +63,17 @@ export class DeclarationIndex {
   /**
    * Add a declaration to the index.
    *
+   * Duplicate declarations (same ID) are silently skipped to prevent
+   * inconsistent state in byName/byKind/byFile arrays.
+   *
    * @param decl - Declaration to add
    */
   add(decl: Declaration): void {
+    // Skip if already exists (prevents duplicates in arrays)
+    if (this.byId.has(decl.id)) {
+      return;
+    }
+
     // Index by ID
     this.byId.set(decl.id, decl);
 

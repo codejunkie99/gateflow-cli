@@ -257,6 +257,28 @@ describe('DeclarationIndex', () => {
     expect(module).toBeDefined();
     expect(module?.kind).toBe('module');
   });
+
+  it('should not duplicate declarations when added twice', () => {
+    const index = new DeclarationIndex();
+
+    const decl = {
+      id: 'decl:1',
+      locationId: 'loc:1',
+      kind: 'module' as const,
+      name: 'counter',
+      location: { file: 'a.sv', line: 1, col: 1 },
+      scope: [],
+      data: { kind: 'module' as const, params: [] },
+    };
+
+    // Add the same declaration twice
+    index.add(decl);
+    index.add(decl);
+
+    // Should only have one entry
+    expect(index.getByName('counter').length).toBe(1);
+    expect(index.getByKind('module').length).toBe(1);
+  });
 });
 
 // ============================================================================

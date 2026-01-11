@@ -41,7 +41,7 @@ export interface DefinitionResult {
  * Result from a "find all references" query.
  */
 export interface ReferencesResult {
-  /** References found */
+  /** References found (resolved to this declaration) */
   references: Reference[];
 
   /** Instances of this declaration */
@@ -49,6 +49,12 @@ export interface ReferencesResult {
 
   /** Total count (references + instances) */
   totalCount: number;
+
+  /** Unresolved references with matching target name (optional) */
+  unresolvedReferences?: Reference[];
+
+  /** Unresolved instances with matching target name (optional) */
+  unresolvedInstances?: Instance[];
 }
 
 /**
@@ -96,7 +102,22 @@ export interface IndexQuery {
   goToDefinition(file: string, line: number, col: number): DefinitionResult;
 
   /** Find all references to a declaration */
-  findReferences(declarationId: string): ReferencesResult;
+  findReferences(declarationId: string, options?: { includeUnresolved?: boolean }): ReferencesResult;
+
+  /** Find all references by target name (resolved and unresolved) */
+  findReferencesByName(targetName: string): Reference[];
+
+  /** Find unresolved references by target name */
+  findUnresolvedReferencesByName(targetName: string): Reference[];
+
+  /** Find unresolved instances by target name */
+  findUnresolvedInstancesByName(targetName: string): Instance[];
+
+  /** Get all unresolved references */
+  getUnresolvedReferences(): Reference[];
+
+  /** Get all unresolved instances */
+  getUnresolvedInstances(): Instance[];
 
   /** Get hover information for a location */
   getHoverInfo(file: string, line: number, col: number): HoverInfo | null;
@@ -175,6 +196,12 @@ export class QueryAPI implements IndexQuery {
   private readonly declsByFile: Map<string, Declaration[]>;
   private readonly declsByParent: Map<string, Declaration[]>;
 
+  // Unresolved item tracking
+  private readonly unresolvedRefs: Reference[] = [];
+  private readonly unresolvedInsts: Instance[] = [];
+  private readonly refsByTargetName: Map<string, Reference[]> = new Map();
+  private readonly instsByTargetName: Map<string, Instance[]> = new Map();
+
   constructor(index: MergedIndex) {
     this.index = index;
 
@@ -206,11 +233,19 @@ export class QueryAPI implements IndexQuery {
     for (const ref of index.references) {
       this.refByLocation.set(locationKey(ref.location), ref);
 
+      // Index by target name (for finding by name regardless of resolution)
+      const nameRefs = this.refsByTargetName.get(ref.targetName) || [];
+      nameRefs.push(ref);
+      this.refsByTargetName.set(ref.targetName, nameRefs);
+
       // By resolved target
       if (ref.resolvedId) {
         const targetRefs = this.refsByTarget.get(ref.resolvedId) || [];
         targetRefs.push(ref);
         this.refsByTarget.set(ref.resolvedId, targetRefs);
+      } else {
+        // Track unresolved references
+        this.unresolvedRefs.push(ref);
       }
     }
 
@@ -219,17 +254,20 @@ export class QueryAPI implements IndexQuery {
     for (const inst of index.instances) {
       this.instByLocation.set(locationKey(inst.location), inst);
 
+      // Index by target name (for finding by name regardless of resolution)
+      const nameInsts = this.instsByTargetName.get(inst.targetName) || [];
+      nameInsts.push(inst);
+      this.instsByTargetName.set(inst.targetName, nameInsts);
+
       // By resolved target
       if (inst.resolvedId) {
         const targetInsts = this.instsByTarget.get(inst.resolvedId) || [];
         targetInsts.push(inst);
         this.instsByTarget.set(inst.resolvedId, targetInsts);
+      } else {
+        // Track unresolved instances
+        this.unresolvedInsts.push(inst);
       }
-
-      // Also by name for unresolved
-      const nameInsts = this.instsByTarget.get(inst.targetName) || [];
-      nameInsts.push(inst);
-      this.instsByTarget.set(inst.targetName, nameInsts);
     }
   }
 
@@ -301,14 +339,100 @@ export class QueryAPI implements IndexQuery {
   // Find References
   // ---------------------------------------------------------------------------
 
-  findReferences(declarationId: string): ReferencesResult {
+  /**
+   * Find all references to a declaration.
+   *
+   * @param declarationId - ID of the declaration to find references for
+   * @param options - Optional settings
+   * @returns References result
+   */
+  findReferences(
+    declarationId: string,
+    options?: { includeUnresolved?: boolean }
+  ): ReferencesResult {
     const references = this.refsByTarget.get(declarationId) || [];
     const instances = this.instsByTarget.get(declarationId) || [];
 
-    return {
+    const result: ReferencesResult = {
       references,
       instances,
       totalCount: references.length + instances.length,
+    };
+
+    // Optionally include unresolved items with matching target name
+    if (options?.includeUnresolved) {
+      const decl = this.declById.get(declarationId);
+      if (decl) {
+        result.unresolvedReferences = this.findUnresolvedReferencesByName(decl.name);
+        result.unresolvedInstances = this.findUnresolvedInstancesByName(decl.name);
+      }
+    }
+
+    return result;
+  }
+
+  /**
+   * Find all references by target name (resolved and unresolved).
+   *
+   * @param targetName - Name to search for
+   * @returns All references with this target name
+   */
+  findReferencesByName(targetName: string): Reference[] {
+    return this.refsByTargetName.get(targetName) || [];
+  }
+
+  /**
+   * Find unresolved references by target name.
+   *
+   * @param targetName - Name to search for
+   * @returns Unresolved references with this target name
+   */
+  findUnresolvedReferencesByName(targetName: string): Reference[] {
+    return this.unresolvedRefs.filter((r) => r.targetName === targetName);
+  }
+
+  /**
+   * Find unresolved instances by target name.
+   *
+   * @param targetName - Name to search for
+   * @returns Unresolved instances with this target name
+   */
+  findUnresolvedInstancesByName(targetName: string): Instance[] {
+    return this.unresolvedInsts.filter((i) => i.targetName === targetName);
+  }
+
+  /**
+   * Get all unresolved references.
+   *
+   * @returns Array of all unresolved references
+   */
+  getUnresolvedReferences(): Reference[] {
+    return [...this.unresolvedRefs];
+  }
+
+  /**
+   * Get all unresolved instances.
+   *
+   * @returns Array of all unresolved instances
+   */
+  getUnresolvedInstances(): Instance[] {
+    return [...this.unresolvedInsts];
+  }
+
+  /**
+   * Get statistics about resolved/unresolved items.
+   */
+  getResolutionStats(): {
+    resolvedRefs: number;
+    unresolvedRefs: number;
+    resolvedInsts: number;
+    unresolvedInsts: number;
+  } {
+    return {
+      resolvedRefs: this.index.references.length - this.unresolvedRefs.length,
+      unresolvedRefs: this.unresolvedRefs.length,
+      resolvedInsts: this.index.instances.length - this.unresolvedInsts.length,
+      unresolvedInsts: this.unresolvedInsts.length,
     };
   }
 
