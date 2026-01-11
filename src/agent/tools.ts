@@ -209,6 +209,22 @@ export const getMcpToolSchema = z.object({
 });
 
 // ============================================================================
+// Tool Setup Schemas
+// ============================================================================
+
+// Check Tool Status - Check if analysis tools are installed
+export const checkToolStatusSchema = z.object({
+    tool: z.enum(['verible', 'slang', 'both']).optional().default('both')
+        .describe('Which tool to check status for (default: both)')
+});
+
+// Setup Verible - Download and configure Verible
+export const setupVeribleSchema = z.object({});
+
+// Setup Slang - Build and configure Slang
+export const setupSlangSchema = z.object({});
+
+// ============================================================================
 // Tool Implementations
 // ============================================================================
 
@@ -1365,6 +1381,118 @@ export function createToolExecutors(ctx: ToolContext) {
                 },
                 available: true
             };
+        },
+
+        // ====================================================================
+        // Tool Setup Tools
+        // ====================================================================
+
+        check_tool_status: async (args: z.infer<typeof checkToolStatusSchema>) => {
+            const status: Record<string, { installed: boolean; version?: string; path?: string }> = {};
+
+            if (args.tool === 'verible' || args.tool === 'both') {
+                try {
+                    const { binaryManager: veribleManager } = await import('../indexer/verible/binary-manager.js');
+                    const available = await veribleManager.isAvailable('verible-verilog-syntax');
+                    if (available) {
+                        const loc = await veribleManager.findBinary('verible-verilog-syntax', false);
+                        status.verible = { installed: true, version: loc.version, path: loc.path };
+                    } else {
+                        status.verible = { installed: false };
+                    }
+                } catch {
+                    status.verible = { installed: false };
+                }
+            }
+
+            if (args.tool === 'slang' || args.tool === 'both') {
+                try {
+                    const { slangBinaryManager } = await import('../indexer/slang/binary-manager.js');
+                    const available = await slangBinaryManager.isAvailable();
+                    if (available) {
+                        const loc = await slangBinaryManager.findBinary(false);
+                        status.slang = { installed: true, version: loc.version, path: loc.path };
+                    } else {
+                        status.slang = { installed: false };
+                    }
+                } catch {
+                    status.slang = { installed: false };
+                }
+            }
+
+            return status;
+        },
+
+        setup_verible: async (_args: z.infer<typeof setupVeribleSchema>) => {
+            ctx.bus.emit({
+                type: 'status',
+                phase: 'setup',
+                label: 'Setting up Verible...'
+            });
+
+            try {
+                const { runToolSetupFlow } = await import('../indexer/setup/setup-flow.js');
+                const result = await runToolSetupFlow(ctx.bus, ctx.policy, ctx.projectRoot, {
+                    interactive: true,
+                    tools: ['verible']
+                });
+
+                if (result.success && result.tools.verible) {
+                    return {
+                        success: true,
+                        action: result.tools.verible.action,
+                        version: result.tools.verible.version,
+                        path: result.tools.verible.path,
+                        message: `Verible ${result.tools.verible.action} successfully${result.tools.verible.version ? ` (version ${result.tools.verible.version})` : ''}`
+                    };
+                }
+
+                return {
+                    success: false,
+                    error: result.error || 'Setup failed'
+                };
+            } catch (err) {
+                return {
+                    success: false,
+                    error: `Setup failed: ${err}`
+                };
+            }
+        },
+
+        setup_slang: async (_args: z.infer<typeof setupSlangSchema>) => {
+            ctx.bus.emit({
+                type: 'status',
+                phase: 'setup',
+                label: 'Setting up Slang...'
+            });
+
+            try {
+                const { runToolSetupFlow } = await import('../indexer/setup/setup-flow.js');
+                const result = await runToolSetupFlow(ctx.bus, ctx.policy, ctx.projectRoot, {
+                    interactive: true,
+                    tools: ['slang']
+                });
+
+                if (result.success && result.tools.slang) {
+                    return {
+                        success: true,
+                        action: result.tools.slang.action,
+                        version: result.tools.slang.version,
+                        path: result.tools.slang.path,
+                        message: `Slang ${result.tools.slang.action} successfully${result.tools.slang.version ? ` (version ${result.tools.slang.version})` : ''}`
+                    };
+                }
+
+                return {
+                    success: false,
+                    error: result.error || 'Setup failed'
+                };
+            } catch (err) {
+                return {
+                    success: false,
+                    error: `Setup failed: ${err}`
+                };
+            }
         }
     };
 }
@@ -1508,6 +1636,20 @@ export function getToolSpecs() {
         search_terminal: {
             description: 'Search terminal/simulation output for patterns. Find specific errors or output from commands.',
             parameters: searchTerminalSchema
+        },
+
+        // Tool Setup Tools - for installing/configuring analysis tools
+        check_tool_status: {
+            description: 'Check if SystemVerilog analysis tools (Verible and/or Slang) are installed and working. Use this when the user asks about tool availability, wants to know what tools are installed, or when you need to verify tools before suggesting installation. Returns installation status, version, and path for each tool.',
+            parameters: checkToolStatusSchema
+        },
+        setup_verible: {
+            description: 'Download and configure Verible (SystemVerilog syntax parser). Use this when the user wants to install Verible, asks to set up parsing tools, or needs help getting Verible working. Downloads prebuilt binaries from GitHub - fast and easy, no compilation required. Requires user approval for downloads.',
+            parameters: setupVeribleSchema
+        },
+        setup_slang: {
+            description: 'Build and configure Slang (SystemVerilog semantic analyzer). Use this when the user wants to install Slang, asks to set up semantic analysis, or needs help getting Slang working. WARNING: Requires git, cmake, and a C++20 compiler. Takes several minutes to build from source. Requires user approval for build commands.',
+            parameters: setupSlangSchema
         }
     };
 }
