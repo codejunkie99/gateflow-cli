@@ -191,11 +191,22 @@ export function visitBindDirective(
 
   context.instances.push(instance);
 
-  // Add reference for dependency tracking (bind target module)
+  // Add reference for the bound module (e.g., cpu_checker in "bind cpu cpu_checker u_chk")
   context.references.push({
     id: locationId(context.filePath, location.line, location.col + 1),
     kind: 'type_usage',
     targetName,
+    location,
+    scope: [...context.scope],
+    guard: context.guard,
+  });
+
+  // Add reference for the bind target (e.g., cpu in "bind cpu cpu_checker u_chk")
+  // This creates a dependency to the module being bound TO
+  context.references.push({
+    id: locationId(context.filePath, location.line, location.col + 2),
+    kind: 'type_usage',
+    targetName: bindTarget,
     location,
     scope: [...context.scope],
     guard: context.guard,
