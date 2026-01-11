@@ -574,10 +574,8 @@ export class ProjectResolver {
       if (inst.instanceKind !== 'bind' || !inst.bindTarget) continue;
 
       // Look up the bind target module by name
-      const bindTargetModules = this.index.getByNameAndKind(inst.bindTarget, 'module');
-      if (bindTargetModules.length === 0) continue;
-
-      const bindTargetModule = bindTargetModules[0];
+      const bindTargetModule = this.index.getByNameAndKind(inst.bindTarget, 'module');
+      if (!bindTargetModule) continue;
 
       // Skip self-dependencies (same file)
       if (inst.location.file === bindTargetModule.location.file) continue;
