@@ -190,4 +190,14 @@ export function visitBindDirective(
   };
 
   context.instances.push(instance);
+
+  // Add reference for dependency tracking (bind target module)
+  context.references.push({
+    id: locationId(context.filePath, location.line, location.col + 1),
+    kind: 'type_usage',
+    targetName,
+    location,
+    scope: [...context.scope],
+    guard: context.guard,
+  });
 }
