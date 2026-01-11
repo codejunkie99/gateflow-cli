@@ -84,11 +84,12 @@ const FIELD_SEPARATOR = '\0';
  * - Stability across edits (moving code doesn't change ID)
  * - Unique identification within the codebase
  *
- * @param file - Absolute file path where declaration appears
- * @param kind - Kind of declaration (module, class, function, etc.)
- * @param name - Name of the declared entity
- * @param scope - Scope chain (e.g., ['package_name', 'class_name'])
+ * @param file - Absolute file path where declaration appears (must be non-empty string)
+ * @param kind - Kind of declaration (module, class, function, etc.) (must be non-empty string)
+ * @param name - Name of the declared entity (must be non-empty string)
+ * @param scope - Scope chain (e.g., ['package_name', 'class_name']) (must be array)
  * @returns Declaration ID in format "decl:abcdef1234567890"
+ * @throws {Error} If file, kind, or name is not a non-empty string, or scope is not an array
  *
  * @example
  * ```typescript
@@ -120,7 +121,27 @@ export function declarationId(
   name: string,
   scope: string[]
 ): string {
-  // Validate scope array - filter out empty strings, null, undefined
+  // Validate file is a non-empty string
+  if (typeof file !== 'string' || file.length === 0) {
+    throw new Error('declarationId: file must be a non-empty string');
+  }
+
+  // Validate kind is a non-empty string
+  if (typeof kind !== 'string' || kind.length === 0) {
+    throw new Error('declarationId: kind must be a non-empty string');
+  }
+
+  // Validate name is a non-empty string
+  if (typeof name !== 'string' || name.length === 0) {
+    throw new Error('declarationId: name must be a non-empty string');
+  }
+
+  // Validate scope is an array
+  if (!Array.isArray(scope)) {
+    throw new Error('declarationId: scope must be an array');
+  }
+
+  // Filter scope array - remove empty strings, null, undefined
   // This prevents collisions like [] vs [''] or [null, 'a'] vs ['', 'a']
   const cleanScope = scope.filter(
     (s): s is string => typeof s === 'string' && s.length > 0
