@@ -87,9 +87,24 @@ export class DependencyGraph {
   /** All files */
   private files: Set<string> = new Set();
 
+  /** Cached cycle detection result */
+  private _cyclesCache?: DependencyCycle[];
+
+  /** Cached hasCycles result */
+  private _hasCycles?: boolean;
+
   // --------------------------------------------------------------------------
   // Building the Graph
   // --------------------------------------------------------------------------
+
+  /**
+   * Invalidate cached cycle detection results.
+   * Called when the graph is modified.
+   */
+  private invalidateCycleCache(): void {
+    this._cyclesCache = undefined;
+    this._hasCycles = undefined;
+  }
 
   /**
    * Add a dependency edge.
@@ -112,6 +127,9 @@ export class DependencyGraph {
       this.dependedOnBy.set(dep.toFile, new Set());
     }
     this.dependedOnBy.get(dep.toFile)!.add(dep.fromFile);
+
+    // Invalidate cycle cache since graph changed
+    this.invalidateCycleCache();
   }
 
   /**
@@ -133,20 +151,22 @@ export class DependencyGraph {
    * Get files that a file depends on (direct dependencies).
    *
    * @param file - File path
-   * @returns Set of file paths
+   * @returns Set of file paths (copy - safe to mutate)
    */
   getDependencies(file: string): Set<string> {
-    return this.dependsOn.get(file) || new Set();
+    const deps = this.dependsOn.get(file);
+    return deps ? new Set(deps) : new Set();
   }
 
   /**
    * Get files that depend on a file (direct dependents).
    *
    * @param file - File path
-   * @returns Set of file paths
+   * @returns Set of file paths (copy - safe to mutate)
    */
   getDependents(file: string): Set<string> {
-    return this.dependedOnBy.get(file) || new Set();
+    const deps = this.dependedOnBy.get(file);
+    return deps ? new Set(deps) : new Set();
   }
 
   /**
@@ -302,10 +322,16 @@ export class DependencyGraph {
    *
    * Returns unique cycles - each cycle is reported only once,
    * regardless of which node the DFS started from.
+   * Results are cached until the graph is modified.
    *
    * @returns Array of cycles found (deduplicated)
    */
   detectCycles(): DependencyCycle[] {
+    // Return cached result if available
+    if (this._cyclesCache !== undefined) {
+      return this._cyclesCache;
+    }
+
     const cycles: DependencyCycle[] = [];
     const visited = new Set<string>();
     const recStack = new Set<string>();
@@ -380,15 +406,23 @@ export class DependencyGraph {
       dfs(file, []);
     }
 
+    // Cache the result
+    this._cyclesCache = cycles;
+    this._hasCycles = cycles.length > 0;
+
     return cycles;
   }
 
   /**
    * Check if there are any circular dependencies.
+   * Uses cached result if available.
    *
    * @returns True if cycles exist
    */
   hasCycles(): boolean {
+    if (this._hasCycles !== undefined) {
+      return this._hasCycles;
+    }
     return this.detectCycles().length > 0;
   }
 
@@ -471,6 +505,7 @@ export class DependencyGraph {
     this.dependedOnBy.clear();
     this.edges = [];
     this.files.clear();
+    this.invalidateCycleCache();
   }
 }
 
