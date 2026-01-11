@@ -54,10 +54,11 @@ const FIELD_SEPARATOR = '\0';
  * - Compact representation (16 chars vs full path)
  * - Privacy (doesn't expose full file path in exports)
  *
- * @param file - Absolute file path
- * @param line - Line number (1-based)
- * @param col - Column number (1-based)
+ * @param file - Absolute file path (must be non-empty string)
+ * @param line - Line number (1-based, defaults to 1 if invalid)
+ * @param col - Column number (1-based, defaults to 1 if invalid)
  * @returns Location ID in format "loc:abcdef1234567890"
+ * @throws {Error} If file is not a non-empty string
  *
  * @example
  * ```typescript
@@ -75,10 +76,15 @@ const FIELD_SEPARATOR = '\0';
  * ```
  */
 export function locationId(file: string, line: number, col: number): string {
+  // Validate file is a non-empty string
+  if (typeof file !== 'string' || file.length === 0) {
+    throw new Error('locationId: file must be a non-empty string');
+  }
+
   // Validate line and col are positive integers
   // NaN, Infinity, negative, or non-integer values get normalized
   const safeLine = Number.isInteger(line) && line > 0 ? line : 1;
-  const safeCol = Number.isInteger(col) && col >= 0 ? col : 0;
+  const safeCol = Number.isInteger(col) && col > 0 ? col : 1;
 
   // Build the input string that uniquely identifies this location
   // Using null byte as separator to prevent collisions with special chars in paths
