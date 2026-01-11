@@ -168,7 +168,7 @@ export interface ProjectIndexCacheStats {
 // Constants
 // ============================================================================
 
-const CACHE_FORMAT_VERSION = 2; // Bumped: async I/O, content-based filesHash
+const CACHE_FORMAT_VERSION = 3; // Bumped: longer hashes (128-bit), SHA-256 for project ID
 const DEFAULT_MAX_AGE = 7 * 24 * 60 * 60 * 1000; // 7 days
 const DEFAULT_CACHE_DIR = join(homedir(), '.gateflow', 'cache', 'projects');
 
@@ -608,7 +608,7 @@ export class ProjectIndexCache {
             stat(filePath),
             readFile(filePath, 'utf-8'),
           ]);
-          const hash = createHash('sha256').update(content).digest('hex').substring(0, 16);
+          const hash = createHash('sha256').update(content).digest('hex').substring(0, 32);
           return {
             path: filePath,
             hash,
@@ -646,9 +646,10 @@ export class ProjectIndexCache {
 
   /**
    * Generate a project ID from the project path.
+   * Uses SHA-256 truncated to 16 hex chars (64 bits) for filesystem-safe cache key.
    */
   private getProjectId(projectPath: string): string {
-    return createHash('md5').update(projectPath).digest('hex').substring(0, 12);
+    return createHash('sha256').update(projectPath).digest('hex').substring(0, 16);
   }
 
   // ---------------------------------------------------------------------------
