@@ -49,7 +49,10 @@ export type ToolName =
     | 'run_command'
     | 'download_file'
     | 'extract_archive'
-    | 'set_env_var';
+    | 'set_env_var'
+    // Prerequisite installation (require approval)
+    | 'install_prerequisite'
+    | 'open_install_url';
 
 export interface ToolPolicy {
     /** Default approval requirement */
@@ -305,6 +308,18 @@ export const DEFAULT_TOOL_POLICIES: Record<ToolName, ToolPolicy> = {
         requiresApproval: true,
         checkPath: false,
         description: 'Set environment variable in .env file'
+    },
+
+    // Prerequisite installation
+    install_prerequisite: {
+        requiresApproval: true,
+        checkPath: false,
+        description: 'Install build prerequisite via package manager'
+    },
+    open_install_url: {
+        requiresApproval: true,
+        checkPath: false,
+        description: 'Open download page in browser'
     }
 };
 

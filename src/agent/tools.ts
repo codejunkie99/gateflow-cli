@@ -1544,7 +1544,7 @@ export function createToolExecutors(ctx: ToolContext) {
 
             const allPrereqsMet = prerequisites.git && prerequisites.cmake && prerequisites.compiler;
 
-            // If prerequisites are missing, return error with guidance
+            // Log missing prerequisites (the setup flow will handle installing them)
             if (!allPrereqsMet) {
                 const missing = [
                     !prerequisites.git ? 'git' : null,
@@ -1552,20 +1552,14 @@ export function createToolExecutors(ctx: ToolContext) {
                     !prerequisites.compiler ? 'C++20 compiler' : null
                 ].filter(Boolean);
 
-                return {
-                    success: false,
-                    prerequisites,
-                    missing,
-                    message: `Cannot install Slang - missing prerequisites: ${missing.join(', ')}. Please install them first.`,
-                    instructions: {
-                        git: !prerequisites.git ? 'Install from https://git-scm.com/' : null,
-                        cmake: !prerequisites.cmake ? 'Install from https://cmake.org/ (version 3.15+)' : null,
-                        compiler: !prerequisites.compiler ? (os === 'win32' ? 'Install Visual Studio 2019+ with C++ workload' : 'Install g++ or clang++ with C++20 support') : null
-                    }
-                };
+                // Emit info about missing prerequisites - the agent will install them
+                ctx.bus.emit({
+                    type: 'token',
+                    text: `\nMissing prerequisites: ${missing.join(', ')}. The setup assistant will help install them.\n`
+                });
             }
 
-            // Run interactive setup flow
+            // Run interactive setup flow (agent will install prerequisites if needed)
             try {
                 const { runToolSetupFlow } = await import('../indexer/setup/setup-flow.js');
                 const result = await runToolSetupFlow(

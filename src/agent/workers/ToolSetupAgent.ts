@@ -40,6 +40,10 @@ export function createToolSetupAgent(tools: Record<string, Tool>): GateFlowAgent
       verify_verible: tools.verify_verible,
       verify_slang: tools.verify_slang,
       ask_user: tools.ask_user,
+      // Prerequisite installation tools
+      detect_package_managers: tools.detect_package_managers,
+      install_prerequisite: tools.install_prerequisite,
+      open_install_url: tools.open_install_url,
     },
     maxSteps: 25,
   });
@@ -58,7 +62,7 @@ You can set up two tools:
 NEVER just output a question and stop. ALWAYS use the ask_user tool to ask questions and wait for responses.
 - When asking what to set up: use ask_user with options like ["Verible", "Slang", "Both", "Skip"]
 - When setup fails: use ask_user to ask "Would you like to retry, skip, or get help?"
-- When prerequisites are missing: use ask_user to ask what to do next
+- When prerequisites are missing: offer to install them automatically
 - Continue the conversation until setup is complete or user explicitly skips
 
 ## Setup Process
@@ -82,9 +86,14 @@ Based on status, use ask_user to ask what they want:
 
 ### Slang Setup (Advanced - ~5-10 min)
 1. Use check_prerequisites to verify git, cmake, C++20 compiler
-2. If prerequisites missing:
-   - Explain what's needed
-   - Use ask_user to ask: "Install prerequisites first, skip Slang, or get detailed instructions?"
+2. **If prerequisites missing - INSTALL THEM AUTOMATICALLY:**
+   a. Use detect_package_managers to find available package managers (winget, brew, apt, etc.)
+   b. For each missing prerequisite (git, cmake, compiler):
+      - Tell user what you're about to install and why
+      - Use install_prerequisite to install it (this asks for approval automatically)
+      - Use check_prerequisites again to verify it installed correctly
+   c. If automatic install fails, use open_install_url to open the download page
+   d. Only proceed to build Slang after ALL prerequisites are installed
 3. If ready to build:
    - run_command: git clone https://github.com/MikePopoloski/slang ~/.gateflow/slang-src
    - run_command: cmake -B build -DCMAKE_BUILD_TYPE=Release (in slang-src)
@@ -93,9 +102,27 @@ Based on status, use ask_user to ask what they want:
 5. Use verify_slang to confirm it works
 6. If any step fails, use ask_user to ask what to do next
 
+## Prerequisite Installation Tools
+You have these tools for installing prerequisites:
+- **detect_package_managers**: Find what package managers are available (winget, chocolatey, scoop, brew, apt, dnf, etc.)
+- **install_prerequisite**: Install git, cmake, or compiler via the detected package manager
+- **open_install_url**: If automatic install fails, open the manual download page in browser
+
+### Installation Order
+Always install prerequisites in this order:
+1. git (needed to clone Slang)
+2. cmake (needed to configure build)
+3. compiler (MSVC on Windows, g++/clang++ on Unix)
+
+### Platform Notes
+- **Windows**: Prefer winget (built-in). Compiler installs Visual Studio Build Tools (~2GB, takes a while)
+- **macOS**: Prefer brew. Compiler is Xcode Command Line Tools
+- **Linux**: Use apt/dnf/yum. Compiler is usually g++
+
 ## Important Notes
 - ALWAYS use ask_user tool for ANY question - never just print a question and stop
-- Always get approval before download_file, extract_archive, run_command
+- Always get approval before download_file, extract_archive, run_command, install_prerequisite
+- When prerequisites are missing, INSTALL THEM - don't just tell the user to do it manually
 - Stream progress for long operations
 - If something fails, use ask_user to offer: retry, skip, or alternative approaches
 - Keep going until setup succeeds or user explicitly chooses to skip`;
