@@ -15,7 +15,8 @@
  */
 
 import { createHash } from 'crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, statSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, readdirSync } from 'fs';
+import { stat, readFile } from 'fs/promises';
 import { join, dirname } from 'path';
 import { homedir } from 'os';
 import type { ResolvedProject, Declaration, Reference, Instance, Directive, HierarchyNode, FileDependency, SemanticIndex, FileRecord } from '../types/index.js';
@@ -167,7 +168,7 @@ export interface ProjectIndexCacheStats {
 // Constants
 // ============================================================================
 
-const CACHE_FORMAT_VERSION = 1;
+const CACHE_FORMAT_VERSION = 2; // Bumped: async I/O, content-based filesHash
 const DEFAULT_MAX_AGE = 7 * 24 * 60 * 60 * 1000; // 7 days
 const DEFAULT_CACHE_DIR = join(homedir(), '.gateflow', 'cache', 'projects');
 
@@ -465,29 +466,45 @@ export class ProjectIndexCache {
       };
     }
 
-    // Check file mtimes (fast check)
+    // Check file mtimes (async with batching for performance)
+    const VALIDATION_CONCURRENCY = 20;
     const changedFiles: string[] = [];
-    for (const cachedFile of entry.files) {
-      try {
-        const stats = statSync(cachedFile.path);
-        if (stats.mtimeMs !== cachedFile.lastModified) {
-          changedFiles.push(cachedFile.path);
-        }
-      } catch {
-        // File no longer accessible
-        changedFiles.push(cachedFile.path);
-      }
-    }
 
-    if (changedFiles.length > 0) {
-      return {
-        isValid: false,
-        changedFiles,
-        deletedFiles: [],
-        newFiles: [],
-        versionMismatch: false,
-        reason: 'files_modified',
-      };
+    for (let i = 0; i < entry.files.length; i += VALIDATION_CONCURRENCY) {
+      const batch = entry.files.slice(i, i + VALIDATION_CONCURRENCY);
+
+      const results = await Promise.allSettled(
+        batch.map(async (cachedFile) => {
+          const stats = await stat(cachedFile.path);
+          return {
+            path: cachedFile.path,
+            mtimeMs: stats.mtimeMs,
+            expected: cachedFile.lastModified,
+          };
+        })
+      );
+
+      for (let j = 0; j < results.length; j++) {
+        const result = results[j];
+        if (result.status === 'rejected') {
+          // File no longer accessible
+          changedFiles.push(batch[j].path);
+        } else if (result.value.mtimeMs !== result.value.expected) {
+          changedFiles.push(result.value.path);
+        }
+      }
+
+      // Early exit: if changes found, skip remaining batches
+      if (changedFiles.length > 0) {
+        return {
+          isValid: false,
+          changedFiles,
+          deletedFiles: [],
+          newFiles: [],
+          versionMismatch: false,
+          reason: 'files_modified',
+        };
+      }
     }
 
     return {
@@ -529,6 +546,16 @@ export class ProjectIndexCache {
 
   /**
    * Deserialize a project from cache.
+   *
+   * Design note on semantic arrays:
+   * The semantic.declarations/references/instances arrays are intentionally
+   * set to empty. These arrays originally contain raw Layer B (slang) output
+   * before merging with Layer A. The merged results are stored in the main
+   * project.declarations/references/instances arrays, which is what consumers
+   * use. Only semantic.source and semantic.stats are needed post-merge.
+   *
+   * The main arrays contain ALL data (syntactic + semantic merged), so no
+   * information is lost for cache consumers.
    */
   private deserializeProject(serialized: SerializedResolvedProject): ResolvedProject {
     return {
@@ -545,7 +572,8 @@ export class ProjectIndexCache {
       hasSemanticAnalysis: serialized.hasSemanticAnalysis,
       semantic: serialized.semanticStats
         ? {
-            declarations: [], // Not stored - use project.declarations
+            // Empty arrays by design - see method documentation above
+            declarations: [],
             references: [],
             instances: [],
             source: serialized.semanticStats.source,
@@ -565,24 +593,36 @@ export class ProjectIndexCache {
 
   /**
    * Build file metadata for cache entry.
+   * Uses async I/O with batching for performance.
    */
   private async buildFileMetadata(files: string[]): Promise<FileMetadata[]> {
+    const CONCURRENCY = 10;
     const metadata: FileMetadata[] = [];
 
-    for (const filePath of files) {
-      try {
-        const stats = statSync(filePath);
-        const content = readFileSync(filePath, 'utf-8');
-        const hash = createHash('sha256').update(content).digest('hex').substring(0, 16);
+    for (let i = 0; i < files.length; i += CONCURRENCY) {
+      const batch = files.slice(i, i + CONCURRENCY);
 
-        metadata.push({
-          path: filePath,
-          hash,
-          lastModified: stats.mtimeMs,
-          size: stats.size,
-        });
-      } catch {
-        // File not accessible, skip
+      const results = await Promise.allSettled(
+        batch.map(async (filePath) => {
+          const [stats, content] = await Promise.all([
+            stat(filePath),
+            readFile(filePath, 'utf-8'),
+          ]);
+          const hash = createHash('sha256').update(content).digest('hex').substring(0, 16);
+          return {
+            path: filePath,
+            hash,
+            lastModified: stats.mtimeMs,
+            size: stats.size,
+          };
+        })
+      );
+
+      for (const result of results) {
+        if (result.status === 'fulfilled') {
+          metadata.push(result.value);
+        }
+        // Skip files that failed to read
       }
     }
 
@@ -591,10 +631,12 @@ export class ProjectIndexCache {
 
   /**
    * Create a hash from file metadata for quick comparison.
+   * Uses content hash (not mtime/size) for accurate change detection.
    */
   private hashFileMetadata(metadata: FileMetadata[]): string {
     const sorted = [...metadata].sort((a, b) => a.path.localeCompare(b.path));
-    const data = sorted.map((f) => `${f.path}:${f.lastModified}:${f.size}`).join('|');
+    // Use content hash for accurate invalidation (hash already captures content changes)
+    const data = sorted.map((f) => `${f.path}:${f.hash}`).join('|');
     return createHash('sha256').update(data).digest('hex').substring(0, 32);
   }
 
@@ -662,8 +704,24 @@ export class ProjectIndexCache {
   }
 
   private clearDiskCache(): void {
-    // Implementation: iterate cache dir and delete all .json files
-    // Simplified for now - just clear memory
+    try {
+      if (!existsSync(this.options.cacheDir)) {
+        return;
+      }
+
+      const files = readdirSync(this.options.cacheDir);
+      for (const file of files) {
+        if (file.endsWith('.json')) {
+          try {
+            unlinkSync(join(this.options.cacheDir, file));
+          } catch {
+            // Individual file deletion failure - continue with others
+          }
+        }
+      }
+    } catch {
+      // Failed to read directory, silently continue
+    }
   }
 }
 
