@@ -235,6 +235,21 @@ export class GateFlowAgent {
             get_project_stats: {
                 description: 'Get project statistics.',
                 inputSchema: z.object({})
+            },
+            // Tool Setup - for installing/configuring analysis tools
+            check_tool_status: {
+                description: 'Check if SystemVerilog analysis tools (Verible and/or Slang) are installed and working. Use this when the user asks about tool availability, wants to know what tools are installed, or when you need to verify tools before suggesting installation. Returns installation status, version, and path for each tool.',
+                inputSchema: z.object({
+                    tool: z.enum(['verible', 'slang', 'both']).optional().default('both').describe('Which tool to check (default: both)')
+                })
+            },
+            setup_verible: {
+                description: 'Download and configure Verible (SystemVerilog syntax parser). Use this when the user wants to install Verible, asks to set up parsing tools, or needs help getting Verible working. Downloads prebuilt binaries from GitHub - fast and easy, no compilation required. Requires user approval for downloads.',
+                inputSchema: z.object({})
+            },
+            setup_slang: {
+                description: 'Build and configure Slang (SystemVerilog semantic analyzer). Use this when the user wants to install Slang, asks to set up semantic analysis, or needs help getting Slang working. WARNING: Requires git, cmake, and a C++20 compiler. Takes several minutes to build from source. Requires user approval for build commands.',
+                inputSchema: z.object({})
             }
         };
 

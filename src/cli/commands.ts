@@ -174,44 +174,6 @@ function buildToolContext(ctx: CommandContext): ToolContext {
 }
 
 // ============================================================================
-// Setup Intent Detection
-// ============================================================================
-
-/**
- * Detect if user is asking to install/setup tools.
- * Returns the tools they want to set up, or null if not a setup request.
- */
-function detectSetupIntent(query: string): { tools: ('verible' | 'slang')[] } | null {
-    const lower = query.toLowerCase();
-
-    // Check for setup/install keywords
-    const setupKeywords = ['install', 'setup', 'set up', 'configure', 'download', 'build', 'get'];
-    const hasSetupKeyword = setupKeywords.some(kw => lower.includes(kw));
-
-    if (!hasSetupKeyword) return null;
-
-    // Check which tools are mentioned
-    const tools: ('verible' | 'slang')[] = [];
-
-    if (lower.includes('slang')) {
-        tools.push('slang');
-    }
-    if (lower.includes('verible')) {
-        tools.push('verible');
-    }
-
-    // If they say "tools" or no specific tool, offer both
-    if (tools.length === 0 && (lower.includes('tool') || lower.includes('analyzer') || lower.includes('parser'))) {
-        tools.push('verible', 'slang');
-    }
-
-    // Must have at least one tool identified
-    if (tools.length === 0) return null;
-
-    return { tools };
-}
-
-// ============================================================================
 // Chat Command (REPL)
 // ============================================================================
 
@@ -321,34 +283,6 @@ export async function chatCommand(
                     const indexStats = ctx.indexer.getStats();
                     console.log('\nSession:', sessionStats);
                     console.log('Index:', indexStats);
-                    console.log('');
-                    setImmediate(promptUser);
-                    return;
-                }
-
-                // Check for setup/install intent
-                const setupIntent = detectSetupIntent(trimmed);
-                if (setupIntent) {
-                    console.log(chalk.cyan('Launching tool setup assistant...\n'));
-                    const { runToolSetupFlow } = await import('../indexer/setup/setup-flow.js');
-                    const result = await runToolSetupFlow(
-                        ctx.bus,
-                        ctx.policy,
-                        ctx.projectRoot,
-                        { interactive: true, tools: setupIntent.tools }
-                    );
-
-                    if (result.success) {
-                        console.log(chalk.green('\nSetup complete!'));
-                        if (result.tools.verible) {
-                            console.log(`  Verible: ${result.tools.verible.action}${result.tools.verible.version ? ` (${result.tools.verible.version})` : ''}`);
-                        }
-                        if (result.tools.slang) {
-                            console.log(`  Slang: ${result.tools.slang.action}${result.tools.slang.version ? ` (${result.tools.slang.version})` : ''}`);
-                        }
-                    } else {
-                        console.log(chalk.red('\nSetup encountered issues: ' + (result.error || 'Unknown error')));
-                    }
                     console.log('');
                     setImmediate(promptUser);
                     return;
