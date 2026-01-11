@@ -36,7 +36,8 @@
  * @module ids/declaration-id
  */
 
-import crypto from 'crypto';
+import { createHash } from 'crypto';
+import { isLocationId } from './location-id.js';
 
 // ============================================================================
 // Constants
@@ -56,9 +57,20 @@ const HASH_LENGTH = 16;
 
 /**
  * Separator used to join scope components.
- * Using '::' to match SystemVerilog's scope resolution operator.
+ * Using null byte (\0) to prevent collision attacks.
+ * Null bytes cannot appear in SystemVerilog identifiers or file paths.
+ *
+ * Previous bug: Using '::' caused ['a::b'] to collide with ['a', 'b']
  */
-const SCOPE_SEPARATOR = '::';
+const SCOPE_SEPARATOR = '\0';
+
+/**
+ * Separator used between fields (file, kind, name, scope).
+ * Using null byte to prevent collisions when fields contain special chars.
+ *
+ * Previous bug: Using ':' caused kind='a:b' to collide with name='a:b'
+ */
+const FIELD_SEPARATOR = '\0';
 
 // ============================================================================
 // Main Function
@@ -108,18 +120,22 @@ export function declarationId(
   name: string,
   scope: string[]
 ): string {
-  // Join scope components with separator
-  // Empty scope becomes empty string
-  const scopeStr = scope.join(SCOPE_SEPARATOR);
+  // Validate scope array - filter out empty strings, null, undefined
+  // This prevents collisions like [] vs [''] or [null, 'a'] vs ['', 'a']
+  const cleanScope = scope.filter(
+    (s): s is string => typeof s === 'string' && s.length > 0
+  );
+
+  // Join scope components with null byte separator
+  // Null bytes can't appear in identifiers, preventing collision attacks
+  const scopeStr = cleanScope.join(SCOPE_SEPARATOR);
 
   // Build the input string that uniquely identifies this declaration
-  // Format: "file:kind:name:scope"
-  // Using colon as field separator (unlikely in names)
-  const input = `${file}:${kind}:${name}:${scopeStr}`;
+  // Using null byte as field separator to prevent collisions
+  const input = [file, kind, name, scopeStr].join(FIELD_SEPARATOR);
 
   // Hash with SHA-256 for good distribution
-  const hash = crypto
-    .createHash('sha256')
+  const hash = createHash('sha256')
     .update(input)
     .digest('hex')
     .slice(0, HASH_LENGTH);
@@ -146,6 +162,11 @@ export function declarationId(
  * ```
  */
 export function isDeclarationId(id: string): boolean {
+  // Guard against null/undefined
+  if (typeof id !== 'string') {
+    return false;
+  }
+
   // Must start with prefix
   if (!id.startsWith(DECLARATION_ID_PREFIX)) {
     return false;
@@ -202,16 +223,18 @@ export function identifyIdType(id: string): {
   valid: boolean;
   type: 'declaration' | 'location' | 'unknown';
 } {
+  // Guard against null/undefined
+  if (typeof id !== 'string') {
+    return { valid: false, type: 'unknown' };
+  }
+
   if (isDeclarationId(id)) {
     return { valid: true, type: 'declaration' };
   }
 
-  // Check for location ID format
-  if (id.startsWith('loc:') && id.length === 4 + HASH_LENGTH) {
-    const hash = id.slice(4);
-    if (/^[0-9a-f]+$/.test(hash)) {
-      return { valid: true, type: 'location' };
-    }
+  // Use imported isLocationId instead of duplicating logic
+  if (isLocationId(id)) {
+    return { valid: true, type: 'location' };
   }
 
   return { valid: false, type: 'unknown' };
