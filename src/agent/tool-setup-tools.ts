@@ -15,7 +15,7 @@ import { appendFile, mkdir, writeFile } from 'fs/promises';
 import { join } from 'path';
 import { extract as tarExtract } from 'tar';
 import type { EventBus } from '../events/index.js';
-import type { SetupStage } from '../events/types.js';
+import type { SetupStage, Prerequisite } from '../events/types.js';
 
 // ============================================================================
 // Zod Schemas (Tool Definitions)
@@ -72,6 +72,33 @@ export const askUserSchema = z.object({
   default: z.string().optional().describe('Default option if user just presses enter'),
 });
 
+export const detectPackageManagersSchema = z.object({});
+
+export const installPrerequisiteSchema = z.object({
+  prerequisite: z.enum(['git', 'cmake', 'compiler']).describe('Which prerequisite to install'),
+  packageManager: z.string().optional().describe('Package manager to use (auto-detect if not specified)'),
+});
+
+export const openInstallUrlSchema = z.object({
+  prerequisite: z.enum(['git', 'cmake', 'compiler']).describe('Which prerequisite to open download page for'),
+});
+
+// ============================================================================
+// Types
+// ============================================================================
+
+export type PackageManager =
+  | 'winget' | 'chocolatey' | 'scoop'  // Windows
+  | 'brew'                              // macOS
+  | 'apt' | 'dnf' | 'yum' | 'pacman';   // Linux
+
+export interface PackageManagerInfo {
+  name: PackageManager;
+  available: boolean;
+  version?: string;
+  requiresSudo: boolean;
+}
+
 // ============================================================================
 // Constants
 // ============================================================================
@@ -79,6 +106,74 @@ export const askUserSchema = z.object({
 const GITHUB_RELEASES = {
   verible: 'https://api.github.com/repos/chipsalliance/verible/releases/latest',
   slang: 'https://api.github.com/repos/MikePopoloski/slang/releases/latest',
+};
+
+/**
+ * Installation commands by prerequisite and package manager.
+ */
+const INSTALL_COMMANDS: Record<string, Partial<Record<PackageManager, { command: string; requiresElevation: boolean }>>> = {
+  git: {
+    winget: { command: 'winget install --id Git.Git -e --source winget', requiresElevation: false },
+    chocolatey: { command: 'choco install git -y', requiresElevation: true },
+    scoop: { command: 'scoop install git', requiresElevation: false },
+    brew: { command: 'brew install git', requiresElevation: false },
+    apt: { command: 'sudo apt update && sudo apt install -y git', requiresElevation: true },
+    dnf: { command: 'sudo dnf install -y git', requiresElevation: true },
+    yum: { command: 'sudo yum install -y git', requiresElevation: true },
+    pacman: { command: 'sudo pacman -S --noconfirm git', requiresElevation: true },
+  },
+  cmake: {
+    winget: { command: 'winget install --id Kitware.CMake -e --source winget', requiresElevation: false },
+    chocolatey: { command: 'choco install cmake -y', requiresElevation: true },
+    scoop: { command: 'scoop install cmake', requiresElevation: false },
+    brew: { command: 'brew install cmake', requiresElevation: false },
+    apt: { command: 'sudo apt update && sudo apt install -y cmake', requiresElevation: true },
+    dnf: { command: 'sudo dnf install -y cmake', requiresElevation: true },
+    yum: { command: 'sudo yum install -y cmake', requiresElevation: true },
+    pacman: { command: 'sudo pacman -S --noconfirm cmake', requiresElevation: true },
+  },
+  compiler: {
+    winget: {
+      command: 'winget install --id Microsoft.VisualStudio.2022.BuildTools -e --source winget --override "--add Microsoft.VisualStudio.Workload.VCTools --quiet --wait"',
+      requiresElevation: true,
+    },
+    chocolatey: {
+      command: 'choco install visualstudio2022buildtools --package-parameters "--add Microsoft.VisualStudio.Workload.VCTools" -y',
+      requiresElevation: true,
+    },
+    scoop: { command: 'scoop install mingw', requiresElevation: false },
+    brew: { command: 'xcode-select --install', requiresElevation: false },
+    apt: { command: 'sudo apt update && sudo apt install -y g++ build-essential', requiresElevation: true },
+    dnf: { command: 'sudo dnf install -y gcc-c++ make', requiresElevation: true },
+    yum: { command: 'sudo yum install -y gcc-c++ make', requiresElevation: true },
+    pacman: { command: 'sudo pacman -S --noconfirm gcc make', requiresElevation: true },
+  },
+};
+
+/**
+ * Manual installation URLs for each prerequisite.
+ */
+const MANUAL_INSTALL_URLS: Record<string, { url: string; instructions: string }> = {
+  git: {
+    url: 'https://git-scm.com/downloads',
+    instructions: 'Download and run the installer for your platform. Default options are recommended.',
+  },
+  cmake: {
+    url: 'https://cmake.org/download/',
+    instructions: 'Download CMake 3.15+ installer. Make sure to add CMake to PATH during installation.',
+  },
+  compiler_win32: {
+    url: 'https://visualstudio.microsoft.com/visual-cpp-build-tools/',
+    instructions: 'Download Visual Studio Build Tools 2019+. Select "C++ build tools" workload during installation.',
+  },
+  compiler_darwin: {
+    url: 'https://developer.apple.com/xcode/',
+    instructions: 'Install Xcode from App Store, or run "xcode-select --install" in terminal.',
+  },
+  compiler_linux: {
+    url: 'https://gcc.gnu.org/',
+    instructions: 'Install g++ via your package manager: apt/dnf/yum install g++',
+  },
 };
 
 // ============================================================================
@@ -574,6 +669,275 @@ export function createToolSetupExecutors(bus: EventBus, projectRoot: string) {
         });
       });
     },
+
+    detect_package_managers: async (): Promise<{ managers: PackageManagerInfo[]; recommended: PackageManager | null; platform: string }> => {
+      const os = platform();
+      const managers: PackageManagerInfo[] = [];
+
+      if (os === 'win32') {
+        // Check winget (preferred on Windows 10/11)
+        try {
+          const version = execSync('winget --version', { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'] }).trim();
+          managers.push({ name: 'winget', available: true, version, requiresSudo: false });
+        } catch {
+          managers.push({ name: 'winget', available: false, requiresSudo: false });
+        }
+
+        // Check chocolatey
+        try {
+          const version = execSync('choco --version', { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'] }).trim();
+          managers.push({ name: 'chocolatey', available: true, version, requiresSudo: true });
+        } catch {
+          managers.push({ name: 'chocolatey', available: false, requiresSudo: true });
+        }
+
+        // Check scoop
+        try {
+          execSync('scoop --version', { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'] });
+          managers.push({ name: 'scoop', available: true, requiresSudo: false });
+        } catch {
+          managers.push({ name: 'scoop', available: false, requiresSudo: false });
+        }
+      } else if (os === 'darwin') {
+        // Check Homebrew
+        try {
+          const version = execSync('brew --version', { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'] }).split('\n')[0];
+          managers.push({ name: 'brew', available: true, version, requiresSudo: false });
+        } catch {
+          managers.push({ name: 'brew', available: false, requiresSudo: false });
+        }
+      } else {
+        // Linux - check various package managers
+        const linuxPMs: Array<{ name: PackageManager; cmd: string; sudo: boolean }> = [
+          { name: 'apt', cmd: 'apt --version', sudo: true },
+          { name: 'dnf', cmd: 'dnf --version', sudo: true },
+          { name: 'yum', cmd: 'yum --version', sudo: true },
+          { name: 'pacman', cmd: 'pacman --version', sudo: true },
+        ];
+
+        for (const pm of linuxPMs) {
+          try {
+            execSync(pm.cmd, { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'ignore'] });
+            managers.push({ name: pm.name, available: true, requiresSudo: pm.sudo });
+          } catch {
+            managers.push({ name: pm.name, available: false, requiresSudo: pm.sudo });
+          }
+        }
+      }
+
+      // Find recommended package manager (first available)
+      const available = managers.filter((m) => m.available);
+      const recommended = available.length > 0 ? available[0].name : null;
+
+      return { managers, recommended, platform: os };
+    },
+
+    install_prerequisite: async (args: z.infer<typeof installPrerequisiteSchema>): Promise<{
+      success: boolean;
+      command?: string;
+      output?: string;
+      error?: string;
+      requiresElevation?: boolean;
+    }> => {
+      const { prerequisite, packageManager } = args;
+      const os = platform();
+
+      bus.emit({
+        type: 'prereq_install_stage',
+        prerequisite,
+        stage: 'installing',
+        status: 'started',
+        message: `Installing ${prerequisite}...`,
+      });
+
+      // Get or detect package manager
+      let pm: PackageManager | undefined = packageManager as PackageManager | undefined;
+      if (!pm) {
+        const detection = await createToolSetupExecutors(bus, projectRoot).detect_package_managers();
+        pm = detection.recommended || undefined;
+      }
+
+      if (!pm) {
+        bus.emit({
+          type: 'prereq_install_stage',
+          prerequisite,
+          stage: 'installing',
+          status: 'failed',
+          message: 'No package manager available',
+        });
+        return {
+          success: false,
+          error: 'No package manager available. Please install manually.',
+        };
+      }
+
+      const installInfo = INSTALL_COMMANDS[prerequisite]?.[pm];
+      if (!installInfo) {
+        bus.emit({
+          type: 'prereq_install_stage',
+          prerequisite,
+          stage: 'installing',
+          status: 'failed',
+          message: `No install command for ${prerequisite} with ${pm}`,
+        });
+        return {
+          success: false,
+          error: `No install command available for ${prerequisite} using ${pm}`,
+        };
+      }
+
+      const { command, requiresElevation } = installInfo;
+
+      bus.emit({ type: 'status', phase: 'executing', label: `Installing ${prerequisite} via ${pm}...` });
+      bus.emit({ type: 'token', text: `\nRunning: ${command}\n` });
+
+      return new Promise((resolve) => {
+        const proc = spawn(command, [], {
+          shell: true,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+
+        let stdout = '';
+        let stderr = '';
+
+        proc.stdout.on('data', (data) => {
+          const text = data.toString();
+          stdout += text;
+          bus.emit({ type: 'token', text: `[install] ${text}` });
+        });
+
+        proc.stderr.on('data', (data) => {
+          const text = data.toString();
+          stderr += text;
+          bus.emit({ type: 'token', text: `[install-err] ${text}` });
+        });
+
+        // Timeout after 10 minutes for large installs like VS Build Tools
+        const timeout = setTimeout(() => {
+          proc.kill('SIGTERM');
+          bus.emit({
+            type: 'prereq_install_stage',
+            prerequisite,
+            stage: 'installing',
+            status: 'failed',
+            message: 'Installation timed out',
+          });
+          resolve({ success: false, command, error: 'Installation timed out after 10 minutes' });
+        }, 600000);
+
+        proc.on('close', (code) => {
+          clearTimeout(timeout);
+          if (code === 0) {
+            bus.emit({
+              type: 'prereq_install_stage',
+              prerequisite,
+              stage: 'installing',
+              status: 'completed',
+              message: `Successfully installed ${prerequisite}`,
+            });
+            resolve({ success: true, command, output: stdout });
+          } else {
+            bus.emit({
+              type: 'prereq_install_stage',
+              prerequisite,
+              stage: 'installing',
+              status: 'failed',
+              message: `Exit code ${code}`,
+            });
+            resolve({
+              success: false,
+              command,
+              error: stderr || `Command failed with exit code ${code}`,
+              requiresElevation,
+            });
+          }
+        });
+
+        proc.on('error', (err) => {
+          clearTimeout(timeout);
+          bus.emit({
+            type: 'prereq_install_stage',
+            prerequisite,
+            stage: 'installing',
+            status: 'failed',
+            message: String(err),
+          });
+          resolve({ success: false, command, error: String(err), requiresElevation });
+        });
+      });
+    },
+
+    open_install_url: async (args: z.infer<typeof openInstallUrlSchema>): Promise<{
+      success: boolean;
+      url: string;
+      instructions: string;
+      message: string;
+    }> => {
+      const { prerequisite } = args;
+      const os = platform();
+      const { exec } = await import('child_process');
+
+      // Get the right URL based on prerequisite and platform
+      let urlKey: string = prerequisite;
+      if (prerequisite === 'compiler') {
+        urlKey = `compiler_${os}`;
+      }
+
+      const info = MANUAL_INSTALL_URLS[urlKey] || MANUAL_INSTALL_URLS[prerequisite];
+      if (!info) {
+        return {
+          success: false,
+          url: '',
+          instructions: '',
+          message: `No manual install URL for ${prerequisite}`,
+        };
+      }
+
+      bus.emit({
+        type: 'prereq_install_stage',
+        prerequisite,
+        stage: 'manual',
+        status: 'started',
+        message: `Opening ${info.url}`,
+      });
+
+      return new Promise((resolve) => {
+        let command: string;
+
+        if (os === 'win32') {
+          command = `start "" "${info.url}"`;
+        } else if (os === 'darwin') {
+          command = `open "${info.url}"`;
+        } else {
+          command = `xdg-open "${info.url}"`;
+        }
+
+        exec(command, (error) => {
+          if (error) {
+            resolve({
+              success: false,
+              url: info.url,
+              instructions: info.instructions,
+              message: `Could not open browser. Please visit: ${info.url}`,
+            });
+          } else {
+            bus.emit({
+              type: 'prereq_install_stage',
+              prerequisite,
+              stage: 'manual',
+              status: 'completed',
+              message: 'Opened download page in browser',
+            });
+            resolve({
+              success: true,
+              url: info.url,
+              instructions: info.instructions,
+              message: `Opened download page. ${info.instructions}`,
+            });
+          }
+        });
+      });
+    },
   };
 }
 
@@ -593,6 +957,9 @@ export const TOOL_DESCRIPTIONS: Record<string, string> = {
   verify_verible: 'Verify Verible is working correctly',
   verify_slang: 'Verify Slang is working correctly',
   ask_user: 'Ask the user a question and wait for their response. Use for confirmations and choices.',
+  detect_package_managers: 'Detect available package managers on the system (winget, brew, apt, etc.)',
+  install_prerequisite: 'Install a prerequisite (git, cmake, or compiler) via package manager (requires user approval)',
+  open_install_url: 'Open the manual download page for a prerequisite in the default browser',
 };
 
 export const TOOL_SCHEMAS: Record<string, z.ZodObject<any>> = {
@@ -607,4 +974,7 @@ export const TOOL_SCHEMAS: Record<string, z.ZodObject<any>> = {
   verify_verible: verifyVeribleSchema,
   verify_slang: verifySlangSchema,
   ask_user: askUserSchema,
+  detect_package_managers: detectPackageManagersSchema,
+  install_prerequisite: installPrerequisiteSchema,
+  open_install_url: openInstallUrlSchema,
 };

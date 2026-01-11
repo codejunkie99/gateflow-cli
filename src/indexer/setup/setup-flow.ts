@@ -86,7 +86,7 @@ export async function runToolSetupFlow(
 
   // Wrap tools with approval checking using the AI SDK tool helper
   const tools: Record<string, any> = {};
-  const approvalRequired: ToolName[] = ['run_command', 'download_file', 'extract_archive', 'set_env_var'];
+  const approvalRequired: ToolName[] = ['run_command', 'download_file', 'extract_archive', 'set_env_var', 'install_prerequisite', 'open_install_url'];
 
   for (const [name, executor] of Object.entries(executors)) {
     const schema = TOOL_SCHEMAS[name];
