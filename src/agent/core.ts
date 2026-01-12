@@ -294,6 +294,18 @@ export class GateFlowAgent {
             content: userMessage.trim()
         });
 
+        // Emit agent lifecycle start
+        this.bus.emit({
+            type: 'agent_start',
+            agentName: 'gateflow',
+            task: userMessage.slice(0, 100)
+        });
+        const agentStartTime = Date.now();
+
+        // Track token usage for agent_complete
+        let lastUsage: { inputTokens?: number; outputTokens?: number } | undefined;
+
+        try {
         // Emit status immediately so spinner shows during processing
         this.bus.emit({
             type: 'status',
@@ -389,6 +401,28 @@ Return needsMultiAgent: true only for genuinely complex requests.`
                         }
                     }
                 }
+            },
+
+            // Error callback for stream errors (AI SDK v6)
+            onError: ({ error }) => {
+                this.bus.emit({
+                    type: 'error',
+                    message: error instanceof Error ? error.message : String(error)
+                });
+            },
+
+            // Abort callback for cleanup (AI SDK v6)
+            onAbort: ({ steps }) => {
+                this.bus.emit({
+                    type: 'status',
+                    phase: 'thinking',
+                    label: `Aborted after ${steps.length} steps`
+                });
+            },
+
+            // Finish callback for token tracking (AI SDK v6)
+            onFinish: ({ totalUsage }) => {
+                lastUsage = totalUsage;
             }
         });
 
@@ -441,6 +475,40 @@ Return needsMultiAgent: true only for genuinely complex requests.`
                         }
                     }
                     break;
+
+                // Handle error stream parts (AI SDK v6)
+                case 'error': {
+                    const errorMsg = (part as any).error instanceof Error
+                        ? (part as any).error.message
+                        : String((part as any).error);
+                    this.bus.emit({
+                        type: 'error',
+                        message: `Stream error: ${errorMsg}`
+                    });
+                    break;
+                }
+
+                // Handle tool errors (AI SDK v6)
+                case 'tool-error': {
+                    const toolError = part as any;
+                    const errorMsg = toolError.error instanceof Error
+                        ? toolError.error.message
+                        : String(toolError.error);
+                    this.bus.emit({
+                        type: 'error',
+                        message: `Tool ${toolError.toolName} failed: ${errorMsg}`
+                    });
+                    break;
+                }
+
+                // Handle abort (AI SDK v6)
+                case 'abort':
+                    this.bus.emit({
+                        type: 'status',
+                        phase: 'thinking',
+                        label: 'Stream aborted'
+                    });
+                    break;
             }
         }
 
@@ -464,7 +532,36 @@ Return needsMultiAgent: true only for genuinely complex requests.`
 
         this.bus.emit({ type: 'token_done' });
 
+        // Emit agent lifecycle complete with token usage
+        this.bus.emit({
+            type: 'agent_complete',
+            agentName: 'gateflow',
+            success: true,
+            durationMs: Date.now() - agentStartTime,
+            inputTokens: lastUsage?.inputTokens,
+            outputTokens: lastUsage?.outputTokens
+        });
+
         return fullResponse;
+
+        } catch (error) {
+            // Emit error event
+            const errorMsg = error instanceof Error ? error.message : String(error);
+            this.bus.emit({
+                type: 'error',
+                message: errorMsg
+            });
+
+            // Emit agent_complete with failure
+            this.bus.emit({
+                type: 'agent_complete',
+                agentName: 'gateflow',
+                success: false,
+                durationMs: Date.now() - agentStartTime
+            });
+
+            throw error;
+        }
     }
 
     // ========================================================================
