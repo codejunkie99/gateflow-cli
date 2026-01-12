@@ -21,7 +21,7 @@ import type {
     ToolDescriptionManager,
     SemanticSummarizer
 } from '../context/index.js';
-import type { MemoryManager, KnowledgeStore } from '../memory/index.js';
+import type { MemoryManager, KnowledgeStore, MemoryService } from '../memory/index.js';
 import type { SkillRegistry } from '../skills/index.js';
 import type { MCPToolSync } from '../mcp/index.js';
 import type { InputManager } from '../ui/index.js';
@@ -45,8 +45,12 @@ export interface ToolContext {
     toolRegistry?: ToolRegistry;
     contextFileManager?: ContextFileManager;
     terminalSessionManager?: TerminalSessionManager;
-    memoryManager?: MemoryManager;
     sessionId?: string;
+    // Unified memory service (preferred) - provides token-budgeted context injection
+    memoryService?: MemoryService;
+    // Legacy accessors (for backward compatibility with tool executors)
+    memoryManager?: MemoryManager;
+    knowledgeStore?: KnowledgeStore;
     // Skills and MCP integration
     skillRegistry?: SkillRegistry;
     mcpToolSync?: MCPToolSync;
@@ -59,7 +63,6 @@ export interface ToolContext {
     skillManager?: SkillManager;
     toolDescriptionManager?: ToolDescriptionManager;
     semanticSummarizer?: SemanticSummarizer;
-    knowledgeStore?: KnowledgeStore;
 }
 
 // ============================================================================
