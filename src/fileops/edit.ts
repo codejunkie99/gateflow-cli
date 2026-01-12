@@ -98,6 +98,36 @@ export class EditTools {
         }
     }
 
+    /**
+     * Check if a path is a symlink pointing outside project root
+     * @throws Error if symlink points outside project root
+     */
+    private async checkSymlink(resolvedPath: string): Promise<void> {
+        try {
+            const stats = await fs.lstat(resolvedPath);
+            if (stats.isSymbolicLink()) {
+                const realPath = await fs.realpath(resolvedPath);
+                const normalizedRealPath = path.normalize(realPath);
+                const normalizedRoot = path.normalize(this.projectRoot);
+
+                if (
+                    normalizedRealPath !== normalizedRoot &&
+                    !normalizedRealPath.startsWith(normalizedRoot + path.sep)
+                ) {
+                    throw new Error(
+                        `Symlink escape detected: "${resolvedPath}" points outside project root to "${realPath}"`
+                    );
+                }
+            }
+        } catch (error) {
+            // If lstat fails, the file doesn't exist yet
+            // That's OK - we'll validate on actual access
+            if (error instanceof Error && !error.message.includes('ENOENT')) {
+                throw error;
+            }
+        }
+    }
+
     // ========================================================================
     // Edit Lines
     // ========================================================================
@@ -120,6 +150,17 @@ export class EditTools {
             };
         }
         const absolutePath = resolved.path;
+
+        // SECURITY: Check for symlinks pointing outside project root
+        try {
+            await this.checkSymlink(absolutePath);
+        } catch (error) {
+            return {
+                success: false,
+                path: filePath,
+                error: error instanceof Error ? error.message : 'Symlink check failed'
+            };
+        }
 
         // Policy check
         const decision = this.policy.checkTool('edit_lines', { filePath: absolutePath });
@@ -316,6 +357,18 @@ export class EditTools {
         }
         const absolutePath = resolved.path;
 
+        // SECURITY: Check for symlinks pointing outside project root
+        try {
+            await this.checkSymlink(absolutePath);
+        } catch (error) {
+            return {
+                success: false,
+                path: filePath,
+                replacements: 0,
+                error: error instanceof Error ? error.message : 'Symlink check failed'
+            };
+        }
+
         // Policy check
         const decision = this.policy.checkTool('search_replace', { filePath: absolutePath });
 
@@ -342,6 +395,39 @@ export class EditTools {
             // Build regex
             let regex: RegExp;
             if (options?.isRegex) {
+                // SECURITY: Limit regex complexity to prevent ReDoS attacks
+                // Check for excessively long patterns or too many quantifiers
+                if (search.length > 1000) {
+                    return {
+                        success: false,
+                        path: absolutePath,
+                        replacements: 0,
+                        error: 'Regex pattern too long (max 1000 characters)'
+                    };
+                }
+
+                // Count quantifiers that could cause catastrophic backtracking
+                const quantifierCount = (search.match(/[\+\*\?]|\{\d+,?\d*\}/g) || []).length;
+                if (quantifierCount > 10) {
+                    return {
+                        success: false,
+                        path: absolutePath,
+                        replacements: 0,
+                        error: 'Regex pattern too complex (too many quantifiers, max 10)'
+                    };
+                }
+
+                // Check for nested quantifiers which are dangerous
+                if (/(\+|\*|\?|\{\d+,?\d*\})(\+|\*|\?|\{\d+,?\d*\})/.test(search) ||
+                    /\([^)]*(\+|\*|\?)[^)]*\)(\+|\*|\?)/.test(search)) {
+                    return {
+                        success: false,
+                        path: absolutePath,
+                        replacements: 0,
+                        error: 'Regex pattern contains potentially dangerous nested quantifiers'
+                    };
+                }
+
                 const flags = (options?.caseSensitive ? '' : 'i') + (options?.all ? 'g' : '');
                 regex = new RegExp(search, flags);
             } else {

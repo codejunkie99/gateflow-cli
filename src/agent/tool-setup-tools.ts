@@ -180,6 +180,80 @@ const MANUAL_INSTALL_URLS: Record<string, { url: string; instructions: string }>
 // Helper Functions
 // ============================================================================
 
+/**
+ * Parse a shell command string into command and arguments.
+ * Handles quoted strings properly to avoid shell injection.
+ */
+function parseCommand(commandString: string): { cmd: string; args: string[] } {
+  const tokens: string[] = [];
+  let current = '';
+  let inSingleQuote = false;
+  let inDoubleQuote = false;
+  let escaped = false;
+
+  for (let i = 0; i < commandString.length; i++) {
+    const char = commandString[i];
+
+    if (escaped) {
+      current += char;
+      escaped = false;
+      continue;
+    }
+
+    if (char === '\\' && !inSingleQuote) {
+      escaped = true;
+      continue;
+    }
+
+    if (char === "'" && !inDoubleQuote) {
+      inSingleQuote = !inSingleQuote;
+      continue;
+    }
+
+    if (char === '"' && !inSingleQuote) {
+      inDoubleQuote = !inDoubleQuote;
+      continue;
+    }
+
+    if (char === ' ' && !inSingleQuote && !inDoubleQuote) {
+      if (current) {
+        tokens.push(current);
+        current = '';
+      }
+      continue;
+    }
+
+    current += char;
+  }
+
+  if (current) {
+    tokens.push(current);
+  }
+
+  const [cmd, ...args] = tokens;
+  return { cmd: cmd || '', args };
+}
+
+/**
+ * Validate a file path for safety (no shell metacharacters).
+ */
+function isValidPath(filepath: string): boolean {
+  // Allow alphanumeric, dash, underscore, dot, forward slash, backslash, colon, space
+  return /^[a-zA-Z0-9\-_./\\: ]+$/.test(filepath);
+}
+
+/**
+ * Allowed domains for downloads (SSRF prevention).
+ */
+const ALLOWED_DOWNLOAD_DOMAINS = [
+  'github.com',
+  'githubusercontent.com',
+  'raw.githubusercontent.com',
+  'objects.githubusercontent.com',
+  'github-releases.githubusercontent.com',
+  'api.github.com',
+];
+
 function emitStage(
   bus: EventBus,
   tool: 'verible' | 'slang',
@@ -315,8 +389,10 @@ export function createToolSetupExecutors(bus: EventBus, projectRoot: string) {
 
     get_latest_release: async (args: z.infer<typeof getLatestReleaseSchema>) => {
       const url = GITHUB_RELEASES[args.tool];
+      // Add timeout to prevent hanging requests
       const response = await fetch(url, {
         headers: { 'User-Agent': 'gateflow-cli' },
+        signal: AbortSignal.timeout(30000),  // 30 second timeout
       });
 
       if (!response.ok) {
@@ -403,6 +479,13 @@ export function createToolSetupExecutors(bus: EventBus, projectRoot: string) {
       emitStage(bus, tool, 'extracting', 'started', args.description);
       bus.emit({ type: 'status', phase: 'extracting', label: args.description });
 
+      // SECURITY: Validate paths to prevent shell injection
+      if (!isValidPath(args.archivePath) || !isValidPath(args.destination)) {
+        const err = new Error('Invalid characters in archive path or destination');
+        emitStage(bus, tool, 'extracting', 'failed', err.message);
+        throw err;
+      }
+
       try {
         await mkdir(args.destination, { recursive: true });
 
@@ -429,7 +512,15 @@ export function createToolSetupExecutors(bus: EventBus, projectRoot: string) {
               proc.on('error', reject);
             });
           } else {
-            execSync(`unzip -o "${args.archivePath}" -d "${args.destination}"`);
+            // SECURITY: Use spawn with array args instead of execSync with string interpolation
+            await new Promise<void>((resolve, reject) => {
+              const proc = spawn('unzip', ['-o', args.archivePath, '-d', args.destination], {
+                shell: false,
+                stdio: 'pipe',
+              });
+              proc.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`unzip exited with code ${code}`))));
+              proc.on('error', reject);
+            });
           }
         } else if (args.archivePath.endsWith('.tar.gz')) {
           await tarExtract({ file: args.archivePath, cwd: args.destination });
@@ -482,8 +573,12 @@ export function createToolSetupExecutors(bus: EventBus, projectRoot: string) {
 
         bus.emit({ type: 'status', phase: 'executing', label: args.description });
 
-        const proc = spawn(args.command, [], {
-          shell: true,
+        // Parse command string to avoid shell injection
+        // Use shell: false with parsed arguments for security
+        const { cmd, args: cmdArgs } = parseCommand(args.command);
+
+        const proc = spawn(cmd, cmdArgs, {
+          shell: false,  // SECURITY: Never use shell: true with user input
           cwd,
           stdio: ['ignore', 'pipe', 'pipe'],
         });
@@ -536,8 +631,38 @@ export function createToolSetupExecutors(bus: EventBus, projectRoot: string) {
       emitStage(bus, tool, 'downloading', 'started', args.description);
       bus.emit({ type: 'status', phase: 'downloading', label: args.description });
 
+      // SECURITY: Validate URL to prevent SSRF attacks
+      let urlObj: URL;
       try {
-        const response = await fetch(args.url);
+        urlObj = new URL(args.url);
+      } catch {
+        const err = new Error('Invalid URL format');
+        emitStage(bus, tool, 'downloading', 'failed', err.message);
+        throw err;
+      }
+
+      // Only allow HTTPS (except for localhost during development)
+      if (urlObj.protocol !== 'https:' && urlObj.hostname !== 'localhost') {
+        const err = new Error('Only HTTPS URLs are allowed for downloads');
+        emitStage(bus, tool, 'downloading', 'failed', err.message);
+        throw err;
+      }
+
+      // Check against allowlist of domains
+      const isAllowedDomain = ALLOWED_DOWNLOAD_DOMAINS.some(
+        (domain) => urlObj.hostname === domain || urlObj.hostname.endsWith('.' + domain)
+      );
+      if (!isAllowedDomain && urlObj.hostname !== 'localhost') {
+        const err = new Error(`Download domain not allowed: ${urlObj.hostname}. Allowed: ${ALLOWED_DOWNLOAD_DOMAINS.join(', ')}`);
+        emitStage(bus, tool, 'downloading', 'failed', err.message);
+        throw err;
+      }
+
+      try {
+        // Add timeout to prevent hanging requests
+        const response = await fetch(args.url, {
+          signal: AbortSignal.timeout(30000),  // 30 second timeout for connection
+        });
         if (!response.ok) {
           emitStage(bus, tool, 'downloading', 'failed', `HTTP ${response.status}`);
           throw new Error(`Download failed: ${response.status} ${response.statusText}`);
@@ -579,10 +704,29 @@ export function createToolSetupExecutors(bus: EventBus, projectRoot: string) {
 
       emitStage(bus, tool, 'saving', 'started', `Saving ${args.name} to .env`);
 
+      // SECURITY: Validate environment variable name
+      // Only allow uppercase letters, numbers, and underscores, starting with letter or underscore
+      if (!/^[A-Z_][A-Z0-9_]*$/.test(args.name)) {
+        const err = new Error(`Invalid environment variable name: ${args.name}. Must match pattern [A-Z_][A-Z0-9_]*`);
+        emitStage(bus, tool, 'saving', 'failed', err.message);
+        throw err;
+      }
+
       try {
         const envFile = args.envFile || '.env';
         const envPath = join(projectRoot, envFile);
-        const line = `\n${args.name}=${args.value}\n`;
+
+        // SECURITY: Escape the value to prevent injection in .env file
+        // Escape newlines, quotes, and backslashes
+        const escapedValue = args.value
+          .replace(/\\/g, '\\\\')
+          .replace(/\n/g, '\\n')
+          .replace(/"/g, '\\"');
+
+        // Wrap value in quotes if it contains spaces or special chars
+        const needsQuotes = /[\s"'=\\]/.test(args.value) || args.value.includes('\n');
+        const formattedValue = needsQuotes ? `"${escapedValue}"` : escapedValue;
+        const line = `\n${args.name}=${formattedValue}\n`;
 
         await appendFile(envPath, line);
         process.env[args.name] = args.value;
@@ -625,49 +769,37 @@ export function createToolSetupExecutors(bus: EventBus, projectRoot: string) {
     },
 
     ask_user: async (args: z.infer<typeof askUserSchema>) => {
-      const readline = await import('readline');
+      // Use centralized InputManager to avoid readline conflicts
+      const { getInputManager } = await import('../ui/index.js');
+      const inputManager = getInputManager();
+      inputManager.initialize();
 
-      return new Promise((resolve) => {
-        const rl = readline.createInterface({
-          input: process.stdin,
-          output: process.stdout,
-        });
-
-        let prompt = `\n${args.question}`;
-        if (args.options && args.options.length > 0) {
-          prompt += `\n  Options: ${args.options.join(' / ')}`;
-        }
-        if (args.default) {
-          prompt += ` [${args.default}]`;
-        }
-        prompt += '\n> ';
-
-        // Emit event so renderer knows we're waiting for input
-        bus.emit({
-          type: 'status',
-          phase: 'tool',
-          label: 'Waiting for user input...',
-        });
-
-        rl.question(prompt, (answer) => {
-          rl.close();
-          const response = answer.trim() || args.default || '';
-
-          // Normalize yes/no responses
-          const normalized = response.toLowerCase();
-          const isYes = ['y', 'yes', 'yeah', 'yep', 'ok', 'sure', '1'].includes(normalized);
-          const isNo = ['n', 'no', 'nope', 'nah', '0'].includes(normalized);
-
-          resolve({
-            response,
-            isYes,
-            isNo,
-            selectedOption: args.options?.find(
-              (o) => o.toLowerCase() === normalized || o.toLowerCase().startsWith(normalized)
-            ),
-          });
-        });
+      // Emit event so renderer knows we're waiting for input
+      bus.emit({
+        type: 'status',
+        phase: 'tool',
+        label: 'Waiting for user input...',
       });
+
+      const response = await inputManager.askUser(
+        args.question,
+        args.options,
+        args.default
+      );
+
+      // Normalize yes/no responses
+      const normalized = response.toLowerCase();
+      const isYes = ['y', 'yes', 'yeah', 'yep', 'ok', 'sure', '1'].includes(normalized);
+      const isNo = ['n', 'no', 'nope', 'nah', '0'].includes(normalized);
+
+      return {
+        response,
+        isYes,
+        isNo,
+        selectedOption: args.options?.find(
+          (o) => o.toLowerCase() === normalized || o.toLowerCase().startsWith(normalized)
+        ),
+      };
     },
 
     detect_package_managers: async (): Promise<{ managers: PackageManagerInfo[]; recommended: PackageManager | null; platform: string }> => {
@@ -792,6 +924,9 @@ export function createToolSetupExecutors(bus: EventBus, projectRoot: string) {
       bus.emit({ type: 'token', text: `\nRunning: ${command}\n` });
 
       return new Promise((resolve) => {
+        // SECURITY NOTE: shell: true is acceptable here because commands come from
+        // the hardcoded INSTALL_COMMANDS constant, not from user input.
+        // Some commands require shell for pipes/chaining (e.g., "sudo apt update && sudo apt install")
         const proc = spawn(command, [], {
           shell: true,
           stdio: ['ignore', 'pipe', 'pipe'],
