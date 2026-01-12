@@ -35,3 +35,89 @@ export { ContextFileManager, getContextFileManager } from './ContextFileManager.
 
 // Terminal Session Manager (Phase 4)
 export { TerminalSessionManager, getTerminalSessionManager } from './TerminalSessionManager.js';
+
+// Token Budget Manager (Phase 2 - Dynamic Context Discovery)
+export {
+    TokenBudgetManager,
+    getTokenBudgetManager,
+    createTokenBudgetManager,
+    setGlobalTokenBudgetManager,
+    MODEL_CONFIGS,
+    type TokenBudget,
+    type BudgetAllocation,
+    type BudgetUsage,
+    type TokenCountResult,
+    type BudgetWarning,
+    type TokenBudgetConfig
+} from './TokenBudgetManager.js';
+
+// Dynamic Context Manager (Phase 2 - Patterns 1, 2, 5)
+export {
+    DynamicContextManager,
+    getDynamicContextManager,
+    createDynamicContextManager,
+    setGlobalDynamicContextManager,
+    type ToolOutputRef,
+    type GrepResult,
+    type HistoryEntry,
+    type HistorySearchResult,
+    type ContextIndex,
+    type ContextIndexEntry,
+    type DynamicContextConfig
+} from './DynamicContextManager.js';
+
+// Tool Description Manager (Phase 2 - Pattern 4: 46.9% token reduction)
+export {
+    ToolDescriptionManager,
+    getToolDescriptionManager,
+    createToolDescriptionManager,
+    setGlobalToolDescriptionManager,
+    type ToolIndex,
+    type ToolFileMeta,
+    type ToolDescriptionManagerConfig
+} from './ToolDescriptionManager.js';
+
+// Skill Manager (Phase 2 - Pattern 3: Agent Skills)
+export {
+    SkillManager,
+    getSkillManager,
+    createSkillManager,
+    setGlobalSkillManager,
+    type Skill,
+    type SkillIndexEntry,
+    type SkillIndex,
+    type SkillSearchResult,
+    type SkillManagerConfig
+} from './SkillManager.js';
+
+// Semantic Summarizer (Phase 2 - Context Compaction)
+export {
+    SemanticSummarizer,
+    getSemanticSummarizer,
+    createSemanticSummarizer,
+    setGlobalSemanticSummarizer,
+    DEFAULT_IMPORTANCE_WEIGHTS,
+    DEFAULT_TOOL_CLEARING,
+    type Message,
+    type MessageImportance,
+    type ImportanceFactor,
+    type ImportanceWeights,
+    type ToolClearingOptions,
+    type CompactionResult,
+    type SemanticSummarizerConfig
+} from './SemanticSummarizer.js';
+
+// File Chunker (Phase 2 - Large File Handling)
+export {
+    FileChunker,
+    getFileChunker,
+    createFileChunker,
+    setGlobalFileChunker,
+    DEFAULT_CHUNKER_CONFIG,
+    type FileChunk,
+    type ChunkType,
+    type FileChunkerConfig,
+    type ChunkIndex,
+    type ChunkSelection,
+    type IndexerProvider
+} from './FileChunker.js';

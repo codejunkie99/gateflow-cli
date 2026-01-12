@@ -21,11 +21,23 @@ import {
     getToolRegistry,
     getContextFileManager,
     getTerminalSessionManager,
+    createDynamicContextManager,
+    createTokenBudgetManager,
+    createFileChunker,
+    createSkillManager,
+    createToolDescriptionManager,
+    createSemanticSummarizer,
     type ToolRegistry,
     type ContextFileManager,
-    type TerminalSessionManager
+    type TerminalSessionManager,
+    type DynamicContextManager,
+    type TokenBudgetManager,
+    type FileChunker,
+    type SkillManager,
+    type ToolDescriptionManager,
+    type SemanticSummarizer
 } from '../context/index.js';
-import { MemoryManager } from '../memory/manager.js';
+import { MemoryManager, createKnowledgeStore, type KnowledgeStore } from '../memory/index.js';
 
 // ============================================================================
 // Types
@@ -56,6 +68,14 @@ export interface CommandContext {
     terminalSessionManager: TerminalSessionManager;
     memoryManager: MemoryManager;
     sessionId: string;
+    // Phase 2: Context Window Management managers
+    dynamicContextManager: DynamicContextManager;
+    tokenBudgetManager: TokenBudgetManager;
+    fileChunker: FileChunker;
+    skillManager: SkillManager;
+    toolDescriptionManager: ToolDescriptionManager;
+    semanticSummarizer: SemanticSummarizer;
+    knowledgeStore: KnowledgeStore;
 }
 
 // ============================================================================
@@ -131,6 +151,26 @@ export async function setupContext(options: GlobalOptions): Promise<CommandConte
     // Generate unique session ID
     const sessionId = `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
+    // Phase 2: Context Window Management managers (Cursor's Dynamic Context Discovery)
+    const dynamicContextManager = createDynamicContextManager(bus, { projectId: sessionId });
+    await dynamicContextManager.initialize();
+
+    const tokenBudgetManager = createTokenBudgetManager(bus);
+
+    // FileChunker always uses indexer for accurate AST-based boundaries
+    const fileChunker = createFileChunker({}, indexer);
+
+    const skillManager = createSkillManager();
+    await skillManager.initialize();
+
+    const toolDescriptionManager = createToolDescriptionManager();
+    await toolDescriptionManager.initialize();
+
+    const semanticSummarizer = createSemanticSummarizer();
+
+    const knowledgeStore = createKnowledgeStore(projectRoot, bus);
+    await knowledgeStore.load();
+
     // Initialize centralized input manager
     const inputManager = initInputManager(bus);
     
@@ -160,7 +200,15 @@ export async function setupContext(options: GlobalOptions): Promise<CommandConte
         contextFileManager,
         terminalSessionManager,
         memoryManager,
-        sessionId
+        sessionId,
+        // Phase 2: Context Window Management
+        dynamicContextManager,
+        tokenBudgetManager,
+        fileChunker,
+        skillManager,
+        toolDescriptionManager,
+        semanticSummarizer,
+        knowledgeStore
     };
 }
 
@@ -186,7 +234,15 @@ function buildToolContext(ctx: CommandContext): ToolContext {
         memoryManager: ctx.memoryManager,
         sessionId: ctx.sessionId,
         // Centralized input manager
-        inputManager: ctx.inputManager
+        inputManager: ctx.inputManager,
+        // Phase 2: Context Window Management (Cursor's Dynamic Context Discovery)
+        dynamicContextManager: ctx.dynamicContextManager,
+        tokenBudgetManager: ctx.tokenBudgetManager,
+        fileChunker: ctx.fileChunker,
+        skillManager: ctx.skillManager,
+        toolDescriptionManager: ctx.toolDescriptionManager,
+        semanticSummarizer: ctx.semanticSummarizer,
+        knowledgeStore: ctx.knowledgeStore
     };
 }
 
