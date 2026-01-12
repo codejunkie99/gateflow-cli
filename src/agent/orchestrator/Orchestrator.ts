@@ -81,6 +81,8 @@ Select the most appropriate agent and describe the task.`
         const startTime = Date.now();
 
         try {
+            let lastUsage: { inputTokens?: number; outputTokens?: number } | undefined;
+
             const result = await streamText({
                 model: anthropic('claude-sonnet-4-20250514') as any,
                 system: worker.system,
@@ -89,6 +91,22 @@ Select the most appropriate agent and describe the task.`
                 stopWhen: stepCountIs(worker.maxSteps || 10),
                 onStepFinish: (step) => {
                     this.thinkingChain.onStepFinish(step);
+                },
+                onError: ({ error }) => {
+                    this.bus.emit({
+                        type: 'error',
+                        message: error instanceof Error ? error.message : String(error)
+                    });
+                },
+                onAbort: ({ steps }) => {
+                    this.bus.emit({
+                        type: 'status',
+                        phase: 'thinking',
+                        label: `Agent aborted after ${steps.length} steps`
+                    });
+                },
+                onFinish: ({ totalUsage }) => {
+                    lastUsage = totalUsage;
                 }
             });
 
@@ -115,7 +133,7 @@ Select the most appropriate agent and describe the task.`
                     
                     case 'tool-result':
                         // AI SDK 6: Emit tool result when received (uses 'output' not 'result')
-                        const hasError = part.output && typeof part.output === 'object' && 
+                        const hasError = part.output && typeof part.output === 'object' &&
                                         part.output !== null && 'error' in part.output;
                         this.bus.emit({
                             type: 'tool_result',
@@ -124,6 +142,31 @@ Select the most appropriate agent and describe the task.`
                             summary: this.summarizeToolResult(part.output)
                         });
                         break;
+
+                    // Handle error stream parts (AI SDK v6)
+                    case 'error': {
+                        const errorMsg = (part as any).error instanceof Error
+                            ? (part as any).error.message
+                            : String((part as any).error);
+                        this.bus.emit({
+                            type: 'error',
+                            message: `Stream error: ${errorMsg}`
+                        });
+                        break;
+                    }
+
+                    // Handle tool errors (AI SDK v6)
+                    case 'tool-error': {
+                        const toolError = part as any;
+                        const errorMsg = toolError.error instanceof Error
+                            ? toolError.error.message
+                            : String(toolError.error);
+                        this.bus.emit({
+                            type: 'error',
+                            message: `Tool ${toolError.toolName} failed: ${errorMsg}`
+                        });
+                        break;
+                    }
                 }
             }
 
@@ -135,19 +178,28 @@ Select the most appropriate agent and describe the task.`
                 agentName: routing.selectedAgent,
                 success: true,
                 result: finalText,
-                durationMs: duration
+                durationMs: duration,
+                inputTokens: lastUsage?.inputTokens,
+                outputTokens: lastUsage?.outputTokens
             });
 
             return finalText || output;
         } catch (error) {
             const duration = Date.now() - startTime;
+            const errorMsg = error instanceof Error ? error.message : String(error);
 
             // Mark thinking chain step as failed
             this.thinkingChain.addAnalysisStep(
-                `Agent ${routing.selectedAgent} failed: ${error instanceof Error ? error.message : String(error)}`,
-                { error: error instanceof Error ? error.message : String(error) },
+                `Agent ${routing.selectedAgent} failed: ${errorMsg}`,
+                { error: errorMsg },
                 0
             );
+
+            // Emit error event for UI visibility
+            this.bus.emit({
+                type: 'error',
+                message: `Agent ${routing.selectedAgent} failed: ${errorMsg}`
+            });
 
             this.bus.emit({
                 type: 'agent_complete',
@@ -217,6 +269,14 @@ Select the most appropriate agent and describe the task.`
                 });
             } catch (error) {
                 const duration = Date.now() - startTime;
+                const errorMsg = error instanceof Error ? error.message : String(error);
+
+                // Emit error event for UI visibility
+                this.bus.emit({
+                    type: 'error',
+                    message: `Task ${task.id} (${task.agent}) failed: ${errorMsg}`
+                });
+
                 this.bus.emit({
                     type: 'agent_complete',
                     agentName: task.agent,
@@ -224,8 +284,8 @@ Select the most appropriate agent and describe the task.`
                     durationMs: duration
                 });
                 this.thinkingChain.addFixingStep(
-                    `Task ${task.id} failed: ${error}`,
-                    { task, error },
+                    `Task ${task.id} failed: ${errorMsg}`,
+                    { task, error: errorMsg },
                     0.3
                 );
                 // Continue with remaining tasks
@@ -247,6 +307,19 @@ Select the most appropriate agent and describe the task.`
             stopWhen: stepCountIs(worker.maxSteps || 10),
             onStepFinish: (step) => {
                 this.thinkingChain.onStepFinish(step);
+            },
+            onError: ({ error }) => {
+                this.bus.emit({
+                    type: 'error',
+                    message: error instanceof Error ? error.message : String(error)
+                });
+            },
+            onAbort: ({ steps }) => {
+                this.bus.emit({
+                    type: 'status',
+                    phase: 'thinking',
+                    label: `Task aborted after ${steps.length} steps`
+                });
             }
         });
 
@@ -260,7 +333,7 @@ Select the most appropriate agent and describe the task.`
                         text: part.text
                     });
                     break;
-                
+
                 case 'tool-call':
                     this.bus.emit({
                         type: 'tool_call',
@@ -269,9 +342,9 @@ Select the most appropriate agent and describe the task.`
                         args: part.input as Record<string, unknown>
                     });
                     break;
-                
+
                 case 'tool-result':
-                    const taskHasError = part.output && typeof part.output === 'object' && 
+                    const taskHasError = part.output && typeof part.output === 'object' &&
                                     part.output !== null && 'error' in part.output;
                     this.bus.emit({
                         type: 'tool_result',
@@ -280,6 +353,31 @@ Select the most appropriate agent and describe the task.`
                         summary: this.summarizeToolResult(part.output)
                     });
                     break;
+
+                // Handle error stream parts (AI SDK v6)
+                case 'error': {
+                    const errorMsg = (part as any).error instanceof Error
+                        ? (part as any).error.message
+                        : String((part as any).error);
+                    this.bus.emit({
+                        type: 'error',
+                        message: `Stream error: ${errorMsg}`
+                    });
+                    break;
+                }
+
+                // Handle tool errors (AI SDK v6)
+                case 'tool-error': {
+                    const toolError = part as any;
+                    const errorMsg = toolError.error instanceof Error
+                        ? toolError.error.message
+                        : String(toolError.error);
+                    this.bus.emit({
+                        type: 'error',
+                        message: `Tool ${toolError.toolName} failed: ${errorMsg}`
+                    });
+                    break;
+                }
             }
         }
 
