@@ -14,6 +14,7 @@ import type { ToolRegistry, ContextFileManager, TerminalSessionManager } from '.
 import type { MemoryManager } from '../memory/manager.js';
 import type { SkillRegistry } from '../skills/index.js';
 import type { MCPToolSync } from '../mcp/index.js';
+import type { InputManager } from '../ui/index.js';
 
 // ============================================================================
 // Tool Context
@@ -39,6 +40,8 @@ export interface ToolContext {
     // Skills and MCP integration
     skillRegistry?: SkillRegistry;
     mcpToolSync?: MCPToolSync;
+    // Centralized input manager
+    inputManager?: InputManager;
 }
 
 // ============================================================================
@@ -939,50 +942,53 @@ export function createToolExecutors(ctx: ToolContext) {
         },
 
         ask_user: async (args: z.infer<typeof askUserSchema>) => {
-            const readline = await import('readline');
+            // Use centralized InputManager if available
+            if (ctx.inputManager) {
+                const response = await ctx.inputManager.askUser(
+                    args.question,
+                    args.options,
+                    args.default
+                );
 
-            return new Promise((resolve) => {
-                const rl = readline.createInterface({
-                    input: process.stdin,
-                    output: process.stdout
-                });
+                const normalized = response.toLowerCase();
+                const isYes = ['y', 'yes', 'yeah', 'yep', 'ok', 'sure'].includes(normalized);
+                const isNo = ['n', 'no', 'nope', 'nah'].includes(normalized);
 
-                let prompt = `\n${args.question}`;
-                if (args.options && args.options.length > 0) {
-                    prompt += `\n  Options: ${args.options.join(' / ')}`;
-                }
-                if (args.default) {
-                    prompt += ` [${args.default}]`;
-                }
-                prompt += '\n> ';
+                return {
+                    response,
+                    isYes,
+                    isNo,
+                    selectedOption: args.options?.find(o =>
+                        o.toLowerCase() === normalized ||
+                        o.toLowerCase().startsWith(normalized)
+                    )
+                };
+            }
 
-                // Emit event so renderer knows we're waiting for input
-                ctx.bus.emit({
-                    type: 'status',
-                    phase: 'tool',
-                    label: 'Waiting for user input...'
-                });
+            // Fallback when ctx.inputManager not provided (legacy compatibility)
+            const { getInputManager } = await import('../ui/index.js');
+            const inputManager = getInputManager();
+            inputManager.initialize();
 
-                rl.question(prompt, (answer) => {
-                    rl.close();
-                    const response = answer.trim() || args.default || '';
+            const response = await inputManager.askUser(
+                args.question,
+                args.options,
+                args.default
+            );
 
-                    // Normalize yes/no responses
-                    const normalized = response.toLowerCase();
-                    const isYes = ['y', 'yes', 'yeah', 'yep', 'ok', 'sure'].includes(normalized);
-                    const isNo = ['n', 'no', 'nope', 'nah'].includes(normalized);
+            const normalized = response.toLowerCase();
+            const isYes = ['y', 'yes', 'yeah', 'yep', 'ok', 'sure'].includes(normalized);
+            const isNo = ['n', 'no', 'nope', 'nah'].includes(normalized);
 
-                    resolve({
-                        response,
-                        isYes,
-                        isNo,
-                        selectedOption: args.options?.find(o =>
-                            o.toLowerCase() === normalized ||
-                            o.toLowerCase().startsWith(normalized)
-                        )
-                    });
-                });
-            });
+            return {
+                response,
+                isYes,
+                isNo,
+                selectedOption: args.options?.find(o =>
+                    o.toLowerCase() === normalized ||
+                    o.toLowerCase().startsWith(normalized)
+                )
+            };
         },
 
         find_vcd_files: async (args: z.infer<typeof findVcdFilesSchema>) => {
