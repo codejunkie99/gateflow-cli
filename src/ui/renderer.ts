@@ -1,10 +1,12 @@
 /**
  * Terminal Renderer
  * Event-driven terminal output with token buffering
+ * 
+ * NO SPINNERS - uses simple status lines to avoid stdin/stdout conflicts.
+ * This is the Claude Code approach: simple, reliable, no animation conflicts.
  */
 
 import chalk from 'chalk';
-import ora, { Ora } from 'ora';
 import type { EventBus, UiEvent, Subscription } from '../events/index.js';
 import { DiffPreview, colorizeDiff } from '../diff/preview.js';
 
@@ -13,19 +15,12 @@ import { DiffPreview, colorizeDiff } from '../diff/preview.js';
 // ============================================================================
 
 export interface RendererOptions {
-    /** Enable colors (default: true) */
     colors?: boolean;
-    /** Enable unicode characters (default: true) */
     unicode?: boolean;
-    /** Token buffer flush interval in ms (default: 16) */
     bufferInterval?: number;
-    /** Token buffer size before flush (default: 100) */
     bufferSize?: number;
-    /** Show verbose output (default: false) */
     verbose?: boolean;
-    /** Show timestamps (default: false) */
     timestamps?: boolean;
-    /** JSON output mode (default: false) */
     jsonMode?: boolean;
 }
 
@@ -42,7 +37,6 @@ interface PendingApproval {
 
 export class TerminalRenderer {
     private options: Required<RendererOptions>;
-    private spinner: Ora | null = null;
     private tokenBuffer: string = '';
     private bufferTimer: NodeJS.Timeout | null = null;
     private isStreaming: boolean = false;
@@ -52,6 +46,8 @@ export class TerminalRenderer {
     private diffPreview: DiffPreview;
     private startTime: number = 0;
     private subscription: Subscription | null = null;
+    private lastStatusLine: string = '';
+    private inputPaused: boolean = false;
 
     constructor(
         private bus: EventBus,
@@ -60,7 +56,7 @@ export class TerminalRenderer {
         this.options = {
             colors: options?.colors ?? true,
             unicode: options?.unicode ?? true,
-            bufferInterval: options?.bufferInterval ?? 16,  // ~60fps
+            bufferInterval: options?.bufferInterval ?? 16,
             bufferSize: options?.bufferSize ?? 100,
             verbose: options?.verbose ?? false,
             timestamps: options?.timestamps ?? false,
@@ -77,31 +73,33 @@ export class TerminalRenderer {
     // Lifecycle
     // ========================================================================
 
-    /**
-     * Start listening to events
-     */
     start(): void {
         this.startTime = Date.now();
         this.subscription = this.bus.subscribe(this.handleEvent.bind(this));
     }
 
-    /**
-     * Stop renderer and cleanup
-     */
     stop(): void {
-        // Unsubscribe from event bus
         if (this.subscription) {
             this.subscription.unsubscribe();
             this.subscription = null;
         }
-
         this.flushBuffer();
-        this.stopSpinner();
-
+        this.clearStatus();
         if (this.bufferTimer) {
             clearTimeout(this.bufferTimer);
             this.bufferTimer = null;
         }
+    }
+
+    /** Pause rendering for input */
+    pauseForInput(): void {
+        this.inputPaused = true;
+        this.clearStatus();
+    }
+
+    /** Resume after input */
+    resumeAfterInput(): void {
+        this.inputPaused = false;
     }
 
     // ========================================================================
@@ -114,83 +112,69 @@ export class TerminalRenderer {
             return;
         }
 
+        // Skip rendering while input is active
+        if (this.inputPaused && event.type !== 'error') {
+            return;
+        }
+
         switch (event.type) {
             case 'token':
                 this.handleToken(event.text);
                 break;
-
             case 'token_done':
                 this.handleTokenDone();
                 break;
-
             case 'status':
                 this.handleStatus(event.phase, event.label);
                 break;
-
             case 'tool_call':
                 this.handleToolCall(event.tool, event.argsSummary);
                 break;
-
             case 'tool_result':
                 this.handleToolResult(event.tool, event.ok, event.summary, event.duration);
                 break;
-
             case 'diff_preview':
                 this.handleDiffPreview(event.path, event.unifiedDiff, event.stats);
                 break;
-
             case 'approval_request':
                 this.handleApprovalRequest(event.id, event.action, event.details, event.diff);
                 break;
-
             case 'error':
                 this.handleError(event.message, event.code);
                 break;
-
             case 'final':
                 this.handleFinal(event.summary, event.filesModified, event.exitCode);
                 break;
-
             case 'index_update':
                 this.handleIndexUpdate(event.added, event.removed, event.modified);
                 break;
-
             case 'file_change':
                 this.handleFileChange(event.path, event.changeType);
                 break;
-
             case 'sim_stage':
                 this.handleSimStage(event.stage, event.status, event.message);
                 break;
-
             case 'sim_progress':
                 this.handleSimProgress(event.stage, event.percent, event.message);
                 break;
-
             case 'waveform_loaded':
                 this.handleWaveformLoaded(event.path, event.signalCount, event.timeRange);
                 break;
-
             case 'waveform_analysis':
                 this.handleWaveformAnalysis(event.clocks, event.anomalies, event.coverage, event.summary);
                 break;
-
             case 'thought':
                 this.handleThought(event.stepNumber, event.category, event.thought, event.confidence);
                 break;
-
             case 'agent_start':
                 this.handleAgentStart(event.agentName, event.task);
                 break;
-
             case 'agent_complete':
                 this.handleAgentComplete(event.agentName, event.success, event.durationMs);
                 break;
-
             case 'delegation':
                 this.handleDelegation(event.from, event.to, event.taskType);
                 break;
-
             default:
                 if (this.options.verbose) {
                     console.log(chalk.gray(`[${event.type}]`), event);
@@ -199,25 +183,21 @@ export class TerminalRenderer {
     }
 
     // ========================================================================
-    // Token Streaming (Buffered)
+    // Token Streaming
     // ========================================================================
 
     private handleToken(text: string): void {
         if (!this.isStreaming) {
             this.isStreaming = true;
-            this.stopSpinner();
-            // Print newline to separate from spinner
-            process.stdout.write('\n');
+            this.clearStatus();
         }
 
         this.tokenBuffer += text;
 
-        // Flush if buffer exceeds size
         if (this.tokenBuffer.length >= this.options.bufferSize) {
             this.flushBuffer();
         }
 
-        // Set/reset timer for flush
         if (this.bufferTimer) {
             clearTimeout(this.bufferTimer);
         }
@@ -226,7 +206,6 @@ export class TerminalRenderer {
 
     private handleTokenDone(): void {
         this.flushBuffer();
-        this.stopSpinner();
         this.isStreaming = false;
         process.stdout.write('\n');
     }
@@ -239,73 +218,31 @@ export class TerminalRenderer {
     }
 
     // ========================================================================
-    // Status / Spinner
+    // Status (Simple text, no spinner)
     // ========================================================================
 
     private handleStatus(phase: string, label: string): void {
         this.currentPhase = phase;
         this.currentLabel = label;
 
-        // Don't show spinner while streaming tokens - it corrupts output
-        if (this.isStreaming) {
+        if (this.isStreaming || this.inputPaused) {
             return;
         }
 
-        // Flush any pending tokens
-        this.flushBuffer();
-
-        const icon = this.getPhaseIcon(phase);
-
-        if (this.spinner) {
-            this.spinner.text = `${icon} ${label}`;
-        } else {
-            this.spinner = ora({
-                text: `${icon} ${label}`,
-                color: this.getPhaseColor(phase) as any,
-                spinner: this.options.unicode ? 'dots' : 'line'
-            }).start();
-        }
+        this.writeStatus(`${chalk.cyan('•')} ${label}`);
     }
 
-    /**
-     * Restart spinner with current phase/label (after tool output)
-     */
-    private restartSpinner(): void {
-        // Don't restart spinner while streaming tokens - it corrupts output
-        if (this.isStreaming) {
-            return;
-        }
-        if (!this.spinner && this.currentPhase) {
-            const icon = this.getPhaseIcon(this.currentPhase);
-            this.spinner = ora({
-                text: `${icon} ${this.currentLabel}`,
-                color: this.getPhaseColor(this.currentPhase) as any,
-                spinner: this.options.unicode ? 'dots' : 'line'
-            }).start();
-        }
+    private writeStatus(text: string): void {
+        this.clearStatus();
+        this.lastStatusLine = text;
+        process.stdout.write(text);
     }
 
-    private stopSpinner(): void {
-        if (this.spinner) {
-            this.spinner.stop();
-            this.spinner = null;
-        }
-    }
-
-    private getPhaseIcon(phase: string): string {
-        // No emojis - use simple text indicators
-        return '•';
-    }
-
-    private getPhaseColor(phase: string): string {
-        switch (phase) {
-            case 'thinking': return 'blue';
-            case 'tool': return 'cyan';
-            case 'verifying': return 'blue';
-            case 'fixing': return 'cyan';
-            case 'indexing': return 'blue';
-            case 'watching': return 'cyan';
-            default: return 'white';
+    private clearStatus(): void {
+        if (this.lastStatusLine) {
+            // Clear the line
+            process.stdout.write('\r' + ' '.repeat(this.lastStatusLine.length) + '\r');
+            this.lastStatusLine = '';
         }
     }
 
@@ -314,8 +251,7 @@ export class TerminalRenderer {
     // ========================================================================
 
     private handleToolCall(tool: string, argsSummary: string): void {
-        this.stopSpinner();
-
+        this.clearStatus();
         this.log(
             chalk.cyan('•') + ' ' +
             chalk.blue.bold(tool) +
@@ -324,14 +260,10 @@ export class TerminalRenderer {
     }
 
     private handleToolResult(tool: string, ok: boolean, summary: string, duration?: number): void {
+        const icon = ok ? '✓' : '✗';
         const color = ok ? chalk.gray : chalk.red;
         const durationStr = duration ? chalk.gray(` (${duration}ms)`) : '';
-
-        // Dotted connection line for tool results
-        this.log(chalk.gray('  │ ') + color(summary) + durationStr);
-
-        // Restart spinner to show work is continuing
-        this.restartSpinner();
+        this.log(chalk.gray('  │ ') + color(`${icon} ${summary}`) + durationStr);
     }
 
     // ========================================================================
@@ -343,7 +275,7 @@ export class TerminalRenderer {
         unifiedDiff: string,
         stats: { added: number; removed: number }
     ): void {
-        this.stopSpinner();
+        this.clearStatus();
         console.log('');
         console.log(this.diffPreview.render(path, unifiedDiff, { ...stats, chunks: 1 }));
     }
@@ -358,7 +290,7 @@ export class TerminalRenderer {
         details: string,
         diff?: string
     ): void {
-        this.stopSpinner();
+        this.clearStatus();
         this.pendingApproval = { id, action, details, diff };
 
         console.log('');
@@ -371,12 +303,9 @@ export class TerminalRenderer {
         }
 
         console.log('');
-        console.log(chalk.gray('   [Y]es  [N]o  [A]ll  [S]kip'));
+        console.log(chalk.white('   [Y]es  [N]o  [A]ll  [S]kip'));
     }
 
-    /**
-     * Process user approval input
-     */
     processApprovalInput(input: string): boolean {
         if (!this.pendingApproval) return false;
 
@@ -397,16 +326,13 @@ export class TerminalRenderer {
                 break;
             case 'n':
             case 'no':
-                approved = false;
-                scope = 'once';
-                break;
             case 's':
             case 'skip':
                 approved = false;
                 scope = 'once';
                 break;
             default:
-                return false; // Invalid input
+                return false;
         }
 
         this.bus.emit({
@@ -420,9 +346,6 @@ export class TerminalRenderer {
         return true;
     }
 
-    /**
-     * Check if waiting for approval
-     */
     isWaitingForApproval(): boolean {
         return this.pendingApproval !== null;
     }
@@ -432,7 +355,7 @@ export class TerminalRenderer {
     // ========================================================================
 
     private handleError(message: string, code?: number): void {
-        this.stopSpinner();
+        this.clearStatus();
         console.log('');
         this.log(chalk.red(`ERROR: ${message}`));
         if (code !== undefined) {
@@ -441,7 +364,7 @@ export class TerminalRenderer {
     }
 
     private handleFinal(summary: string, filesModified: string[], exitCode: number): void {
-        this.stopSpinner();
+        this.clearStatus();
         
         const duration = Date.now() - this.startTime;
         const status = exitCode === 0 ? 'SUCCESS' : 'FAILED';
@@ -484,36 +407,16 @@ export class TerminalRenderer {
     // Simulation Events
     // ========================================================================
 
-    private handleSimStage(
-        stage: string,
-        status: string,
-        message?: string
-    ): void {
-        const prefix = status === 'started'
-            ? '>'
-            : status === 'completed'
-            ? '+'
-            : '-';
-
+    private handleSimStage(stage: string, status: string, message?: string): void {
+        this.clearStatus();
+        const prefix = status === 'started' ? '>' : status === 'completed' ? '+' : '-';
         const color = status === 'failed' ? chalk.red : status === 'completed' ? chalk.blue : chalk.cyan;
-
         console.log(color(`${prefix} ${stage}${message ? ': ' + message : ''}`));
     }
 
     private handleSimProgress(stage: string, percent: number, message: string): void {
         const bar = this.makeProgressBar(percent);
-        const text = `${stage} ${bar} ${message}`;
-
-        if (this.spinner) {
-            this.spinner.text = text;
-        } else {
-            // Start a spinner if none exists
-            this.spinner = ora({
-                text,
-                color: 'cyan',
-                spinner: this.options.unicode ? 'dots' : 'line'
-            }).start();
-        }
+        this.writeStatus(`${stage} ${bar} ${message}`);
     }
 
     // ========================================================================
@@ -525,18 +428,12 @@ export class TerminalRenderer {
         signalCount: number,
         timeRange: { start: bigint; end: bigint }
     ): void {
-        this.stopSpinner();
+        this.clearStatus();
         const fileName = path.split(/[/\\]/).pop() ?? path;
         const duration = timeRange.end - timeRange.start;
 
-        console.log(
-            chalk.cyan('⎍ ') +
-            chalk.white.bold('Waveform loaded: ') +
-            chalk.cyan(fileName)
-        );
-        console.log(
-            chalk.gray(`  ${signalCount} signals, ${duration.toString()} time units`)
-        );
+        console.log(chalk.cyan('~ ') + chalk.white.bold('Waveform loaded: ') + chalk.cyan(fileName));
+        console.log(chalk.gray(`  ${signalCount} signals, ${duration.toString()} time units`));
     }
 
     private handleWaveformAnalysis(
@@ -545,37 +442,32 @@ export class TerminalRenderer {
         coverage: { percentage: number },
         summary: string
     ): void {
-        this.stopSpinner();
+        this.clearStatus();
 
-        console.log(chalk.cyan('⎍ ') + chalk.white.bold('Waveform Analysis'));
+        console.log(chalk.cyan('~ ') + chalk.white.bold('Waveform Analysis'));
 
-        // Clocks
         if (clocks.length > 0) {
-            console.log(chalk.green(`  ✓ Detected ${clocks.length} clock(s):`));
+            console.log(chalk.green(`  + Detected ${clocks.length} clock(s):`));
             for (const clk of clocks.slice(0, 5)) {
-                console.log(chalk.gray(`    • ${clk.signal} @ ${clk.frequency.toFixed(4)} MHz`));
+                console.log(chalk.gray(`    - ${clk.signal} @ ${clk.frequency.toFixed(4)} MHz`));
             }
         }
 
-        // Anomalies
         if (anomalies.length > 0) {
             console.log(chalk.yellow(`  ! Found ${anomalies.length} anomaly(s):`));
             for (const a of anomalies.slice(0, 5)) {
-                console.log(chalk.gray(`    • ${a.type} on ${a.signal} @ t=${a.time.toString()}`));
+                console.log(chalk.gray(`    - ${a.type} on ${a.signal} @ t=${a.time.toString()}`));
             }
             if (anomalies.length > 5) {
                 console.log(chalk.gray(`    ... and ${anomalies.length - 5} more`));
             }
         } else {
-            console.log(chalk.green('  ✓ No anomalies detected'));
+            console.log(chalk.green('  + No anomalies detected'));
         }
 
-        // Coverage
         const coverageColor = coverage.percentage >= 90 ? chalk.green :
             coverage.percentage >= 70 ? chalk.yellow : chalk.red;
         console.log(coverageColor(`  Coverage: ${coverage.percentage.toFixed(1)}%`));
-
-        // Summary
         console.log(chalk.gray(`  ${summary}`));
     }
 
@@ -583,11 +475,7 @@ export class TerminalRenderer {
     // Multi-Agent Events
     // ========================================================================
 
-    /**
-     * Handle thinking step events (verbose mode only)
-     */
     private handleThought(stepNumber: number, category: string, thought: string, confidence?: number): void {
-        // Only show thinking in verbose mode
         if (!this.options.verbose) return;
 
         const prefixes: Record<string, string> = {
@@ -606,11 +494,8 @@ export class TerminalRenderer {
         console.log(chalk.gray(`  ${prefix} ${thought}${confStr}`));
     }
 
-    /**
-     * Handle agent start events
-     */
     private handleAgentStart(agentName: string, task: string): void {
-        this.stopSpinner();
+        this.clearStatus();
         console.log(
             chalk.cyan('[') +
             chalk.white.bold(agentName) +
@@ -619,9 +504,6 @@ export class TerminalRenderer {
         );
     }
 
-    /**
-     * Handle agent completion events
-     */
     private handleAgentComplete(agentName: string, success: boolean, durationMs: number): void {
         const statusIcon = success ? '[OK]' : '[FAIL]';
         const statusColor = success ? chalk.green : chalk.red;
@@ -634,14 +516,11 @@ export class TerminalRenderer {
         );
     }
 
-    /**
-     * Handle task delegation events
-     */
     private handleDelegation(from: string, to: string, taskType: string): void {
         console.log(
-            chalk.gray('  └─ ') +
+            chalk.gray('  -> ') +
             chalk.cyan(from) +
-            chalk.gray(' → ') +
+            chalk.gray(' -> ') +
             chalk.cyan(to) +
             chalk.gray(` [${taskType}]`)
         );
@@ -657,9 +536,6 @@ export class TerminalRenderer {
         return `${Math.floor(ms / 60000)}m ${Math.floor((ms % 60000) / 1000)}s`;
     }
 
-    /**
-     * Get timestamp prefix if timestamps are enabled
-     */
     private getTimestamp(): string {
         if (!this.options.timestamps) return '';
         const now = new Date();
@@ -667,9 +543,6 @@ export class TerminalRenderer {
         return chalk.gray(`[${time}] `);
     }
 
-    /**
-     * Log with optional timestamp
-     */
     private log(message: string): void {
         console.log(this.getTimestamp() + message);
     }
@@ -677,7 +550,7 @@ export class TerminalRenderer {
     private makeProgressBar(percent: number, width: number = 20): string {
         const filled = Math.round(width * percent / 100);
         const empty = width - filled;
-        return '[' + '█'.repeat(filled) + '░'.repeat(empty) + ']';
+        return '[' + '='.repeat(filled) + '-'.repeat(empty) + ']';
     }
 
     // ========================================================================
@@ -685,7 +558,6 @@ export class TerminalRenderer {
     // ========================================================================
 
     private handleJsonMode(event: UiEvent): void {
-        // Serialize with BigInt support
         const json = JSON.stringify(event, (_, value) =>
             typeof value === 'bigint' ? value.toString() : value
         );
@@ -697,9 +569,6 @@ export class TerminalRenderer {
 // Factory
 // ============================================================================
 
-/**
- * Create and start a renderer for the given event bus
- */
 export function createRenderer(
     bus: EventBus,
     options?: RendererOptions
