@@ -4,4 +4,5 @@
  */
 
 export * from './renderer.js';
+export * from './InputManager.js';
 
