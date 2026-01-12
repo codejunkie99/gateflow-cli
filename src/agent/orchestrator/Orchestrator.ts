@@ -2,6 +2,11 @@
  * Orchestrator
  * Coordinates multiple specialized agents using AI SDK 6 patterns
  * Uses generateObject for intelligent routing to worker agents
+ *
+ * AI SDK 6 Features:
+ * - Tool approval is handled at the executor level via TOOL_APPROVAL_CONFIG
+ * - Worker agents receive tools with approval-aware execute functions
+ * - Future: Will use ToolLoopAgent when available for cleaner agent management
  */
 
 import { generateObject, streamText, stepCountIs } from 'ai';
@@ -12,6 +17,7 @@ import type { GateFlowAgent, ExecutionPlan, Task, AgentRouting, ComplexityDetect
 import { AgentRoutingSchema, ComplexityDetectionSchema } from '../../types/agent-shared.js';
 import { createPlan } from '../workers/PlanningAgent.js';
 import { ThinkingChain } from '../reasoning/ThinkingChain.js';
+import { TOOL_APPROVAL_CONFIG } from '../tools.js';
 
 export class Orchestrator {
     private workers: Map<string, GateFlowAgent> = new Map();
@@ -19,7 +25,8 @@ export class Orchestrator {
 
     constructor(
         private bus: EventBus,
-        private projectRoot: string
+        private projectRoot: string,
+        private modelName: string = 'claude-sonnet-4-20250514'
     ) {
         this.thinkingChain = new ThinkingChain(bus, { showByDefault: true });
     }
@@ -44,7 +51,7 @@ export class Orchestrator {
         // Step 1: AI-powered routing using generateObject
         // FIX A: Remove 'planning' from prompt - planning is handled by executeWithPlan(), not as a worker
         const { object: routing } = await generateObject({
-            model: anthropic('claude-sonnet-4-20250514') as any,
+            model: anthropic(this.modelName) as any,
             schema: AgentRoutingSchema,
             prompt: `Route this request to the best agent:
 
@@ -84,7 +91,7 @@ Select the most appropriate agent and describe the task.`
             let lastUsage: { inputTokens?: number; outputTokens?: number } | undefined;
 
             const result = await streamText({
-                model: anthropic('claude-sonnet-4-20250514') as any,
+                model: anthropic(this.modelName) as any,
                 system: worker.system,
                 prompt: routing.taskDescription,
                 tools: worker.tools,
@@ -223,7 +230,7 @@ Select the most appropriate agent and describe the task.`
 
         // Step 1: Create plan using PlanningAgent
         const projectContext = await this.getProjectContext();
-        const plan = await createPlan(userRequest, projectContext);
+        const plan = await createPlan(userRequest, projectContext, this.modelName);
 
         this.thinkingChain.addDecompositionStep(
             `Created plan with ${plan.tasks.length} tasks`,
@@ -300,7 +307,7 @@ Select the most appropriate agent and describe the task.`
      */
     private async executeTask(worker: GateFlowAgent, task: Task): Promise<string> {
         const result = await streamText({
-            model: anthropic('claude-sonnet-4-20250514') as any,
+            model: anthropic(this.modelName) as any,
             system: worker.system,
             prompt: task.description,
             tools: worker.tools,

@@ -94,6 +94,11 @@ export class ProjectResolver {
    * @param result - Result from FileUnderstander
    */
   addFile(result: FileUnderstanderResult): void {
+    // Check if file was already added (prevent duplicates)
+    if (this.files.has(result.file.path)) {
+      return;
+    }
+
     // Store file record
     this.files.set(result.file.path, result.file);
 

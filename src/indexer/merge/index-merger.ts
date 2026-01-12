@@ -23,6 +23,7 @@ import type { Directive } from '../types/directive.js';
 import type { FileUnderstanderResult, ResolvedProject, HierarchyNode, FileDependency } from '../types/result.js';
 import type { FileRecord, ParseError } from '../types/index.js';
 import type { SlangBackendResult } from '../slang/slang-backend.js';
+import { MacroIndex } from '../resolver/macro-index.js';
 
 // ============================================================================
 // Types
@@ -507,6 +508,10 @@ export function buildDependencies(index: MergedIndex): FileDependency[] {
     declLocations.set(decl.id, decl.location.file);
   }
 
+  // Macro index (for macro_usage -> uses_macro file dependencies)
+  const macroIndex = new MacroIndex();
+  macroIndex.addAll(index.directives);
+
   // Instance dependencies
   for (const inst of index.instances) {
     if (inst.resolvedId) {
@@ -517,6 +522,7 @@ export function buildDependencies(index: MergedIndex): FileDependency[] {
           toFile,
           reason: 'instantiates',
           entityName: inst.targetName,
+          guard: inst.guard,
         });
       }
     }
@@ -532,6 +538,7 @@ export function buildDependencies(index: MergedIndex): FileDependency[] {
           toFile,
           reason: 'imports',
           entityName: ref.targetName,
+          guard: ref.guard,
         });
       }
     }
@@ -545,8 +552,26 @@ export function buildDependencies(index: MergedIndex): FileDependency[] {
           toFile,
           reason: 'extends',
           entityName: ref.targetName,
+          guard: ref.guard,
         });
       }
+    }
+
+    // Macro usage dependencies (best-effort: link to first seen `define)
+    if (ref.kind === 'macro_usage') {
+      const macro = macroIndex.getFirstByName(ref.targetName);
+      if (!macro) continue;
+
+      // Skip self-references (macro defined and used in same file)
+      if (macro.file === ref.location.file) continue;
+
+      dependencies.push({
+        fromFile: ref.location.file,
+        toFile: macro.file,
+        reason: 'uses_macro',
+        entityName: ref.targetName,
+        guard: ref.guard,
+      });
     }
   }
 
@@ -560,6 +585,7 @@ export function buildDependencies(index: MergedIndex): FileDependency[] {
           toFile: resolvedPath,
           reason: 'includes',
           entityName: dir.data.path,
+          guard: dir.guard,
         });
       }
     }
