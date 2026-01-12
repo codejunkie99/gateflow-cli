@@ -1,14 +1,20 @@
 /**
  * GateFlow Agent Core
  * Main agent orchestration using Vercel AI SDK
+ *
+ * AI SDK 6 Features:
+ * - Uses createAgentBundle for tool configuration
+ * - Supports needsApproval for tool approval workflow
+ * - Integrates with PolicyEngine for path safety
  */
 
 import { streamText, generateObject, stepCountIs, type StepResult, type Tool, type ModelMessage } from 'ai';
 import { anthropic } from '@ai-sdk/anthropic';
 import { z } from 'zod';
 import type { EventBus } from '../events/index.js';
-import type { ToolContext, getToolSpecs } from './tools.js';
-import { createToolExecutors } from './tools.js';
+import type { ToolContext } from './tools.js';
+import { createToolExecutors, getToolSpecs as getToolDefinitions, TOOL_APPROVAL_CONFIG } from './tools.js';
+import type { MemoryManager } from '../memory/manager.js';
 import { getSystemPrompt, detectMode, type PromptMode, type DetectModeContext } from './prompts.js';
 import { ThinkingChain } from './reasoning/ThinkingChain.js';
 import { Orchestrator } from './orchestrator/Orchestrator.js';
@@ -20,6 +26,12 @@ import {
     createDebugAgent,
     createRefactoringAgent
 } from './workers/index.js';
+import {
+    createAgentBundle,
+    toolNeedsApproval,
+    shouldAutoApprovePath,
+    type AgentBundle
+} from './agent-factory.js';
 
 // ============================================================================
 // Types
@@ -43,6 +55,28 @@ export interface AgentSession {
     thinkingChain: ThinkingChain; // NEW: Thinking visibility
 }
 
+/**
+ * AI SDK 6: Type-safe call options for context injection
+ */
+export interface AgentCallOptions {
+    /** Session ID for memory/context management */
+    sessionId?: string;
+    /** User ID for personalization */
+    userId?: string;
+    /** Override the auto-detected mode */
+    mode?: PromptMode;
+    /** Memory context configuration */
+    memoryContext?: {
+        includeArchives?: boolean;
+        maxContextTokens?: number;
+    };
+    /** Approval policy overrides */
+    approvalPolicy?: {
+        autoApprove?: boolean;
+        requireConfirmation?: string[]; // tool names
+    };
+}
+
 export interface RunOptions {
     onToolCall?: (name: string, args: unknown) => void;
     onToolResult?: (name: string, result: unknown) => void;
@@ -51,6 +85,8 @@ export interface RunOptions {
     mode?: PromptMode;
     /** Context for mode detection */
     modeContext?: DetectModeContext;
+    /** AI SDK 6: Type-safe call options for context injection */
+    callOptions?: AgentCallOptions;
 }
 
 // ============================================================================
@@ -70,6 +106,9 @@ export class GateFlowAgent {
     private tools: Record<string, Tool>;
     private executors: ReturnType<typeof createToolExecutors>;
     private orchestrator: Orchestrator | null = null;
+    private memoryManager?: MemoryManager;
+    /** AI SDK 6: Agent bundle with approval-aware tools */
+    private agentBundle: AgentBundle | null = null;
 
     constructor(
         private bus: EventBus,
@@ -85,13 +124,14 @@ export class GateFlowAgent {
         };
 
         this.toolContext = toolContext;
+        this.memoryManager = toolContext.memoryManager;
         this.executors = createToolExecutors(toolContext);
         this.tools = this.buildTools();
         this.session = this.createSession();
-        
+
         // Initialize thinking chain (always visible per plan)
         this.session.thinkingChain = new ThinkingChain(bus, { showByDefault: true });
-        
+
         // Initialize orchestrator with worker agents
         this.initializeOrchestrator();
     }
@@ -100,7 +140,7 @@ export class GateFlowAgent {
      * Initialize orchestrator with all specialized agents
      */
     private initializeOrchestrator(): void {
-        this.orchestrator = new Orchestrator(this.bus, this.toolContext.projectRoot);
+        this.orchestrator = new Orchestrator(this.bus, this.toolContext.projectRoot, this.config.model);
         
         // Register all worker agents
         // Note: Planning is handled by Orchestrator.executeWithPlan(), not as a worker agent
@@ -115,150 +155,18 @@ export class GateFlowAgent {
     // Build AI SDK Tools
     // ========================================================================
 
+    /**
+     * Build tools using the agent factory.
+     * Tools are configured with needsApproval metadata from TOOL_APPROVAL_CONFIG.
+     */
     private buildTools(): Record<string, Tool> {
-        const specs = {
-            read_file: {
-                description: 'Read the contents of a file. Returns the file content with line numbers.',
-                inputSchema: z.object({
-                    path: z.string().describe('Path to the file to read'),
-                    startLine: z.number().optional().describe('Starting line number (1-indexed)'),
-                    endLine: z.number().optional().describe('Ending line number (inclusive)')
-                })
-            },
-            write_file: {
-                description: 'Write content to a file. Creates the file if it does not exist.',
-                inputSchema: z.object({
-                    path: z.string().describe('Path to the file to write'),
-                    content: z.string().describe('Full content to write to the file')
-                })
-            },
-            edit_lines: {
-                description: 'Edit specific lines in a file. Specify line ranges to replace.',
-                inputSchema: z.object({
-                    path: z.string().describe('Path to the file to edit'),
-                    edits: z.array(z.object({
-                        startLine: z.number().describe('First line to replace (1-indexed)'),
-                        endLine: z.number().describe('Last line to replace (inclusive)'),
-                        newContent: z.string().describe('New content to insert')
-                    }))
-                })
-            },
-            search_replace: {
-                description: 'Search and replace text in a file.',
-                inputSchema: z.object({
-                    path: z.string().describe('Path to the file to edit'),
-                    search: z.string().describe('Text or regex pattern to search for'),
-                    replace: z.string().describe('Replacement text'),
-                    all: z.boolean().optional().default(false).describe('Replace all occurrences'),
-                    isRegex: z.boolean().optional().default(false).describe('Treat search as regex')
-                })
-            },
-            list_files: {
-                description: 'List SystemVerilog (.sv) files in a directory. Automatically filters for .sv files only.',
-                inputSchema: z.object({
-                    directory: z.string().describe('Directory path to list'),
-                    extensions: z.array(z.string()).optional().default(['.sv']).describe('Filter by extensions (default: [".sv"])'),
-                    recursive: z.boolean().optional().default(true).describe('List recursively (default: true)')
-                })
-            },
-            search_code: {
-                description: 'Search for a pattern across all SystemVerilog (.sv) files in the project.',
-                inputSchema: z.object({
-                    pattern: z.string().describe('Search pattern (regex)'),
-                    filePattern: z.string().optional().default('**/*.sv').describe('Glob pattern for files (default: "**/*.sv")'),
-                    caseSensitive: z.boolean().optional().default(false),
-                    maxResults: z.number().optional().default(50)
-                })
-            },
-            find_all_sv_files: {
-                description: 'Find all SystemVerilog (.sv) files in the project. Use this to discover what .sv files exist.',
-                inputSchema: z.object({
-                    directory: z.string().optional().default('.').describe('Starting directory (default: project root)')
-                })
-            },
-            find_module: {
-                description: 'Find a SystemVerilog module by name.',
-                inputSchema: z.object({
-                    name: z.string().describe('Module name to find')
-                })
-            },
-            get_dependencies: {
-                description: 'Get the dependency graph for a module.',
-                inputSchema: z.object({
-                    module: z.string().describe('Module name')
-                })
-            },
-            lint_file: {
-                description: 'Run Verilator lint on a SystemVerilog file.',
-                inputSchema: z.object({
-                    path: z.string().describe('Path to the file to lint')
-                })
-            },
-            run_simulation: {
-                description: 'Run a simulation with Verilator. Set analyzeWaveform=true to auto-analyze VCD. After simulation, ask user if they want to view the waveform.',
-                inputSchema: z.object({
-                    top: z.string().describe('Top module name'),
-                    testbench: z.string().optional().describe('Testbench file path'),
-                    timeout: z.number().optional().describe('Timeout in ms'),
-                    analyzeWaveform: z.boolean().optional().default(false).describe('Auto-analyze VCD after simulation')
-                })
-            },
-            open_waveform: {
-                description: 'Open interactive terminal waveform viewer for a VCD file. Use after simulation or when user mentions a .vcd file.',
-                inputSchema: z.object({
-                    vcdPath: z.string().describe('Path to VCD file')
-                })
-            },
-            analyze_waveform: {
-                description: 'Analyze a VCD file for clocks, X/Z anomalies, and coverage. Use when user asks to analyze simulation output.',
-                inputSchema: z.object({
-                    vcdPath: z.string().describe('Path to VCD file'),
-                    detectClocks: z.boolean().optional().default(true),
-                    checkAnomalies: z.boolean().optional().default(true)
-                })
-            },
-            ask_user: {
-                description: 'Ask user a yes/no question. Use after simulation to ask if they want to view waveforms.',
-                inputSchema: z.object({
-                    question: z.string().describe('Question to ask'),
-                    options: z.array(z.string()).optional().describe('Options like ["yes", "no"]'),
-                    default: z.string().optional().describe('Default answer')
-                })
-            },
-            find_vcd_files: {
-                description: 'Search for VCD waveform files in the project. ALWAYS use this first when user mentions a VCD file by name to find its full path before opening.',
-                inputSchema: z.object({
-                    directory: z.string().optional().default('.').describe('Starting directory'),
-                    pattern: z.string().optional().describe('Filename pattern to match (e.g., "counter" matches "counter.vcd")')
-                })
-            },
-            get_project_stats: {
-                description: 'Get project statistics.',
-                inputSchema: z.object({})
-            },
-            // Tool Setup - for installing/configuring analysis tools
-            check_tool_status: {
-                description: 'Check if SystemVerilog analysis tools (Verible and/or Slang) are installed and working. Use this when the user asks about tool availability, wants to know what tools are installed, or when you need to verify tools before suggesting installation. Returns installation status, version, and path for each tool.',
-                inputSchema: z.object({
-                    tool: z.enum(['verible', 'slang', 'both']).optional().default('both').describe('Which tool to check (default: both)')
-                })
-            },
-            setup_verible: {
-                description: 'Download and configure Verible (SystemVerilog syntax parser). Use this when the user wants to install Verible, asks to set up parsing tools, or needs help getting Verible working. Downloads prebuilt binaries from GitHub - fast and easy, no compilation required. Requires user approval for downloads.',
-                inputSchema: z.object({})
-            },
-            setup_slang: {
-                description: 'Build and configure Slang (SystemVerilog semantic analyzer). Use this when the user wants to install Slang, asks to set up semantic analysis, or needs help getting Slang working. WARNING: Requires git, cmake, and a C++20 compiler. Takes several minutes to build from source. Requires user approval for build commands.',
-                inputSchema: z.object({})
-            }
-        };
-
+        const specs = getToolDefinitions();
         const tools: Record<string, Tool> = {};
 
         for (const [name, spec] of Object.entries(specs)) {
             tools[name] = {
                 description: spec.description,
-                inputSchema: spec.inputSchema,
+                inputSchema: spec.parameters, // tools.ts uses 'parameters' which maps to inputSchema
                 execute: async (args: unknown) => {
                     const executor = (this.executors as any)[name];
                     if (!executor) {
@@ -270,6 +178,98 @@ export class GateFlowAgent {
         }
 
         return tools;
+    }
+
+    /**
+     * Get or create the agent bundle for the current mode.
+     * AI SDK 6: The bundle contains tools configured with needsApproval.
+     */
+    private getAgentBundle(mode: PromptMode): AgentBundle {
+        // Create new bundle if mode changed or not initialized
+        if (!this.agentBundle || this.agentBundle.mode !== mode) {
+            this.agentBundle = createAgentBundle(
+                {
+                    mode,
+                    model: this.config.model,
+                    maxSteps: this.config.maxToolCalls,
+                    autoApprove: this.toolContext.autoApprove,
+                },
+                this.toolContext
+            );
+        }
+        return this.agentBundle;
+    }
+
+    /**
+     * Check if a tool call requires approval.
+     * AI SDK 6: Uses TOOL_APPROVAL_CONFIG and PolicyEngine.
+     *
+     * Note: For tools not in the PolicyEngine's ToolName union,
+     * we fall back to TOOL_APPROVAL_CONFIG only.
+     */
+    private async checkToolApproval(
+        toolName: string,
+        args: Record<string, unknown>
+    ): Promise<{ approved: boolean; reason?: string }> {
+        // Check if tool needs approval based on config
+        if (!toolNeedsApproval(toolName, this.toolContext.autoApprove)) {
+            return { approved: true };
+        }
+
+        // Auto-approve SystemVerilog files for write operations
+        if (['write_file', 'edit_lines', 'search_replace'].includes(toolName)) {
+            const filePath = args.path as string | undefined;
+            if (filePath && shouldAutoApprovePath(filePath)) {
+                return { approved: true };
+            }
+        }
+
+        // Check PolicyEngine for path safety (for known tool names)
+        // PolicyEngine has a specific set of ToolNames - check if this tool is known
+        const knownPolicyTools = [
+            'read_file', 'list_files', 'search_code', 'lint_file',
+            'write_file', 'edit_lines', 'search_replace', 'find_module'
+        ];
+
+        if (knownPolicyTools.includes(toolName)) {
+            const policyDecision = this.toolContext.policy.checkTool(
+                toolName as 'write_file' | 'edit_lines' | 'search_replace' | 'read_file' | 'list_files' | 'search_code' | 'lint_file' | 'find_module',
+                args
+            );
+            if (!policyDecision.allowed) {
+                return { approved: false, reason: policyDecision.reason };
+            }
+
+            // Request human approval via EventBus if policy requires it
+            if (policyDecision.requiresApproval) {
+                try {
+                    const summary = this.summarizeArgs(args);
+                    const response = await this.bus.requestApproval(
+                        `Tool: ${toolName}`,
+                        summary,
+                        { timeout: 60000 }
+                    );
+                    const approved = response.approved;
+                    return { approved, reason: approved ? 'User approved' : 'User denied' };
+                } catch {
+                    // If approval request fails, deny by default for safety
+                    return { approved: false, reason: 'Approval request failed' };
+                }
+            }
+        }
+
+        // For other tools that need approval per config, request approval
+        try {
+            const summary = this.summarizeArgs(args);
+            const response = await this.bus.requestApproval(
+                `Tool: ${toolName}`,
+                summary,
+                { timeout: 60000 }
+            );
+            return { approved: response.approved, reason: response.approved ? 'User approved' : 'User denied' };
+        } catch {
+            return { approved: false, reason: 'Approval request failed' };
+        }
     }
 
     // ========================================================================
@@ -294,6 +294,37 @@ export class GateFlowAgent {
             content: userMessage.trim()
         });
 
+        // Check for context archiving (Dynamic Context Discovery)
+        if (this.memoryManager) {
+            // Include assistant messages in check by getting full history
+            const allMessages = this.session.messages.map(m => ({
+                role: m.role,
+                content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content)
+            }));
+
+            const archiveResult = await this.memoryManager.triggerSummarization(
+                this.toolContext.sessionId || 'default',
+                allMessages
+            );
+
+            if (archiveResult.triggered) {
+                // Replace session messages with remaining + summary context
+                // Convert remaining messages back to ModelMessage format
+                this.session.messages = archiveResult.remainingMessages.map(m => ({
+                    role: m.role as 'user' | 'assistant' | 'system',
+                    content: m.content
+                }));
+
+                // Add history reference as a system-like context at the start
+                if (archiveResult.historyRef) {
+                    this.session.messages.unshift({
+                        role: 'system',
+                        content: archiveResult.historyRef.agentInstructions
+                    });
+                }
+            }
+        }
+
         // Emit agent lifecycle start
         this.bus.emit({
             type: 'agent_start',
@@ -313,13 +344,25 @@ export class GateFlowAgent {
             label: 'Thinking...'
         });
 
-        // Detect mode for this query
+        // AI SDK 6: Apply call options if provided
+        const callOptions = options?.callOptions;
+        if (callOptions?.sessionId && this.toolContext.sessionId !== callOptions.sessionId) {
+            this.toolContext.sessionId = callOptions.sessionId;
+        }
+        
+        // Detect mode for this query (can be overridden by call options)
         const modeContext: DetectModeContext = {
             hasErrors: this.session.hasErrors,
             ...options?.modeContext
         };
-        const mode = options?.mode ?? detectMode(userMessage, modeContext);
+        const mode = callOptions?.mode ?? options?.mode ?? detectMode(userMessage, modeContext);
         this.session.currentMode = mode;
+        
+        // Apply approval policy overrides from call options
+        if (callOptions?.approvalPolicy) {
+            // This would integrate with PolicyEngine to override auto-approve settings
+            // For now, we track it for potential future use
+        }
 
         // Add thinking step at mode detection
         this.session.thinkingChain.addAnalysisStep(
@@ -364,7 +407,8 @@ Return needsMultiAgent: true only for genuinely complex requests.`
         }
 
         // Simple requests: continue with single-agent flow
-        const systemPrompt = getSystemPrompt(mode);
+        // AI SDK 6: Get agent bundle with approval-aware tools
+        const bundle = this.getAgentBundle(mode);
 
         // Update spinner with detected mode
         this.bus.emit({
@@ -373,16 +417,16 @@ Return needsMultiAgent: true only for genuinely complex requests.`
             label: `[${mode}] Generating response...`
         });
 
-        // AI SDK 6: Use stopWhen instead of maxSteps
+        // AI SDK 6: Use bundle configuration with stopWhen
         const result = streamText({
-            model: anthropic(this.config.model) as any,
-            system: systemPrompt,
+            model: bundle.model as any,
+            system: bundle.instructions,
             messages: this.session.messages,
-            tools: this.tools,
+            tools: bundle.tools,
             maxOutputTokens: this.config.maxTokens,
             temperature: this.config.temperature,
             abortSignal: options?.signal,
-            stopWhen: stepCountIs(this.config.maxToolCalls),  // AI SDK handles the loop automatically
+            stopWhen: bundle.stopWhen,  // AI SDK handles the loop automatically
             
             // Thinking visibility via onStepFinish
             // Note: Tool call/result events are emitted from the stream loop for real-time updates
@@ -421,8 +465,27 @@ Return needsMultiAgent: true only for genuinely complex requests.`
             },
 
             // Finish callback for token tracking (AI SDK v6)
-            onFinish: ({ totalUsage }) => {
+            // Enhanced with extended usage tracking
+            // Note: Tool approval is handled in tool executors via PolicyEngine (see tools.ts)
+            onFinish: ({ totalUsage, finishReason }) => {
                 lastUsage = totalUsage;
+                
+                // AI SDK 6: Extended usage tracking
+                // Store detailed token breakdown for cost optimization and debugging
+                if (totalUsage) {
+                    // Store extended usage details for agent_complete event
+                    (lastUsage as any).extended = {
+                        inputTokens: totalUsage.inputTokens,
+                        outputTokens: totalUsage.outputTokens,
+                        // Extended usage details (when available from provider)
+                        reasoningTokens: (totalUsage as any).outputTokenDetails?.reasoningTokens,
+                        textTokens: (totalUsage as any).outputTokenDetails?.textTokens,
+                        cachedTokens: (totalUsage as any).cachedTokens,
+                        finishReason: finishReason,
+                        // Raw provider usage for detailed analysis
+                        rawUsage: (totalUsage as any).raw
+                    };
+                }
             }
         });
 
@@ -533,13 +596,21 @@ Return needsMultiAgent: true only for genuinely complex requests.`
         this.bus.emit({ type: 'token_done' });
 
         // Emit agent lifecycle complete with token usage
+        // AI SDK 6: Include extended usage details when available
+        const extendedUsage = (lastUsage as any)?.extended;
         this.bus.emit({
             type: 'agent_complete',
             agentName: 'gateflow',
             success: true,
             durationMs: Date.now() - agentStartTime,
             inputTokens: lastUsage?.inputTokens,
-            outputTokens: lastUsage?.outputTokens
+            outputTokens: lastUsage?.outputTokens,
+            // Extended usage details (AI SDK 6)
+            reasoningTokens: extendedUsage?.reasoningTokens,
+            textTokens: extendedUsage?.textTokens,
+            cachedTokens: extendedUsage?.cachedTokens,
+            finishReason: extendedUsage?.finishReason,
+            rawUsage: extendedUsage?.rawUsage
         });
 
         return fullResponse;

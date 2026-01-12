@@ -10,8 +10,18 @@ import type { FileTools, EditTools } from '../fileops/index.js';
 import type { SVIndexerAdapter } from '../indexer/sv-indexer-adapter.js';
 import type { DiffEngine } from '../diff/index.js';
 import type { Verilator } from '../verification/verilator.js';
-import type { ToolRegistry, ContextFileManager, TerminalSessionManager } from '../context/index.js';
-import type { MemoryManager } from '../memory/manager.js';
+import type {
+    ToolRegistry,
+    ContextFileManager,
+    TerminalSessionManager,
+    DynamicContextManager,
+    FileChunker,
+    TokenBudgetManager,
+    SkillManager,
+    ToolDescriptionManager,
+    SemanticSummarizer
+} from '../context/index.js';
+import type { MemoryManager, KnowledgeStore } from '../memory/index.js';
 import type { SkillRegistry } from '../skills/index.js';
 import type { MCPToolSync } from '../mcp/index.js';
 import type { InputManager } from '../ui/index.js';
@@ -42,6 +52,14 @@ export interface ToolContext {
     mcpToolSync?: MCPToolSync;
     // Centralized input manager
     inputManager?: InputManager;
+    // Phase 2: Context Window Management (Cursor's Dynamic Context Discovery)
+    dynamicContextManager?: DynamicContextManager;
+    fileChunker?: FileChunker;
+    tokenBudgetManager?: TokenBudgetManager;
+    skillManager?: SkillManager;
+    toolDescriptionManager?: ToolDescriptionManager;
+    semanticSummarizer?: SemanticSummarizer;
+    knowledgeStore?: KnowledgeStore;
 }
 
 // ============================================================================
@@ -212,6 +230,63 @@ export const getMcpToolSchema = z.object({
 });
 
 // ============================================================================
+// Phase 2: Context Window Management Tools (Cursor's Dynamic Context Discovery)
+// ============================================================================
+
+// Grep Context - Search through context files (tool outputs, history)
+export const grepContextSchema = z.object({
+    filePattern: z.string().describe('File pattern to search (e.g., "tool_*.txt", "history.jsonl", or full path)'),
+    pattern: z.string().describe('Regex pattern to search for'),
+    context: z.number().optional().default(2).describe('Lines of context around matches (default: 2)')
+});
+
+// Tail Context - Read last N lines of a context file
+export const tailContextSchema = z.object({
+    filePath: z.string().describe('Path to the context file'),
+    lines: z.number().optional().default(50).describe('Number of lines to read from end (default: 50)')
+});
+
+// Head Context - Read first N lines of a context file
+export const headContextSchema = z.object({
+    filePath: z.string().describe('Path to the context file'),
+    lines: z.number().optional().default(50).describe('Number of lines to read from start (default: 50)')
+});
+
+// List Context - List available context files for current session
+export const listContextSchema = z.object({
+    type: z.enum(['all', 'tool_output', 'history', 'terminal']).optional().default('all')
+        .describe('Type of context files to list (default: all)')
+});
+
+// Get File Chunk - Get semantically meaningful chunk of a large HDL file
+export const getFileChunkSchema = z.object({
+    filePath: z.string().describe('Path to the HDL file'),
+    lineNumber: z.number().optional().describe('Get chunk containing this line'),
+    chunkName: z.string().optional().describe('Get chunk by name (module, function name)'),
+    chunkType: z.enum(['module', 'interface', 'package', 'class', 'function', 'task', 'always_block'])
+        .optional().describe('Get all chunks of this type')
+});
+
+// Select Relevant Chunks - Select file chunks relevant to a query
+export const selectChunksSchema = z.object({
+    filePath: z.string().describe('Path to the HDL file'),
+    query: z.string().describe('Query describing what you need (e.g., "clock reset logic", "state machine")'),
+    maxTokens: z.number().optional().default(2000).describe('Maximum tokens to return (default: 2000)')
+});
+
+// Search Knowledge - Search learned patterns and knowledge
+export const searchKnowledgeSchema = z.object({
+    query: z.string().describe('What to search for in learned knowledge'),
+    types: z.array(z.enum(['code_pattern', 'lint_fix', 'test_pattern', 'module_info', 'dependency',
+                          'style_preference', 'workflow', 'debug_solution', 'tool_usage', 'project_context']))
+        .optional().describe('Filter by knowledge type'),
+    maxResults: z.number().optional().default(10).describe('Maximum results (default: 10)')
+});
+
+// Get Token Budget - Get current token budget status
+export const getTokenBudgetSchema = z.object({});
+
+// ============================================================================
 // Tool Setup Schemas
 // ============================================================================
 
@@ -232,6 +307,74 @@ export const helpSetupToolsSchema = z.object({
     tools: z.array(z.enum(['verible', 'slang'])).optional()
         .describe('Specific tools to help with (default: all missing tools)')
 });
+
+// ============================================================================
+// Tool Approval Configuration (AI SDK 6)
+// ============================================================================
+
+/**
+ * Declarative configuration for which tools require human approval.
+ * - false: Tool executes immediately (read-only or safe operations)
+ * - true: Tool requires approval before execution (writes, executions, setups)
+ *
+ * This is used with AI SDK 6's needsApproval pattern where tools without
+ * execute functions pause for approval.
+ */
+export const TOOL_APPROVAL_CONFIG: Record<string, boolean> = {
+    // Read-only tools - no approval needed
+    read_file: false,
+    list_files: false,
+    search_code: false,
+    lint_file: false,
+    find_module: false,
+    get_dependencies: false,
+    find_all_sv_files: false,
+    find_vcd_files: false,
+    analyze_waveform: false,
+    get_project_stats: false,
+
+    // Dynamic context discovery - no approval (read-only)
+    describe_tool: false,
+    read_context_output: false,
+    search_history: false,
+    search_terminal: false,
+    get_terminal_file_path: false,
+
+    // Phase 2: Context Window Management - no approval (read-only)
+    grep_context: false,
+    tail_context: false,
+    head_context: false,
+    list_context: false,
+    get_file_chunk: false,
+    select_chunks: false,
+    search_knowledge: false,
+    get_token_budget: false,
+
+    // Skills and MCP - read operations (no approval)
+    search_skills: false,
+    get_skill: false,
+    check_mcp_status: false,
+    get_mcp_tool: false,
+
+    // Write/modify tools - needs approval
+    write_file: true,
+    edit_lines: true,
+    search_replace: true,
+
+    // Execution tools - needs approval
+    run_simulation: true,
+    run_skill_script: true,
+
+    // Setup tools - needs approval
+    setup_verible: true,
+    setup_slang: true,
+    help_setup_tools: true,
+    check_tool_status: false, // Just checking status, not modifying
+
+    // Interactive tools - no approval (they prompt user directly)
+    ask_user: false,
+    open_waveform: false,
+};
 
 // ============================================================================
 // Tool Implementations
@@ -1702,6 +1845,314 @@ export function createToolExecutors(ctx: ToolContext) {
                     message: 'Setup failed. Try running "gateflow setup" manually.'
                 };
             }
+        },
+
+        // ====================================================================
+        // Phase 2: Context Window Management Tools (Cursor's Dynamic Context Discovery)
+        // ====================================================================
+
+        // Grep through context files (tool outputs, history, terminal)
+        grep_context: async (args: z.infer<typeof grepContextSchema>) => {
+            if (!ctx.dynamicContextManager) {
+                return { error: 'Dynamic context manager not configured' };
+            }
+
+            try {
+                const results = await ctx.dynamicContextManager.grep(
+                    args.filePattern,
+                    args.pattern,
+                    { context: args.context }
+                );
+
+                if (results.length === 0) {
+                    return {
+                        count: 0,
+                        message: `No matches found for pattern: ${args.pattern} in ${args.filePattern}`
+                    };
+                }
+
+                return {
+                    count: results.length,
+                    pattern: args.pattern,
+                    filePattern: args.filePattern,
+                    results: results.slice(0, 50).map(r => ({
+                        file: r.file,
+                        lineNumber: r.lineNumber,
+                        line: r.line,
+                        before: r.before,
+                        after: r.after
+                    }))
+                };
+            } catch (err) {
+                return { error: `Failed to grep context: ${err}` };
+            }
+        },
+
+        // Read last N lines of a context file (Cursor's tail pattern)
+        tail_context: async (args: z.infer<typeof tailContextSchema>) => {
+            if (!ctx.dynamicContextManager) {
+                return { error: 'Dynamic context manager not configured' };
+            }
+
+            try {
+                const content = await ctx.dynamicContextManager.tail(args.filePath, args.lines);
+                const lineCount = content.split('\n').length;
+
+                return {
+                    filePath: args.filePath,
+                    lines: lineCount,
+                    requestedLines: args.lines,
+                    content
+                };
+            } catch (err) {
+                return { error: `Failed to tail context file: ${err}` };
+            }
+        },
+
+        // Read first N lines of a context file
+        head_context: async (args: z.infer<typeof headContextSchema>) => {
+            if (!ctx.dynamicContextManager) {
+                return { error: 'Dynamic context manager not configured' };
+            }
+
+            try {
+                const content = await ctx.dynamicContextManager.head(args.filePath, args.lines);
+                const lineCount = content.split('\n').length;
+
+                return {
+                    filePath: args.filePath,
+                    lines: lineCount,
+                    requestedLines: args.lines,
+                    content
+                };
+            } catch (err) {
+                return { error: `Failed to head context file: ${err}` };
+            }
+        },
+
+        // List available context files
+        list_context: async (args: z.infer<typeof listContextSchema>) => {
+            if (!ctx.dynamicContextManager || !ctx.sessionId) {
+                return { error: 'Dynamic context manager not configured' };
+            }
+
+            try {
+                const index = await ctx.dynamicContextManager.getContextIndex(ctx.sessionId);
+
+                // Filter by type if specified
+                let entries = index.entries;
+                if (args.type !== 'all') {
+                    entries = entries.filter(e => e.type === args.type);
+                }
+
+                return {
+                    sessionId: ctx.sessionId,
+                    type: args.type,
+                    count: entries.length,
+                    files: entries.map(e => ({
+                        path: e.path,
+                        type: e.type,
+                        tool: e.tool,
+                        lines: e.lines,
+                        size: `${(e.size / 1024).toFixed(1)} KB`,
+                        created: new Date(e.timestamp).toISOString()
+                    }))
+                };
+            } catch (err) {
+                return { error: `Failed to list context files: ${err}` };
+            }
+        },
+
+        // Get semantically meaningful chunk of a large HDL file
+        get_file_chunk: async (args: z.infer<typeof getFileChunkSchema>) => {
+            if (!ctx.fileChunker) {
+                return { error: 'File chunker not configured' };
+            }
+
+            try {
+                const index = await ctx.fileChunker.chunkFile(args.filePath);
+
+                // By line number
+                if (args.lineNumber !== undefined) {
+                    const chunk = ctx.fileChunker.getChunkForLine(index.chunks, args.lineNumber);
+                    if (!chunk) {
+                        return { error: `No chunk found containing line ${args.lineNumber}` };
+                    }
+                    return {
+                        chunk: {
+                            index: chunk.index,
+                            type: chunk.chunkType,
+                            name: chunk.name,
+                            lines: `${chunk.startLine}-${chunk.endLine}`,
+                            tokens: chunk.tokenCount,
+                            content: chunk.content
+                        }
+                    };
+                }
+
+                // By name
+                if (args.chunkName) {
+                    const chunk = ctx.fileChunker.getChunkByName(index, args.chunkName);
+                    if (!chunk) {
+                        return {
+                            error: `Chunk not found: ${args.chunkName}`,
+                            availableNames: Array.from(index.byName.keys())
+                        };
+                    }
+                    return {
+                        chunk: {
+                            index: chunk.index,
+                            type: chunk.chunkType,
+                            name: chunk.name,
+                            lines: `${chunk.startLine}-${chunk.endLine}`,
+                            tokens: chunk.tokenCount,
+                            content: chunk.content
+                        }
+                    };
+                }
+
+                // By type
+                if (args.chunkType) {
+                    const chunks = ctx.fileChunker.getChunksByType(index, args.chunkType);
+                    return {
+                        count: chunks.length,
+                        type: args.chunkType,
+                        chunks: chunks.map(c => ({
+                            index: c.index,
+                            name: c.name,
+                            lines: `${c.startLine}-${c.endLine}`,
+                            tokens: c.tokenCount
+                        }))
+                    };
+                }
+
+                // Return index summary
+                return {
+                    filePath: index.filePath,
+                    totalLines: index.totalLines,
+                    totalTokens: index.totalTokens,
+                    chunkCount: index.chunks.length,
+                    chunks: index.chunks.map(c => ({
+                        index: c.index,
+                        type: c.chunkType,
+                        name: c.name,
+                        lines: `${c.startLine}-${c.endLine}`,
+                        tokens: c.tokenCount
+                    }))
+                };
+            } catch (err) {
+                return { error: `Failed to chunk file: ${err}` };
+            }
+        },
+
+        // Select file chunks relevant to a query
+        select_chunks: async (args: z.infer<typeof selectChunksSchema>) => {
+            if (!ctx.fileChunker) {
+                return { error: 'File chunker not configured' };
+            }
+
+            try {
+                const index = await ctx.fileChunker.chunkFile(args.filePath);
+                const selection = ctx.fileChunker.selectRelevantChunks(
+                    index.chunks,
+                    args.query,
+                    args.maxTokens
+                );
+
+                return {
+                    filePath: args.filePath,
+                    query: args.query,
+                    maxTokens: args.maxTokens,
+                    selectedChunks: selection.chunks.length,
+                    totalTokens: selection.totalTokens,
+                    coverage: `${selection.coveragePercent}%`,
+                    fullFile: selection.fullFile,
+                    chunks: selection.chunks.map(c => ({
+                        index: c.index,
+                        type: c.chunkType,
+                        name: c.name,
+                        lines: `${c.startLine}-${c.endLine}`,
+                        tokens: c.tokenCount,
+                        content: c.content
+                    }))
+                };
+            } catch (err) {
+                return { error: `Failed to select chunks: ${err}` };
+            }
+        },
+
+        // Search learned patterns and knowledge
+        search_knowledge: async (args: z.infer<typeof searchKnowledgeSchema>) => {
+            if (!ctx.knowledgeStore) {
+                return { error: 'Knowledge store not configured' };
+            }
+
+            try {
+                const results = ctx.knowledgeStore.search({
+                    query: args.query,
+                    types: args.types as any,
+                    maxResults: args.maxResults
+                });
+
+                if (results.length === 0) {
+                    return {
+                        count: 0,
+                        message: `No knowledge found matching: ${args.query}`,
+                        note: 'Knowledge is learned from lint sessions, code generation, and user corrections.'
+                    };
+                }
+
+                return {
+                    count: results.length,
+                    query: args.query,
+                    results: results.map(r => ({
+                        id: r.item.id,
+                        type: r.item.type,
+                        title: r.item.title,
+                        content: r.item.content,
+                        confidence: `${(r.item.confidence * 100).toFixed(0)}%`,
+                        relevance: `${(r.relevance * 100).toFixed(0)}%`,
+                        useCount: r.item.useCount,
+                        matchReason: r.matchReason
+                    }))
+                };
+            } catch (err) {
+                return { error: `Failed to search knowledge: ${err}` };
+            }
+        },
+
+        // Get current token budget status
+        get_token_budget: async (_args: z.infer<typeof getTokenBudgetSchema>) => {
+            if (!ctx.tokenBudgetManager) {
+                return { error: 'Token budget manager not configured' };
+            }
+
+            const budget = ctx.tokenBudgetManager.getBudget();
+            const needsCompaction = ctx.tokenBudgetManager.needsCompaction();
+
+            return {
+                budget: {
+                    contextWindow: budget.contextWindow,
+                    allocation: {
+                        system: budget.allocation.system,
+                        history: budget.allocation.history,
+                        tools: budget.allocation.tools,
+                        reserve: budget.allocation.reserve
+                    },
+                    usage: {
+                        system: budget.usage.system,
+                        history: budget.usage.history,
+                        tools: budget.usage.tools,
+                        cumulative: budget.usage.cumulative
+                    }
+                },
+                needsCompaction,
+                available: {
+                    system: ctx.tokenBudgetManager.getAvailable('system'),
+                    history: ctx.tokenBudgetManager.getAvailable('history'),
+                    tools: ctx.tokenBudgetManager.getAvailable('tools')
+                }
+            };
         }
     };
 }
@@ -1762,107 +2213,183 @@ function detectClockFrequency(signal: { values: [number, number | string][] }): 
 // Tool Specifications for AI SDK
 // ============================================================================
 
-export function getToolSpecs() {
+/**
+ * Tool specification with AI SDK 6 needsApproval support.
+ * When needsApproval is true and autoApprove is false, tools will pause
+ * for human approval before execution.
+ */
+export interface ToolSpec {
+    description: string;
+    parameters: z.ZodType<unknown>;
+    needsApproval: boolean;
+}
+
+export function getToolSpecs(): Record<string, ToolSpec> {
     return {
+        // File operations
         read_file: {
             description: 'Read the contents of a file. Returns the file content with line numbers.',
-            parameters: readFileSchema
+            parameters: readFileSchema,
+            needsApproval: TOOL_APPROVAL_CONFIG.read_file
         },
         write_file: {
             description: 'Write content to a file. Creates the file if it does not exist, overwrites if it does.',
-            parameters: writeFileSchema
+            parameters: writeFileSchema,
+            needsApproval: TOOL_APPROVAL_CONFIG.write_file
         },
         edit_lines: {
             description: 'Edit specific lines in a file. Specify line ranges to replace with new content.',
-            parameters: editLinesSchema
+            parameters: editLinesSchema,
+            needsApproval: TOOL_APPROVAL_CONFIG.edit_lines
         },
         search_replace: {
             description: 'Search and replace text in a file. Can use regex patterns.',
-            parameters: searchReplaceSchema
+            parameters: searchReplaceSchema,
+            needsApproval: TOOL_APPROVAL_CONFIG.search_replace
         },
         list_files: {
             description: 'List files in a directory. Can filter by extension and recurse.',
-            parameters: listFilesSchema
+            parameters: listFilesSchema,
+            needsApproval: TOOL_APPROVAL_CONFIG.list_files
         },
         search_code: {
             description: 'Search for a pattern across all project files. Returns matching lines with context.',
-            parameters: searchCodeSchema
+            parameters: searchCodeSchema,
+            needsApproval: TOOL_APPROVAL_CONFIG.search_code
         },
+
+        // SystemVerilog analysis
         find_module: {
             description: 'Find a SystemVerilog module by name. Returns its location, ports, and parameters.',
-            parameters: findModuleSchema
+            parameters: findModuleSchema,
+            needsApproval: TOOL_APPROVAL_CONFIG.find_module
         },
         get_dependencies: {
             description: 'Get the dependency graph for a module. Returns compilation order and any missing modules.',
-            parameters: getDependenciesSchema
+            parameters: getDependenciesSchema,
+            needsApproval: TOOL_APPROVAL_CONFIG.get_dependencies
         },
         lint_file: {
             description: 'Run Verilator lint on a SystemVerilog file. Returns errors and warnings.',
-            parameters: lintFileSchema
-        },
-        run_simulation: {
-            description: 'Compile and run a simulation with Verilator. Returns stdout, stderr, VCD path, and optional waveform analysis. Set analyzeWaveform=true to automatically parse and analyze the VCD output.',
-            parameters: runSimSchema
-        },
-        open_waveform: {
-            description: 'Open an interactive terminal-based waveform viewer for a VCD file. Supports keyboard navigation, zoom, pan, and signal inspection. Blocks until the viewer is closed.',
-            parameters: openWaveformSchema
-        },
-        get_project_stats: {
-            description: 'Get statistics about the project: file count, modules, packages, etc.',
-            parameters: z.object({})
+            parameters: lintFileSchema,
+            needsApproval: TOOL_APPROVAL_CONFIG.lint_file
         },
         find_all_sv_files: {
             description: 'Find all SystemVerilog (.sv) files in the project. Returns a list of all .sv file paths.',
-            parameters: findAllSvFilesSchema
+            parameters: findAllSvFilesSchema,
+            needsApproval: TOOL_APPROVAL_CONFIG.find_all_sv_files
+        },
+        get_project_stats: {
+            description: 'Get statistics about the project: file count, modules, packages, etc.',
+            parameters: z.object({}),
+            needsApproval: TOOL_APPROVAL_CONFIG.get_project_stats
+        },
+
+        // Simulation and waveform
+        run_simulation: {
+            description: 'Compile and run a simulation with Verilator. Returns stdout, stderr, VCD path, and optional waveform analysis. Set analyzeWaveform=true to automatically parse and analyze the VCD output.',
+            parameters: runSimSchema,
+            needsApproval: TOOL_APPROVAL_CONFIG.run_simulation
+        },
+        open_waveform: {
+            description: 'Open an interactive terminal-based waveform viewer for a VCD file. Supports keyboard navigation, zoom, pan, and signal inspection. Blocks until the viewer is closed.',
+            parameters: openWaveformSchema,
+            needsApproval: TOOL_APPROVAL_CONFIG.open_waveform
         },
         analyze_waveform: {
             description: 'Analyze a VCD waveform file from simulation. Detects clocks, checks for X/Z anomalies, and calculates signal coverage. Returns signal list, timing info, and analysis summary.',
-            parameters: analyzeWaveformSchema
-        },
-        ask_user: {
-            description: 'Ask the user a question and wait for their response. Use this for human-in-the-loop confirmations, like asking if they want to view waveforms after simulation. Returns the user response with isYes/isNo flags for easy checking.',
-            parameters: askUserSchema
+            parameters: analyzeWaveformSchema,
+            needsApproval: TOOL_APPROVAL_CONFIG.analyze_waveform
         },
         find_vcd_files: {
             description: 'Search for VCD waveform files in the project. ALWAYS use this tool first when user mentions a VCD file by name to find its full path before opening. Returns list of matching files with paths.',
-            parameters: findVcdFilesSchema
+            parameters: findVcdFilesSchema,
+            needsApproval: TOOL_APPROVAL_CONFIG.find_vcd_files
+        },
+
+        // Human-in-the-loop
+        ask_user: {
+            description: 'Ask the user a question and wait for their response. Use this for human-in-the-loop confirmations, like asking if they want to view waveforms after simulation. Returns the user response with isYes/isNo flags for easy checking.',
+            parameters: askUserSchema,
+            needsApproval: TOOL_APPROVAL_CONFIG.ask_user
         },
 
         // Dynamic Context Discovery Tools
         describe_tool: {
             description: 'Get full description and parameters for a tool. Use this to understand how to use any tool.',
-            parameters: describeToolSchema
+            parameters: describeToolSchema,
+            needsApproval: TOOL_APPROVAL_CONFIG.describe_tool
         },
         read_context_output: {
             description: 'Read a portion of tool output stored in a context file. Use head/tail for quick inspection.',
-            parameters: readContextOutputSchema
+            parameters: readContextOutputSchema,
+            needsApproval: TOOL_APPROVAL_CONFIG.read_context_output
         },
         search_history: {
             description: 'Search archived conversation history for relevant context from earlier in the session.',
-            parameters: searchHistorySchema
+            parameters: searchHistorySchema,
+            needsApproval: TOOL_APPROVAL_CONFIG.search_history
         },
         search_terminal: {
             description: 'Search terminal/simulation output for patterns. Find specific errors or output from commands.',
-            parameters: searchTerminalSchema
+            parameters: searchTerminalSchema,
+            needsApproval: TOOL_APPROVAL_CONFIG.search_terminal
+        },
+        get_terminal_file_path: {
+            description: 'Get the path to the terminal session file for direct grep access.',
+            parameters: getTerminalFilePathSchema,
+            needsApproval: TOOL_APPROVAL_CONFIG.get_terminal_file_path
+        },
+
+        // Skills
+        search_skills: {
+            description: 'Search skill files for relevant capabilities based on a query.',
+            parameters: searchSkillsSchema,
+            needsApproval: TOOL_APPROVAL_CONFIG.search_skills
+        },
+        get_skill: {
+            description: 'Get full skill definition by name.',
+            parameters: getSkillSchema,
+            needsApproval: TOOL_APPROVAL_CONFIG.get_skill
+        },
+        run_skill_script: {
+            description: 'Execute a bundled script from a skill.',
+            parameters: runSkillScriptSchema,
+            needsApproval: TOOL_APPROVAL_CONFIG.run_skill_script
+        },
+
+        // MCP integration
+        check_mcp_status: {
+            description: 'Check status of MCP servers and tools.',
+            parameters: checkMcpStatusSchema,
+            needsApproval: TOOL_APPROVAL_CONFIG.check_mcp_status
+        },
+        get_mcp_tool: {
+            description: 'Get full definition of an MCP tool.',
+            parameters: getMcpToolSchema,
+            needsApproval: TOOL_APPROVAL_CONFIG.get_mcp_tool
         },
 
         // Tool Setup Tools - for installing/configuring analysis tools
         check_tool_status: {
             description: 'Check if SystemVerilog analysis tools (Verible and/or Slang) are installed and working. Use this when the user asks about tool availability, wants to know what tools are installed, or when you need to verify tools before suggesting installation. Returns installation status, version, and path for each tool.',
-            parameters: checkToolStatusSchema
+            parameters: checkToolStatusSchema,
+            needsApproval: TOOL_APPROVAL_CONFIG.check_tool_status
         },
         setup_verible: {
             description: 'Download and configure Verible (SystemVerilog syntax parser). Use this when the user wants to install Verible, asks to set up parsing tools, or needs help getting Verible working. Downloads prebuilt binaries from GitHub - fast and easy, no compilation required. Requires user approval for downloads.',
-            parameters: setupVeribleSchema
+            parameters: setupVeribleSchema,
+            needsApproval: TOOL_APPROVAL_CONFIG.setup_verible
         },
         setup_slang: {
             description: 'Build and configure Slang (SystemVerilog semantic analyzer). Use this when the user wants to install Slang, asks to set up semantic analysis, or needs help getting Slang working. WARNING: Requires git, cmake, and a C++20 compiler. Takes several minutes to build from source. Requires user approval for build commands.',
-            parameters: setupSlangSchema
+            parameters: setupSlangSchema,
+            needsApproval: TOOL_APPROVAL_CONFIG.setup_slang
         },
         help_setup_tools: {
             description: 'Interactive helper for setting up missing analysis tools. Use this when the user asks for help setting up tools, when a tool operation fails due to missing tools, when the user asks "why isnt X working", or when they want guided setup assistance. Automatically detects which tools are missing and runs an interactive setup conversation. Preferred over individual setup_verible/setup_slang for general setup help.',
-            parameters: helpSetupToolsSchema
+            parameters: helpSetupToolsSchema,
+            needsApproval: TOOL_APPROVAL_CONFIG.help_setup_tools
         }
     };
 }
