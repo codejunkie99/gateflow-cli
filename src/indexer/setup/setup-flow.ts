@@ -15,7 +15,6 @@ interface Message {
   content: string;
 }
 import { anthropic } from '@ai-sdk/anthropic';
-import * as readline from 'readline';
 import type { EventBus } from '../../events/index.js';
 import type { PolicyEngine } from '../../approval/index.js';
 import type { ToolName } from '../../approval/types.js';
@@ -27,6 +26,7 @@ import {
 } from '../../agent/tool-setup-tools.js';
 import { slangBinaryManager } from '../slang/binary-manager.js';
 import { binaryManager as veribleBinaryManager } from '../verible/binary-manager.js';
+import { getInputManager } from '../../ui/index.js';
 
 // ============================================================================
 // Types
@@ -244,22 +244,16 @@ function buildFinalResult(status: {
 }
 
 /**
- * Get user input from terminal.
+ * Get user input from terminal using centralized InputManager.
  */
 async function getUserInput(bus: EventBus): Promise<string> {
-  return new Promise((resolve) => {
-    const rl = readline.createInterface({
-      input: process.stdin,
-      output: process.stdout,
-    });
+  bus.emit({ type: 'status', phase: 'tool', label: 'Waiting for input...' });
 
-    bus.emit({ type: 'status', phase: 'tool', label: 'Waiting for input...' });
+  const inputManager = getInputManager();
+  inputManager.initialize();
 
-    rl.question('\n> ', (answer) => {
-      rl.close();
-      resolve(answer.trim());
-    });
-  });
+  const input = await inputManager.getLine('\n> ');
+  return input.trim();
 }
 
 /**
