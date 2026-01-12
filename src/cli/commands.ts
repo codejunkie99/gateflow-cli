@@ -5,7 +5,6 @@
 
 import path from 'path';
 import fs from 'fs/promises';
-import readline from 'readline';
 import chalk from 'chalk';
 import { glob } from 'glob';
 import { EventBus, ExitCodes, type ExitCode } from '../events/index.js';
@@ -17,7 +16,7 @@ import { GateFlowAgent, type ToolContext, type PromptMode } from '../agent/index
 import { Verilator } from '../verification/index.js';
 import { FixLoop } from '../verification/fix-loop.js';
 import { WatchManager } from '../watch/index.js';
-import { TerminalRenderer, createRenderer } from '../ui/index.js';
+import { TerminalRenderer, createRenderer, InputManager, initInputManager } from '../ui/index.js';
 import {
     getToolRegistry,
     getContextFileManager,
@@ -48,6 +47,7 @@ export interface CommandContext {
     indexer: SVIndexerAdapter;
     verilator: Verilator;
     renderer: TerminalRenderer;
+    inputManager: InputManager;
     options: GlobalOptions;
     projectRoot: string;
     // Dynamic context discovery managers
@@ -131,6 +131,20 @@ export async function setupContext(options: GlobalOptions): Promise<CommandConte
     // Generate unique session ID
     const sessionId = `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
+    // Initialize centralized input manager
+    const inputManager = initInputManager(bus);
+    
+    // Connect input manager to renderer for pause/resume coordination
+    inputManager.setPromptCallbacks(
+        () => renderer.pauseForInput(),
+        () => renderer.resumeAfterInput()
+    );
+
+    // Set auto-approve if -y flag
+    if (options.yes) {
+        inputManager.setApproveAll(true);
+    }
+
     return {
         bus,
         policy,
@@ -139,6 +153,7 @@ export async function setupContext(options: GlobalOptions): Promise<CommandConte
         indexer,
         verilator,
         renderer,
+        inputManager,
         options,
         projectRoot,
         toolRegistry,
@@ -169,7 +184,9 @@ function buildToolContext(ctx: CommandContext): ToolContext {
         contextFileManager: ctx.contextFileManager,
         terminalSessionManager: ctx.terminalSessionManager,
         memoryManager: ctx.memoryManager,
-        sessionId: ctx.sessionId
+        sessionId: ctx.sessionId,
+        // Centralized input manager
+        inputManager: ctx.inputManager
     };
 }
 
@@ -211,14 +228,8 @@ export async function chatCommand(
         agent.addContext(`Project indexed: ${stats.modules} modules, ${stats.packages} packages in ${stats.files} files.`);
     }
 
-    // Stop spinner
+    // Stop status
     ctx.bus.emit({ type: 'token_done' });
-
-    // Interactive REPL
-    const rl = readline.createInterface({
-        input: process.stdin,
-        output: process.stdout
-    });
 
     console.log('\n' + chalk.blue.bold('GateFlow') + ' - AI-powered SystemVerilog Assistant');
     if (indexingFailed) {
@@ -242,84 +253,63 @@ export async function chatCommand(
     }
     console.log('   Type your questions or commands. Type "exit" to quit.\n');
 
-    const promptUser = () => {
-        // Simple prompt with dotted border
+    // Use centralized InputManager for REPL
+    const { inputManager } = ctx;
+    let running = true;
+
+    while (running) {
         const border = chalk.blue('─'.repeat(60));
         console.log(border);
 
-        // FIX: Resume stdin if it was paused during agent execution
-        // This is critical because something (likely ora spinner or stream handling)
-        // pauses stdin, and readline doesn't automatically resume it
-        if (process.stdin.isPaused()) {
-            process.stdin.resume();
-        }
+        try {
+            const input = await inputManager.getLine(chalk.blue('> '));
+            console.log(border);
+            console.log('');
+            
+            const trimmed = input.trim();
 
-        rl.question(chalk.blue('> '), (input) => {
-            // Wrap async logic to properly handle rejections
-            (async () => {
-                console.log(border);
+            if (!trimmed) {
+                continue;
+            }
+
+            if (trimmed.toLowerCase() === 'exit' || trimmed.toLowerCase() === 'quit') {
+                running = false;
+                break;
+            }
+
+            if (trimmed.toLowerCase() === '/clear') {
+                agent.resetSession();
+                console.log('Session cleared.\n');
+                continue;
+            }
+
+            if (trimmed.toLowerCase() === '/stats') {
+                const sessionStats = agent.getSessionStats();
+                const indexStats = ctx.indexer.getStats();
+                console.log('\nSession:', sessionStats);
+                console.log('Index:', indexStats);
                 console.log('');
-                const trimmed = input.trim();
+                continue;
+            }
 
-                if (!trimmed) {
-                    setImmediate(promptUser); // Prevent stack overflow
-                    return;
-                }
+            // Check if waiting for approval
+            if (ctx.renderer.isWaitingForApproval()) {
+                ctx.renderer.processApprovalInput(trimmed);
+                continue;
+            }
 
-                if (trimmed.toLowerCase() === 'exit' || trimmed.toLowerCase() === 'quit') {
-                    rl.close();
-                    return;
-                }
-
-                if (trimmed.toLowerCase() === '/clear') {
-                    agent.resetSession();
-                    console.log('Session cleared.\n');
-                    setImmediate(promptUser);
-                    return;
-                }
-
-                if (trimmed.toLowerCase() === '/stats') {
-                    const sessionStats = agent.getSessionStats();
-                    const indexStats = ctx.indexer.getStats();
-                    console.log('\nSession:', sessionStats);
-                    console.log('Index:', indexStats);
-                    console.log('');
-                    setImmediate(promptUser);
-                    return;
-                }
-
-                // Check if waiting for approval
-                if (ctx.renderer.isWaitingForApproval()) {
-                    ctx.renderer.processApprovalInput(trimmed);
-                    setImmediate(promptUser);
-                    return;
-                }
-
-                try {
-                    await agent.run(trimmed);
-                } catch (error) {
-                    ctx.bus.emit({
-                        type: 'error',
-                        message: String(error)
-                    });
-                }
-
-                console.log('');
-                setImmediate(promptUser);
-            })().catch(error => {
-                ctx.bus.emit({ type: 'error', message: String(error) });
-                setImmediate(promptUser);
+            await agent.run(trimmed);
+            console.log('');
+        } catch (error) {
+            ctx.bus.emit({
+                type: 'error',
+                message: String(error)
             });
-        });
-    };
+        }
+    }
 
-    promptUser();
-
-    return new Promise((resolve) => {
-        rl.on('close', () => {
-            resolve(ExitCodes.SUCCESS);
-        });
-    });
+    inputManager.close();
+    return ExitCodes.SUCCESS;
 }
 
 // ============================================================================
@@ -743,8 +733,21 @@ export async function waveCommand(ctx: CommandContext, vcdPath: string): Promise
                     });
                 } else if (process.platform === 'darwin') {
                     // macOS: open new Terminal window
-                    // Escape paths for AppleScript to prevent injection
-                    const escapeAppleScript = (s: string) => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+                    // SECURITY: Validate paths to prevent shell/AppleScript injection
+                    // Only allow safe characters in paths
+                    const safePathRegex = /^[a-zA-Z0-9\-_./\\: ]+$/;
+                    if (!safePathRegex.test(cliPath) || !safePathRegex.test(resolvedPath)) {
+                        console.error(chalk.red('Invalid characters in file path.'));
+                        resolve(ExitCodes.TOOL_ERROR);
+                        return;
+                    }
+                    // Escape for AppleScript: backslash, double quote, dollar sign, backtick, newline
+                    const escapeAppleScript = (s: string) =>
+                        s.replace(/\\/g, '\\\\')
+                         .replace(/"/g, '\\"')
+                         .replace(/\$/g, '\\$')
+                         .replace(/`/g, '\\`')
+                         .replace(/\n/g, '');
                     const safeCliPath = escapeAppleScript(cliPath);
                     const safeResolvedPath = escapeAppleScript(resolvedPath);
                     child = spawn('osascript', ['-e',
@@ -820,6 +823,13 @@ export async function waveWebCommand(ctx: CommandContext, vcdPath: string, port:
         });
 
         const url = `http://localhost:${port}`;
+
+        // SECURITY: Validate URL format before passing to shell
+        if (!/^https?:\/\/localhost:\d+$/.test(url)) {
+            console.error(chalk.red('Invalid URL generated'));
+            return ExitCodes.TOOL_ERROR;
+        }
+
         console.log(chalk.green(`\nViewer running at: ${chalk.bold(url)}`));
         console.log(chalk.dim('Press Ctrl+C to stop\n'));
 
