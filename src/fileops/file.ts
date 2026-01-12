@@ -126,6 +126,36 @@ export class FileTools {
     }
 
     /**
+     * Check if a path is a symlink pointing outside project root
+     * @throws Error if symlink points outside project root
+     */
+    private async checkSymlink(resolvedPath: string): Promise<void> {
+        try {
+            const stats = await fs.lstat(resolvedPath);
+            if (stats.isSymbolicLink()) {
+                const realPath = await fs.realpath(resolvedPath);
+                const normalizedRealPath = path.normalize(realPath);
+                const normalizedRoot = path.normalize(this.projectRoot);
+
+                if (
+                    normalizedRealPath !== normalizedRoot &&
+                    !normalizedRealPath.startsWith(normalizedRoot + path.sep)
+                ) {
+                    throw new Error(
+                        `Symlink escape detected: "${resolvedPath}" points outside project root to "${realPath}"`
+                    );
+                }
+            }
+        } catch (error) {
+            // If lstat fails, the file doesn't exist yet (e.g., for writes)
+            // That's OK - we'll validate on actual access
+            if (error instanceof Error && !error.message.includes('ENOENT')) {
+                throw error;
+            }
+        }
+    }
+
+    /**
      * Safely resolve path, returning error result instead of throwing
      */
     private safeResolvePath(filePath: string): { path: string; error?: string } {
@@ -161,6 +191,17 @@ export class FileTools {
             };
         }
         const absolutePath = resolved.path;
+
+        // SECURITY: Check for symlinks pointing outside project root
+        try {
+            await this.checkSymlink(absolutePath);
+        } catch (error) {
+            return {
+                success: false,
+                path: filePath,
+                error: error instanceof Error ? error.message : 'Symlink check failed'
+            };
+        }
 
         this.bus.emit({
             type: 'tool_call',
@@ -250,6 +291,17 @@ export class FileTools {
             };
         }
         const absolutePath = resolved.path;
+
+        // SECURITY: Check for symlinks pointing outside project root
+        try {
+            await this.checkSymlink(absolutePath);
+        } catch (error) {
+            return {
+                success: false,
+                path: filePath,
+                error: error instanceof Error ? error.message : 'Symlink check failed'
+            };
+        }
 
         // Policy check
         const decision = this.policy.checkTool('write_file', { filePath: absolutePath });
