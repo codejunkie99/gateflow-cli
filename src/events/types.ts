@@ -257,6 +257,12 @@ export interface AgentCompleteEvent {
     durationMs: number;
     outputTokens?: number;
     inputTokens?: number;
+    // AI SDK 6: Extended usage tracking
+    reasoningTokens?: number;
+    textTokens?: number;
+    cachedTokens?: number;
+    finishReason?: string;
+    rawUsage?: unknown;
 }
 
 export interface DelegationEvent {

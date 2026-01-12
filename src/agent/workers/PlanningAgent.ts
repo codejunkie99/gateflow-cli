@@ -15,11 +15,12 @@ import { ExecutionPlanSchema } from '../../types/agent-shared.js';
  */
 export async function createPlan(
     userRequest: string,
-    projectContext: string = ''
+    projectContext: string = '',
+    modelName: string = 'claude-sonnet-4-20250514'
 ): Promise<ExecutionPlan> {
     // FIX A: Explicitly list valid agents in prompt to avoid 'planning' being assigned
     const { object: plan } = await generateObject({
-        model: anthropic('claude-sonnet-4-20250514') as any,
+        model: anthropic(modelName) as any,
         schema: ExecutionPlanSchema,
         prompt: `Analyze this request and create an execution plan:
 

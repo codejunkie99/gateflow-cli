@@ -447,6 +447,43 @@ export class SVIndexerAdapter {
     }
 
     // ========================================================================
+    // IndexerProvider Interface (for FileChunker integration)
+    // ========================================================================
+
+    /**
+     * Get declarations from a specific file.
+     * Used by FileChunker for accurate AST-based chunk boundaries.
+     */
+    async getFileDeclarations(filePath: string): Promise<Declaration[]> {
+        if (!this.project) return [];
+
+        const normalizedPath = path.resolve(filePath);
+        return this.project.declarations.filter(
+            decl => path.resolve(decl.location.file) === normalizedPath
+        );
+    }
+
+    /**
+     * Check if the indexer has data for a specific file.
+     */
+    hasFile(filePath: string): boolean {
+        if (!this.project) return false;
+
+        const normalizedPath = path.resolve(filePath);
+        return this.project.files.some(
+            f => path.resolve(f.path) === normalizedPath
+        );
+    }
+
+    /**
+     * Get all declarations of a specific kind.
+     */
+    getDeclarationsByKind(kind: Declaration['kind']): Declaration[] {
+        if (!this.project) return [];
+        return this.project.declarations.filter(decl => decl.kind === kind);
+    }
+
+    // ========================================================================
     // Private Helpers
     // ========================================================================
 

@@ -206,10 +206,16 @@ export class FilelistParser {
     recipe.id = crypto.createHash('sha256').update(content).digest('hex').slice(0, 16);
 
     const lines = content.split(/\r?\n/);
+    const fileSet = new Set<string>();
 
     for (let lineNum = 0; lineNum < lines.length; lineNum++) {
       const rawLine = lines[lineNum];
-      const line = rawLine.trim();
+      // Trim + strip inline comments (common in .f files)
+      // Examples:
+      //   ./rtl/top.sv // comment
+      //   +incdir+./inc # comment
+      let line = rawLine.trim();
+      line = line.replace(/\s+(?:\/\/|#).*/, '').trim();
 
       // Skip empty lines and comments
       if (!line || line.startsWith('#') || line.startsWith('//')) {
@@ -217,7 +223,7 @@ export class FilelistParser {
       }
 
       // Parse the line
-      await this.parseLine(line, basePath, recipe, options);
+      await this.parseLine(line, basePath, recipe, options, fileSet);
     }
 
     return recipe;
@@ -230,14 +236,27 @@ export class FilelistParser {
     line: string,
     basePath: string,
     recipe: Recipe,
-    options: ParseFilelistOptions
+    options: ParseFilelistOptions,
+    fileSet: Set<string>
   ): Promise<void> {
+    const addFile = (filePath: string): void => {
+      if (fileSet.has(filePath)) return;
+      fileSet.add(filePath);
+      recipe.files.push(filePath);
+    };
+
     // +incdir+path - Include directory
     const incdirMatch = line.match(/^\+incdir\+(.+)$/);
     if (incdirMatch) {
-      const incPath = this.resolvePath(incdirMatch[1], basePath);
-      if (!recipe.includePaths.includes(incPath)) {
-        recipe.includePaths.push(incPath);
+      // Some tools support: +incdir+dir1+dir2+dir3
+      const raw = incdirMatch[1].trim();
+      const parts = raw.split('+').map((p) => p.trim()).filter(Boolean);
+
+      for (const part of parts) {
+        const incPath = this.resolvePath(part, basePath);
+        if (!recipe.includePaths.includes(incPath)) {
+          recipe.includePaths.push(incPath);
+        }
       }
       return;
     }
@@ -253,7 +272,9 @@ export class FilelistParser {
     const nestedMatch = line.match(/^-[fF]\s+(.+)$/);
     if (nestedMatch) {
       const nestedPath = this.resolvePath(nestedMatch[1].trim(), basePath);
-      recipe.nestedFilelists.push(nestedPath);
+      if (!recipe.nestedFilelists.includes(nestedPath)) {
+        recipe.nestedFilelists.push(nestedPath);
+      }
 
       // Recursively parse nested filelist
       if (options.recursive !== false) {
@@ -264,7 +285,7 @@ export class FilelistParser {
           });
 
           // Merge nested recipe into this one
-          this.mergeRecipe(recipe, nestedRecipe);
+          this.mergeRecipe(recipe, nestedRecipe, fileSet);
         } catch (error) {
           // Log warning but continue
           console.warn(
@@ -289,7 +310,7 @@ export class FilelistParser {
     const libfileMatch = line.match(/^-v\s+(.+)$/);
     if (libfileMatch) {
       const filePath = this.resolvePath(libfileMatch[1].trim(), basePath);
-      recipe.files.push(filePath);
+      addFile(filePath);
       return;
     }
 
@@ -302,7 +323,7 @@ export class FilelistParser {
     // Assume anything else is a file path
     if (this.looksLikeSvFile(line)) {
       const filePath = this.resolvePath(line, basePath);
-      recipe.files.push(filePath);
+      addFile(filePath);
     }
   }
 
@@ -310,8 +331,11 @@ export class FilelistParser {
    * Resolve a path relative to base path.
    */
   private resolvePath(inputPath: string, basePath: string): string {
+    // Strip surrounding quotes (handles +incdir+"/path/to/dir" syntax)
+    const unquotedPath = inputPath.replace(/^["']|["']$/g, '');
+
     // Handle environment variables
-    const expandedPath = this.expandEnvVars(inputPath);
+    const expandedPath = this.expandEnvVars(unquotedPath);
 
     // Resolve relative to base path
     if (path.isAbsolute(expandedPath)) {
@@ -325,10 +349,24 @@ export class FilelistParser {
    * Expand environment variables in a path.
    */
   private expandEnvVars(inputPath: string): string {
-    // Handle $VAR and ${VAR} syntax
-    return inputPath.replace(/\$\{?(\w+)\}?/g, (match, varName) => {
+    let out = inputPath;
+
+    // Windows: %VAR%
+    out = out.replace(/%(\w+)%/g, (match, varName) => {
       return process.env[varName] || match;
     });
+
+    // Makefile/tooling: $(VAR)
+    out = out.replace(/\$\((\w+)\)/g, (match, varName) => {
+      return process.env[varName] || match;
+    });
+
+    // Unix: $VAR and ${VAR}
+    out = out.replace(/\$\{?(\w+)\}?/g, (match, varName) => {
+      return process.env[varName] || match;
+    });
+
+    return out;
   }
 
   /**
@@ -343,7 +381,7 @@ export class FilelistParser {
   /**
    * Merge a nested recipe into the parent.
    */
-  private mergeRecipe(parent: Recipe, child: Recipe): void {
+  private mergeRecipe(parent: Recipe, child: Recipe, fileSet: Set<string>): void {
     // Add include paths (avoid duplicates)
     for (const incPath of child.includePaths) {
       if (!parent.includePaths.includes(incPath)) {
@@ -354,8 +392,19 @@ export class FilelistParser {
     // Add defines (child overrides parent)
     Object.assign(parent.defines, child.defines);
 
-    // Add files (in order)
-    parent.files.push(...child.files);
+    // Add nested filelists (avoid duplicates) - include transitive children too
+    for (const nested of child.nestedFilelists) {
+      if (!parent.nestedFilelists.includes(nested)) {
+        parent.nestedFilelists.push(nested);
+      }
+    }
+
+    // Add files (in order, avoid duplicates)
+    for (const file of child.files) {
+      if (fileSet.has(file)) continue;
+      fileSet.add(file);
+      parent.files.push(file);
+    }
   }
 }
 
