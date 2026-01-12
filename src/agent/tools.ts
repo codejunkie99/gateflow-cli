@@ -1506,44 +1506,77 @@ export function createToolExecutors(ctx: ToolContext) {
                 // Continue with setup
             }
 
-            // Check prerequisites first
+            // Check prerequisites first with streaming feedback
             const { execSync } = await import('child_process');
             const prerequisites: Record<string, boolean> = {};
 
+            // Emit status to indicate prerequisite checking has started
+            ctx.bus.emit({
+                type: 'status',
+                phase: 'setup',
+                label: 'Checking prerequisites...'
+            });
+
+            // Helper to emit prerequisite stage events
+            const emitPrereq = (prereq: 'git' | 'cmake' | 'compiler', status: 'started' | 'completed' | 'failed', message?: string) => {
+                ctx.bus.emit({
+                    type: 'prereq_install_stage',
+                    prerequisite: prereq,
+                    stage: 'checking',
+                    status,
+                    message
+                });
+            };
+
+            // Check git
+            emitPrereq('git', 'started', 'Checking for git...');
             try {
-                execSync('git --version', { stdio: 'pipe' });
+                const gitVersion = execSync('git --version', { stdio: 'pipe' }).toString().trim();
                 prerequisites.git = true;
+                emitPrereq('git', 'completed', gitVersion);
             } catch {
                 prerequisites.git = false;
+                emitPrereq('git', 'failed', 'git not found');
             }
 
+            // Check cmake
+            emitPrereq('cmake', 'started', 'Checking for cmake...');
             try {
-                execSync('cmake --version', { stdio: 'pipe' });
+                const cmakeVersion = execSync('cmake --version', { stdio: 'pipe' }).toString().split('\n')[0].trim();
                 prerequisites.cmake = true;
+                emitPrereq('cmake', 'completed', cmakeVersion);
             } catch {
                 prerequisites.cmake = false;
+                emitPrereq('cmake', 'failed', 'cmake not found');
             }
 
+            // Check compiler
             const { platform } = await import('os');
             const os = platform();
 
+            emitPrereq('compiler', 'started', 'Checking for C++20 compiler...');
             if (os === 'win32') {
                 try {
-                    execSync('"C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe" -latest -property installationVersion', { stdio: 'pipe' });
+                    const vsVersion = execSync('"C:\\Program Files (x86)\\Microsoft Visual Studio\\Installer\\vswhere.exe" -latest -property installationVersion', { stdio: 'pipe' }).toString().trim();
                     prerequisites.compiler = true;
+                    emitPrereq('compiler', 'completed', `Visual Studio ${vsVersion}`);
                 } catch {
                     prerequisites.compiler = false;
+                    emitPrereq('compiler', 'failed', 'Visual Studio not found');
                 }
             } else {
                 try {
-                    execSync('g++ --version', { stdio: 'pipe' });
+                    const gppVersion = execSync('g++ --version', { stdio: 'pipe' }).toString().split('\n')[0].trim();
                     prerequisites.compiler = true;
+                    emitPrereq('compiler', 'completed', gppVersion);
                 } catch {
                     try {
-                        execSync('clang++ --version', { stdio: 'pipe' });
+                        const clangVersion = execSync('clang++ --version', { stdio: 'pipe' }).toString().split('\n')[0].trim();
                         prerequisites.compiler = true;
+                        emitPrereq('compiler', 'completed', clangVersion);
                     } catch {
                         prerequisites.compiler = false;
+                        emitPrereq('compiler', 'failed', 'No C++20 compiler found (g++ or clang++)');
                     }
                 }
             }
@@ -1558,10 +1591,23 @@ export function createToolExecutors(ctx: ToolContext) {
                     !prerequisites.compiler ? 'C++20 compiler' : null
                 ].filter(Boolean);
 
+                // Emit status update about missing prerequisites
+                ctx.bus.emit({
+                    type: 'status',
+                    phase: 'setup',
+                    label: `Missing: ${missing.join(', ')}`
+                });
+
                 // Emit info about missing prerequisites - the agent will install them
                 ctx.bus.emit({
                     type: 'token',
                     text: `\nMissing prerequisites: ${missing.join(', ')}. The setup assistant will help install them.\n`
+                });
+            } else {
+                ctx.bus.emit({
+                    type: 'status',
+                    phase: 'setup',
+                    label: 'All prerequisites found'
                 });
             }
 
