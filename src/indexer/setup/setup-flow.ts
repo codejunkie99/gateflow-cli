@@ -134,12 +134,55 @@ export async function runToolSetupFlow(
         maxSteps: 25,
       } as any);
 
-      // Collect assistant response
+      // Collect assistant response and emit events for all stream parts
       let assistantText = '';
       for await (const part of result.fullStream) {
-        if (part.type === 'text-delta') {
-          assistantText += part.text;
-          bus.emit({ type: 'token', text: part.text });
+        switch (part.type) {
+          case 'text-delta':
+            assistantText += part.text;
+            bus.emit({ type: 'token', text: part.text });
+            break;
+
+          case 'tool-call':
+            bus.emit({
+              type: 'tool_call',
+              tool: part.toolName,
+              argsSummary: JSON.stringify(part.input).slice(0, 100),
+              args: part.input as Record<string, unknown>
+            });
+            break;
+
+          case 'tool-result': {
+            const hasError = part.output && typeof part.output === 'object' &&
+                            part.output !== null && 'error' in part.output;
+            bus.emit({
+              type: 'tool_result',
+              tool: part.toolName,
+              ok: !hasError,
+              summary: JSON.stringify(part.output).slice(0, 200)
+            });
+            break;
+          }
+
+          case 'error':
+            bus.emit({
+              type: 'error',
+              message: (part as any).error instanceof Error
+                ? (part as any).error.message
+                : String((part as any).error)
+            });
+            break;
+
+          case 'tool-error': {
+            const toolError = part as any;
+            bus.emit({
+              type: 'error',
+              message: `Tool ${toolError.toolName} failed: ${
+                toolError.error instanceof Error ? toolError.error.message : String(toolError.error)
+              }`
+            });
+            break;
+          }
         }
       }
 
