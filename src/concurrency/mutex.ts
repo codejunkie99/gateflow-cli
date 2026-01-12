@@ -37,6 +37,9 @@ export class AsyncMutex {
     release(): void {
         if (this.queue.length > 0) {
             const next = this.queue.shift()!;
+            // Explicitly set locked = true for ownership transfer
+            // (defensive: ensures lock state is correct for the new holder)
+            this.locked = true;
             next();
         } else {
             this.locked = false;
