@@ -412,7 +412,6 @@ Testbench ready! Run with:
 - [ ] **Coverage Analysis**: AI-driven coverage hole detection
 - [ ] **Web UI**: Browser-based interface for non-terminal users
 
-See [`docs/COMMERCIAL_VIABILITY_ROADMAP.md`](./docs/COMMERCIAL_VIABILITY_ROADMAP.md) for the full product roadmap.
 
 ---
 
