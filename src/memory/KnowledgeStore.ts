@@ -4,17 +4,11 @@
  * Stores knowledge learned from working with the project:
  * - Code patterns (naming conventions, module structures)
  * - Common lint fixes
- * - Testing patterns
  * - User preferences in code style
  * - Module relationships and dependencies
  *
- * Implements keyword-based retrieval with:
- * - Term frequency scoring on title, content, tags, and keywords
- * - Scope-based filtering (fail-closed: scoped items require matching context)
- * - Recency and usage boosting
- * - Glob pattern matching for file scopes via picomatch
- *
- * Knowledge is injected into agent prompts based on current context.
+ * Retrieval: BM25 scoring with inverted index for O(k) candidate selection.
+ * All indices are in-memory Maps rebuilt on load().
  */
 
 import * as fs from 'fs/promises';
@@ -30,180 +24,76 @@ import { estimateTokens } from './utils.js';
 // Types
 // ============================================================================
 
-/**
- * A learned pattern/knowledge item
- */
 export interface KnowledgeItem {
-    /** Unique identifier */
     id: string;
-
-    /**
-     * Content-addressable fingerprint for duplicate detection.
-     * Computed from: type + normalized title + scope (modules/filePatterns).
-     * Two items with the same fingerprint are considered duplicates.
-     */
     fingerprint: string;
-
-    /** Type of knowledge */
     type: KnowledgeType;
-
-    /** Brief title/summary */
     title: string;
-
-    /** Full content/description */
     content: string;
-
-    /** Tags for categorization and search */
     tags: string[];
-
-    /** Relevance keywords for context matching */
     keywords: string[];
-
-    /** Scope - where this knowledge applies */
     scope: KnowledgeScope;
-
-    /** Source of this knowledge */
     source: KnowledgeSource;
-
-    /** Confidence score (0-1) */
     confidence: number;
-
-    /** Number of times this knowledge was useful */
     useCount: number;
-
-    /** Last time this knowledge was accessed */
     lastAccessed: number;
-
-    /** When this knowledge was created */
     created: number;
-
-    /** When this knowledge was last updated */
     updated: number;
 }
 
-/**
- * Types of knowledge that can be stored
- */
 export type KnowledgeType =
-    | 'code_pattern'      // Coding conventions, patterns
-    | 'lint_fix'          // Common lint error fixes
-    | 'test_pattern'      // Testing approaches
-    | 'module_info'       // Module-specific knowledge
-    | 'dependency'        // Module dependencies and relationships
-    | 'style_preference'  // User coding style preferences
-    | 'workflow'          // Development workflow patterns
-    | 'debug_solution'    // Solutions to debug scenarios
-    | 'tool_usage'        // How to use specific tools effectively
-    | 'project_context';  // General project context
+    | 'code_pattern'
+    | 'lint_fix'
+    | 'test_pattern'
+    | 'module_info'
+    | 'dependency'
+    | 'style_preference'
+    | 'workflow'
+    | 'debug_solution'
+    | 'tool_usage'
+    | 'project_context';
 
-/**
- * Scope where knowledge applies
- */
 export interface KnowledgeScope {
-    /** Apply to all projects */
     global: boolean;
-
-    /** Specific project IDs */
     projectIds?: string[];
-
-    /** File patterns (glob) */
     filePatterns?: string[];
-
-    /** Module names */
     modules?: string[];
 }
 
-/**
- * Source of knowledge
- */
 export interface KnowledgeSource {
-    /** How was this knowledge acquired */
     method: 'extracted' | 'inferred' | 'user_provided' | 'tool_result';
-
-    /** Session ID where it was learned */
     sessionId?: string;
-
-    /** File path if extracted from code */
     filePath?: string;
-
-    /** Tool that generated this knowledge */
     tool?: string;
 }
 
-/**
- * Result of knowledge search
- */
 export interface KnowledgeSearchResult {
-    /** The knowledge item */
     item: KnowledgeItem;
-
-    /** Relevance score (0-1) */
     relevance: number;
-
-    /** Why this item was matched */
     matchReason: string;
 }
 
-/**
- * Query for knowledge retrieval
- */
 export interface KnowledgeQuery {
-    /** Search text */
     query?: string;
-
-    /** Filter by type */
     types?: KnowledgeType[];
-
-    /** Filter by tags */
     tags?: string[];
-
-    /** Current file context */
     filePath?: string;
-
-    /** Current module context */
     moduleName?: string;
-
-    /** Maximum results */
     maxResults?: number;
-
-    /** Minimum confidence */
     minConfidence?: number;
 }
 
-/**
- * Configuration for KnowledgeStore
- */
 export interface KnowledgeStoreConfig {
-    /** Directory for knowledge files */
     knowledgeDir: string;
-
-    /** Maximum items to store per project */
     maxItems: number;
-
-    /** Minimum confidence for auto-extraction */
     minExtractionConfidence: number;
-
-    /** Maximum age for unused items (ms) */
     maxUnusedAge: number;
-
-    /** Enable auto-extraction from sessions */
-    autoExtract: boolean;
 }
 
-/**
- * Knowledge index (persisted)
- */
 export interface KnowledgeIndex {
-    /** Version for migrations */
     version: number;
-
-    /** Project ID */
     projectId: string;
-
-    /** All knowledge items */
     items: KnowledgeItem[];
-
-    /** Stats */
     stats: {
         totalItems: number;
         byType: Record<KnowledgeType, number>;
@@ -212,19 +102,22 @@ export interface KnowledgeIndex {
 }
 
 // ============================================================================
-// Default Configuration
+// Constants
 // ============================================================================
 
 export const DEFAULT_KNOWLEDGE_STORE_CONFIG: KnowledgeStoreConfig = {
     knowledgeDir: path.join(os.homedir(), '.gateflow'),
     maxItems: 500,
     minExtractionConfidence: 0.6,
-    maxUnusedAge: 30 * 24 * 60 * 60 * 1000, // 30 days
-    autoExtract: true
+    maxUnusedAge: 30 * 24 * 60 * 60 * 1000
 };
 
+// BM25 parameters
+const BM25_K1 = 1.2;
+const BM25_B = 0.75;
+
 // ============================================================================
-// KnowledgeStore Implementation
+// KnowledgeStore
 // ============================================================================
 
 export class KnowledgeStore {
@@ -233,10 +126,19 @@ export class KnowledgeStore {
     private index: KnowledgeIndex | null = null;
     private knowledgePath: string;
     private lockPath: string;
-    private dirty: boolean = false;
+    private dirty = false;
     private ioMutex = new AsyncMutex();
-    private lockAcquired: boolean = false;
+    private lockAcquired = false;
     private saveTimeout: ReturnType<typeof setTimeout> | null = null;
+
+    // In-memory indices (rebuilt on load)
+    private itemById = new Map<string, KnowledgeItem>();
+    private itemByFingerprint = new Map<string, KnowledgeItem>();
+    private invertedIndex = new Map<string, Set<string>>(); // term -> item IDs
+    private docLengths = new Map<string, number>(); // item ID -> word count
+    private termDocFreq = new Map<string, number>(); // term -> doc count
+    private avgDocLength = 0;
+
     private readonly SAVE_DEBOUNCE_MS = 5000;
     private readonly LOCK_TIMEOUT_MS = 5000;
 
@@ -245,7 +147,6 @@ export class KnowledgeStore {
         private bus: EventBus,
         config?: Partial<KnowledgeStoreConfig>
     ) {
-        // Generate project ID from path
         this.projectId = crypto
             .createHash('md5')
             .update(path.resolve(projectRoot))
@@ -253,249 +154,215 @@ export class KnowledgeStore {
             .slice(0, 12);
 
         this.config = { ...DEFAULT_KNOWLEDGE_STORE_CONFIG, ...config };
-        this.knowledgePath = path.join(
-            this.config.knowledgeDir,
-            `${this.projectId}-knowledge.json`
-        );
-        // Use same lock file as MemoryManager for coordinated access
-        this.lockPath = path.join(
-            this.config.knowledgeDir,
-            `${this.projectId}.lock`
-        );
+        this.knowledgePath = path.join(this.config.knowledgeDir, `${this.projectId}-knowledge.json`);
+        this.lockPath = path.join(this.config.knowledgeDir, `${this.projectId}-knowledge.lock`);
     }
 
     // ========================================================================
-    // Load / Save
+    // Lifecycle
     // ========================================================================
 
-    /**
-     * Load knowledge index from disk
-     * Uses AsyncMutex for intra-process safety
-     */
     async load(): Promise<KnowledgeIndex> {
         return this.ioMutex.withLock(async () => {
             await fs.mkdir(this.config.knowledgeDir, { recursive: true });
 
             try {
                 const content = await fs.readFile(this.knowledgePath, 'utf-8');
-                this.index = JSON.parse(content) as KnowledgeIndex;
-                this.index = this.migrate(this.index);
-
-                // Enforce maxUnusedAge to prune stale items
-                this.enforceMaxUnusedAge();
-
+                this.index = this.migrate(JSON.parse(content) as KnowledgeIndex);
+                this.pruneStaleItems();
+                this.rebuildAllIndices();
                 return this.index;
             } catch {
-                // Create new index
                 this.index = this.createDefaultIndex();
+                this.clearAllIndices();
                 return this.index;
             }
         });
     }
 
-    /**
-     * Enforce maxUnusedAge by pruning items that haven't been accessed
-     * User-provided items are exempt from age-based pruning
-     */
-    private enforceMaxUnusedAge(): void {
-        if (!this.index) return;
-
-        const now = Date.now();
-        const maxAge = this.config.maxUnusedAge;
-        const before = this.index.items.length;
-
-        this.index.items = this.index.items.filter(item => {
-            const age = now - item.lastAccessed;
-            // Keep if: used recently OR user-provided (never auto-delete user input)
-            return age < maxAge || item.source.method === 'user_provided';
-        });
-
-        if (this.index.items.length < before) {
-            this.dirty = true;
-            const pruned = before - this.index.items.length;
-            this.bus.emit({
-                type: 'status',
-                phase: 'tool',
-                label: `Pruned ${pruned} stale knowledge items (unused > ${Math.floor(maxAge / (24 * 60 * 60 * 1000))} days)`
-            });
-        }
-    }
-
-    /**
-     * Save knowledge index to disk
-     * Uses AsyncMutex for intra-process safety and file lock for inter-process safety
-     */
     async save(): Promise<void> {
         return this.ioMutex.withLock(async () => {
             if (!this.index || !this.dirty) return;
 
-            // Acquire file lock for inter-process safety - MUST succeed
             const acquired = await this.acquireLock();
             if (!acquired) {
-                throw new Error(`Failed to acquire knowledge lock: ${this.lockPath}`);
+                throw new Error(`Failed to acquire lock: ${this.lockPath}`);
             }
 
             try {
-                // Update stats
                 this.updateStats();
-
-                // Atomic write
                 const tempPath = `${this.knowledgePath}.${Date.now()}.tmp`;
-
-                try {
-                    await fs.writeFile(
-                        tempPath,
-                        JSON.stringify(this.index, null, 2),
-                        'utf-8'
-                    );
-                    await fs.rename(tempPath, this.knowledgePath);
-                    this.dirty = false;
-
-                    this.bus.emit({
-                        type: 'status',
-                        phase: 'tool',
-                        label: `Knowledge saved: ${this.index.items.length} items`
-                    });
-                } catch (error) {
-                    try {
-                        await fs.unlink(tempPath);
-                    } catch {
-                        // Temp file cleanup
-                    }
-                    throw error;
-                }
+                await fs.writeFile(tempPath, JSON.stringify(this.index, null, 2), 'utf-8');
+                await fs.rename(tempPath, this.knowledgePath);
+                this.dirty = false;
             } finally {
                 await this.releaseLock();
             }
         });
     }
 
+    async flush(): Promise<void> {
+        if (this.saveTimeout) {
+            clearTimeout(this.saveTimeout);
+            this.saveTimeout = null;
+        }
+        if (this.dirty) {
+            await this.save();
+        }
+    }
+
+    destroy(): void {
+        if (this.saveTimeout) {
+            clearTimeout(this.saveTimeout);
+            this.saveTimeout = null;
+        }
+    }
+
     // ========================================================================
-    // File Locking (Inter-Process Safety)
+    // Index Management
     // ========================================================================
 
-    /**
-     * Acquire lock for exclusive access
-     * Uses same lock file as MemoryManager for coordinated access
-     */
-    private async acquireLock(): Promise<boolean> {
-        const startTime = Date.now();
+    private clearAllIndices(): void {
+        this.itemById.clear();
+        this.itemByFingerprint.clear();
+        this.invertedIndex.clear();
+        this.docLengths.clear();
+        this.termDocFreq.clear();
+        this.avgDocLength = 0;
+    }
 
-        while (Date.now() - startTime < this.LOCK_TIMEOUT_MS) {
-            try {
-                // Try to create lock file (fails if exists)
-                await fs.writeFile(
-                    this.lockPath,
-                    JSON.stringify({ pid: process.pid, time: Date.now(), owner: 'knowledge' }),
-                    { flag: 'wx' }
-                );
-                this.lockAcquired = true;
-                return true;
-            } catch (error: unknown) {
-                if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
-                    // Lock exists - check if stale
-                    if (await this.isLockStale()) {
-                        try {
-                            await fs.unlink(this.lockPath);
-                        } catch {
-                            // Another process may have removed it
-                        }
-                        continue;
-                    }
-                    // Wait and retry
-                    await new Promise(r => setTimeout(r, 100));
+    private rebuildAllIndices(): void {
+        this.clearAllIndices();
+        if (!this.index) return;
+
+        let totalLength = 0;
+
+        for (const item of this.index.items) {
+            // ID and fingerprint indices
+            this.itemById.set(item.id, item);
+            if (item.fingerprint) {
+                this.itemByFingerprint.set(item.fingerprint, item);
+            }
+
+            // Tokenize and build inverted index
+            const tokens = this.tokenize(item);
+            this.docLengths.set(item.id, tokens.length);
+            totalLength += tokens.length;
+
+            const seenTerms = new Set<string>();
+            for (const term of tokens) {
+                // Add to inverted index
+                let postings = this.invertedIndex.get(term);
+                if (!postings) {
+                    postings = new Set();
+                    this.invertedIndex.set(term, postings);
+                }
+                postings.add(item.id);
+
+                // Track document frequency (count each term once per doc)
+                if (!seenTerms.has(term)) {
+                    seenTerms.add(term);
+                    this.termDocFreq.set(term, (this.termDocFreq.get(term) || 0) + 1);
+                }
+            }
+        }
+
+        this.avgDocLength = this.index.items.length > 0
+            ? totalLength / this.index.items.length
+            : 0;
+    }
+
+    private addToIndices(item: KnowledgeItem): void {
+        this.itemById.set(item.id, item);
+        this.itemByFingerprint.set(item.fingerprint, item);
+
+        const tokens = this.tokenize(item);
+        this.docLengths.set(item.id, tokens.length);
+
+        // Update avg doc length
+        const n = this.index!.items.length;
+        this.avgDocLength = ((this.avgDocLength * (n - 1)) + tokens.length) / n;
+
+        const seenTerms = new Set<string>();
+        for (const term of tokens) {
+            let postings = this.invertedIndex.get(term);
+            if (!postings) {
+                postings = new Set();
+                this.invertedIndex.set(term, postings);
+            }
+            postings.add(item.id);
+
+            if (!seenTerms.has(term)) {
+                seenTerms.add(term);
+                this.termDocFreq.set(term, (this.termDocFreq.get(term) || 0) + 1);
+            }
+        }
+    }
+
+    private removeFromIndices(item: KnowledgeItem): void {
+        this.itemById.delete(item.id);
+        this.itemByFingerprint.delete(item.fingerprint);
+
+        const tokens = this.tokenize(item);
+        this.docLengths.delete(item.id);
+
+        const seenTerms = new Set<string>();
+        for (const term of tokens) {
+            const postings = this.invertedIndex.get(term);
+            if (postings) {
+                postings.delete(item.id);
+                if (postings.size === 0) {
+                    this.invertedIndex.delete(term);
+                }
+            }
+
+            if (!seenTerms.has(term)) {
+                seenTerms.add(term);
+                const count = this.termDocFreq.get(term) || 0;
+                if (count <= 1) {
+                    this.termDocFreq.delete(term);
                 } else {
-                    throw error;
+                    this.termDocFreq.set(term, count - 1);
                 }
             }
-        }
-
-        return false;
-    }
-
-    /**
-     * Release lock
-     */
-    private async releaseLock(): Promise<void> {
-        if (this.lockAcquired) {
-            try {
-                await fs.unlink(this.lockPath);
-            } catch {
-                // Lock file may have been removed externally - safe to ignore
-            }
-            this.lockAcquired = false;
         }
     }
 
-    /**
-     * Check if lock is stale (process died)
-     */
-    private async isLockStale(): Promise<boolean> {
-        try {
-            const content = await fs.readFile(this.lockPath, 'utf-8');
-            const lock = JSON.parse(content);
-
-            // Consider stale if > 5 minutes old
-            if (Date.now() - lock.time > 5 * 60 * 1000) {
-                return true;
-            }
-
-            if (process.platform === 'win32') {
-                // Windows: Use tasklist to check if process exists
-                try {
-                    const { spawnSync } = await import('child_process');
-                    const result = spawnSync('tasklist', ['/FI', `PID eq ${lock.pid}`, '/NH'], {
-                        encoding: 'utf-8',
-                        timeout: 2000
-                    });
-                    // If PID not found, tasklist returns "INFO: No tasks..."
-                    return !result.stdout.includes(lock.pid.toString());
-                } catch {
-                    // If tasklist fails, fall back to time-based only
-                    return false;
-                }
-            } else {
-                // Unix: Use signal 0 test
-                try {
-                    process.kill(lock.pid, 0);
-                    return false; // Process exists
-                } catch {
-                    return true; // Process doesn't exist
-                }
-            }
-        } catch {
-            return true;
-        }
+    private tokenize(item: KnowledgeItem): string[] {
+        const text = `${item.title} ${item.content} ${item.tags.join(' ')} ${item.keywords.join(' ')}`;
+        return text
+            .toLowerCase()
+            .split(/\W+/)
+            .filter(t => t.length > 2);
     }
 
     // ========================================================================
-    // Knowledge Management
+    // Knowledge CRUD
     // ========================================================================
 
-    /**
-     * Add a new knowledge item
-     */
     addKnowledge(item: Omit<KnowledgeItem, 'id' | 'fingerprint' | 'created' | 'updated' | 'useCount' | 'lastAccessed'>): KnowledgeItem {
-        if (!this.index) {
-            throw new Error('KnowledgeStore not loaded');
-        }
+        if (!this.index) throw new Error('KnowledgeStore not loaded');
 
         const now = Date.now();
-
-        // Compute fingerprint from semantic identity: type + normalized title + scope
         const fingerprint = this.computeFingerprint(item.type, item.title, item.scope);
 
-        // Check for duplicate by fingerprint (exact match)
-        const existing = this.findByFingerprint(fingerprint);
+        // Check for duplicate
+        const existing = this.itemByFingerprint.get(fingerprint);
         if (existing) {
-            // Merge with existing: update content but keep identity
             existing.content = item.content;
             existing.confidence = Math.max(existing.confidence, item.confidence);
             existing.tags = [...new Set([...existing.tags, ...item.tags])];
             existing.keywords = [...new Set([...existing.keywords, ...item.keywords])];
             existing.updated = now;
             this.dirty = true;
+            // Note: Should rebuild indices if content changed significantly
+            // For now, skip as tags/keywords mostly additive
             return existing;
+        }
+
+        // Enforce max items
+        if (this.index.items.length >= this.config.maxItems) {
+            this.pruneLowestScoring();
         }
 
         const knowledge: KnowledgeItem = {
@@ -508,61 +375,30 @@ export class KnowledgeStore {
             updated: now
         };
 
-        // Enforce max items
-        if (this.index.items.length >= this.config.maxItems) {
-            this.pruneOldItems();
-        }
-
         this.index.items.push(knowledge);
+        this.addToIndices(knowledge);
         this.dirty = true;
-
-        this.bus.emit({
-            type: 'status',
-            phase: 'tool',
-            label: `Learned: ${knowledge.title}`
-        });
 
         return knowledge;
     }
 
-    /**
-     * Update an existing knowledge item
-     */
-    updateKnowledge(id: string, updates: Partial<KnowledgeItem>): KnowledgeItem | null {
-        if (!this.index) return null;
-
-        const item = this.index.items.find(i => i.id === id);
-        if (!item) return null;
-
-        Object.assign(item, updates, { updated: Date.now() });
-        this.dirty = true;
-
-        return item;
-    }
-
-    /**
-     * Remove a knowledge item
-     */
     removeKnowledge(id: string): boolean {
         if (!this.index) return false;
 
-        const idx = this.index.items.findIndex(i => i.id === id);
+        const item = this.itemById.get(id);
+        if (!item) return false;
+
+        const idx = this.index.items.indexOf(item);
         if (idx === -1) return false;
 
+        this.removeFromIndices(item);
         this.index.items.splice(idx, 1);
         this.dirty = true;
-
         return true;
     }
 
-    /**
-     * Mark knowledge as used (increments use count)
-     * Triggers debounced auto-save to persist usage tracking
-     */
     markUsed(id: string): void {
-        if (!this.index) return;
-
-        const item = this.index.items.find(i => i.id === id);
+        const item = this.itemById.get(id);
         if (item) {
             item.useCount++;
             item.lastAccessed = Date.now();
@@ -571,95 +407,117 @@ export class KnowledgeStore {
         }
     }
 
-    /**
-     * Schedule a debounced save operation
-     * Prevents excessive writes when multiple markUsed calls happen in quick succession
-     */
     private scheduleSave(): void {
-        if (this.saveTimeout) return;  // Already scheduled
-
+        if (this.saveTimeout) return;
         this.saveTimeout = setTimeout(async () => {
             this.saveTimeout = null;
             if (this.dirty) {
                 try {
                     await this.save();
-                } catch (error) {
-                    // Log but don't throw - this is a background save
-                    console.error('Auto-save failed:', error);
+                } catch (e) {
+                    console.error('Auto-save failed:', e);
                 }
             }
         }, this.SAVE_DEBOUNCE_MS);
     }
 
-    /**
-     * Cancel any pending auto-save and save immediately if dirty
-     * Call this before process exit to ensure data is persisted
-     */
-    async flush(): Promise<void> {
-        if (this.saveTimeout) {
-            clearTimeout(this.saveTimeout);
-            this.saveTimeout = null;
-        }
-        if (this.dirty) {
-            await this.save();
-        }
-    }
-
     // ========================================================================
-    // Knowledge Retrieval
+    // Search (BM25)
     // ========================================================================
 
-    /**
-     * Search for relevant knowledge
-     */
     search(query: KnowledgeQuery): KnowledgeSearchResult[] {
-        if (!this.index) return [];
+        if (!this.index || this.index.items.length === 0) return [];
 
-        let candidates = [...this.index.items];
+        // Get candidates via inverted index
+        let candidates: KnowledgeItem[];
+        const queryTerms = query.query ? this.tokenizeQuery(query.query) : [];
 
-        // Filter by type
-        if (query.types && query.types.length > 0) {
+        if (queryTerms.length > 0) {
+            const candidateIds = new Set<string>();
+            for (const term of queryTerms) {
+                const postings = this.invertedIndex.get(term);
+                if (postings) {
+                    for (const id of postings) candidateIds.add(id);
+                }
+            }
+            candidates = [];
+            for (const id of candidateIds) {
+                const item = this.itemById.get(id);
+                if (item) candidates.push(item);
+            }
+        } else {
+            candidates = [...this.index.items];
+        }
+
+        // Apply filters
+        if (query.types?.length) {
             candidates = candidates.filter(i => query.types!.includes(i.type));
         }
-
-        // Filter by tags
-        if (query.tags && query.tags.length > 0) {
-            candidates = candidates.filter(i =>
-                query.tags!.some(t => i.tags.includes(t))
-            );
+        if (query.tags?.length) {
+            candidates = candidates.filter(i => query.tags!.some(t => i.tags.includes(t)));
         }
-
-        // Filter by confidence
         if (query.minConfidence !== undefined) {
             candidates = candidates.filter(i => i.confidence >= query.minConfidence!);
         }
-
-        // Filter by scope
         candidates = candidates.filter(i => this.matchesScope(i.scope, query));
 
-        // Score by relevance
-        const scored: KnowledgeSearchResult[] = candidates.map(item => ({
+        // Score
+        const results: KnowledgeSearchResult[] = candidates.map(item => ({
             item,
-            relevance: this.scoreRelevance(item, query),
+            relevance: queryTerms.length > 0
+                ? this.scoreBM25(item, queryTerms)
+                : this.scoreBasic(item),
             matchReason: this.getMatchReason(item, query)
         }));
 
-        // Sort by relevance
-        scored.sort((a, b) => b.relevance - a.relevance);
-
-        // Limit results
-        const maxResults = query.maxResults ?? 10;
-        return scored.slice(0, maxResults);
+        results.sort((a, b) => b.relevance - a.relevance);
+        return results.slice(0, query.maxResults ?? 10);
     }
 
-    /**
-     * Get knowledge for injection into agent context
-     */
+    private tokenizeQuery(text: string): string[] {
+        return text.toLowerCase().split(/\W+/).filter(t => t.length > 2);
+    }
+
+    private scoreBM25(item: KnowledgeItem, queryTerms: string[]): number {
+        const docLen = this.docLengths.get(item.id) || 1;
+        const N = this.index!.items.length;
+        const itemTokens = this.tokenize(item);
+
+        // Build term frequency map for this item
+        const tf = new Map<string, number>();
+        for (const t of itemTokens) {
+            tf.set(t, (tf.get(t) || 0) + 1);
+        }
+
+        let score = 0;
+        for (const term of queryTerms) {
+            const termFreq = tf.get(term) || 0;
+            if (termFreq === 0) continue;
+
+            const docFreq = this.termDocFreq.get(term) || 0;
+            const idf = Math.log(1 + (N - docFreq + 0.5) / (docFreq + 0.5));
+
+            const num = idf * termFreq * (BM25_K1 + 1);
+            const denom = termFreq + BM25_K1 * (1 - BM25_B + BM25_B * (docLen / (this.avgDocLength || 1)));
+            score += num / denom;
+        }
+
+        // Normalize to 0-1 range and blend with confidence
+        const normalized = Math.min(score / 10, 1);
+        return normalized * 0.7 + item.confidence * 0.3;
+    }
+
+    private scoreBasic(item: KnowledgeItem): number {
+        const daysSinceAccess = (Date.now() - item.lastAccessed) / (24 * 60 * 60 * 1000);
+        const recency = Math.max(0, 0.2 - daysSinceAccess * 0.01);
+        return item.confidence * 0.6 + recency + Math.min(item.useCount * 0.02, 0.2);
+    }
+
     getContextKnowledge(
         filePath?: string,
         moduleName?: string,
         taskDescription?: string,
-        maxTokens: number = 1000
+        maxTokens = 1000
     ): string {
         const results = this.search({
             query: taskDescription,
@@ -671,307 +529,47 @@ export class KnowledgeStore {
 
         if (results.length === 0) return '';
 
-        // Build context string within token budget
         const parts: string[] = ['## Relevant Knowledge\n'];
-        let estimatedTokens = 10;
+        let tokens = 10;
 
-        for (const result of results) {
-            const itemText = this.formatKnowledgeItem(result.item);
-            const itemTokens = estimateTokens(itemText);
-
-            if (estimatedTokens + itemTokens > maxTokens) break;
-
-            parts.push(itemText);
-            estimatedTokens += itemTokens;
-
-            // Mark as used
-            this.markUsed(result.item.id);
+        for (const { item } of results) {
+            const text = `### ${item.title}\n${item.content}\n`;
+            const itemTokens = estimateTokens(text);
+            if (tokens + itemTokens > maxTokens) break;
+            parts.push(text);
+            tokens += itemTokens;
+            this.markUsed(item.id);
         }
 
         return parts.join('\n');
     }
 
-    /**
-     * Get all knowledge of a specific type
-     */
-    getByType(type: KnowledgeType): KnowledgeItem[] {
-        if (!this.index) return [];
-        return this.index.items.filter(i => i.type === type);
-    }
-
-    /**
-     * Get knowledge stats
-     */
-    getStats(): KnowledgeIndex['stats'] | null {
-        if (!this.index) return null;
-        this.updateStats();
-        return this.index.stats;
-    }
-
     // ========================================================================
-    // Knowledge Extraction
+    // Scope Matching
     // ========================================================================
-
-    /**
-     * Extract patterns from a lint session
-     */
-    extractFromLintSession(
-        sessionId: string,
-        errors: Array<{ file: string; message: string; fix?: string }>,
-        fixes: Array<{ file: string; original: string; fixed: string }>
-    ): KnowledgeItem[] {
-        const extracted: KnowledgeItem[] = [];
-
-        // Group fixes by error type
-        const fixPatterns = new Map<string, { count: number; examples: string[] }>();
-
-        for (const error of errors) {
-            // Extract error category from message
-            const category = this.categorizeError(error.message);
-
-            if (error.fix) {
-                const pattern = fixPatterns.get(category) || { count: 0, examples: [] };
-                pattern.count++;
-                if (pattern.examples.length < 3) {
-                    pattern.examples.push(`${error.message} -> ${error.fix}`);
-                }
-                fixPatterns.set(category, pattern);
-            }
-        }
-
-        // Create knowledge items for common fix patterns
-        for (const [category, pattern] of fixPatterns) {
-            if (pattern.count >= 2) { // Only if pattern appears multiple times
-                const item = this.addKnowledge({
-                    type: 'lint_fix',
-                    title: `Lint fix: ${category}`,
-                    content: `Common fix pattern for "${category}" errors:\n${pattern.examples.join('\n')}`,
-                    tags: ['lint', category.toLowerCase()],
-                    keywords: category.split(/\s+/).filter(w => w.length > 3),
-                    scope: { global: false, projectIds: [this.projectId] },
-                    source: { method: 'extracted', sessionId },
-                    confidence: Math.min(0.5 + pattern.count * 0.1, 0.95)
-                });
-                extracted.push(item);
-            }
-        }
-
-        return extracted;
-    }
-
-    /**
-     * Extract patterns from code generation
-     */
-    extractFromCodeGen(
-        sessionId: string,
-        generatedCode: string,
-        context: { moduleName?: string; type: 'testbench' | 'module' | 'function' | 'fsm' }
-    ): KnowledgeItem | null {
-        // Extract patterns from generated code
-        const patterns = this.analyzeCodePatterns(generatedCode);
-
-        if (patterns.length === 0) return null;
-
-        const item = this.addKnowledge({
-            type: 'code_pattern',
-            title: `${context.type} pattern${context.moduleName ? ` for ${context.moduleName}` : ''}`,
-            content: `Code patterns used:\n${patterns.join('\n')}`,
-            tags: [context.type, 'generated'],
-            keywords: patterns.flatMap(p => p.split(/\s+/).filter(w => w.length > 3)),
-            scope: {
-                global: false,
-                projectIds: [this.projectId],
-                modules: context.moduleName ? [context.moduleName] : undefined
-            },
-            source: { method: 'extracted', sessionId },
-            confidence: 0.7
-        });
-
-        return item;
-    }
-
-    /**
-     * Learn from user correction
-     */
-    learnFromCorrection(
-        original: string,
-        corrected: string,
-        context: { type: KnowledgeType; tags: string[] }
-    ): KnowledgeItem {
-        return this.addKnowledge({
-            type: context.type,
-            title: `User preference: ${context.tags.join(', ')}`,
-            content: `Original: ${original}\nPreferred: ${corrected}`,
-            tags: [...context.tags, 'user_correction'],
-            keywords: corrected.split(/\s+/).filter(w => w.length > 3),
-            scope: { global: false, projectIds: [this.projectId] },
-            source: { method: 'user_provided' },
-            confidence: 0.95 // High confidence for user corrections
-        });
-    }
-
-    /**
-     * Add module relationship knowledge
-     */
-    addModuleRelationship(
-        moduleName: string,
-        relationship: {
-            dependencies: string[];
-            dependents: string[];
-            interfaces: string[];
-        }
-    ): KnowledgeItem {
-        return this.addKnowledge({
-            type: 'dependency',
-            title: `Module relationships: ${moduleName}`,
-            content: JSON.stringify(relationship, null, 2),
-            tags: ['module', 'dependency', moduleName],
-            keywords: [moduleName, ...relationship.dependencies, ...relationship.dependents],
-            scope: { global: false, projectIds: [this.projectId], modules: [moduleName] },
-            source: { method: 'inferred' },
-            confidence: 0.8
-        });
-    }
-
-    // ========================================================================
-    // Helpers
-    // ========================================================================
-
-    private createDefaultIndex(): KnowledgeIndex {
-        return {
-            version: 1,
-            projectId: this.projectId,
-            items: [],
-            stats: {
-                totalItems: 0,
-                byType: {} as Record<KnowledgeType, number>,
-                lastUpdated: Date.now()
-            }
-        };
-    }
-
-    private migrate(index: KnowledgeIndex): KnowledgeIndex {
-        const migrated = {
-            ...this.createDefaultIndex(),
-            ...index
-        };
-
-        // Migration: Add fingerprints to items that don't have them
-        for (const item of migrated.items) {
-            if (!item.fingerprint) {
-                item.fingerprint = this.computeFingerprint(item.type, item.title, item.scope);
-            }
-        }
-
-        return migrated;
-    }
-
-    private updateStats(): void {
-        if (!this.index) return;
-
-        const byType: Record<string, number> = {};
-        for (const item of this.index.items) {
-            byType[item.type] = (byType[item.type] || 0) + 1;
-        }
-
-        this.index.stats = {
-            totalItems: this.index.items.length,
-            byType: byType as Record<KnowledgeType, number>,
-            lastUpdated: Date.now()
-        };
-    }
-
-    /**
-     * Compute a content-addressable fingerprint for duplicate detection.
-     * The fingerprint captures semantic identity: type + normalized title + scope constraints.
-     * Items with the same fingerprint are considered duplicates regardless of content differences.
-     */
-    private computeFingerprint(type: KnowledgeType, title: string, scope: KnowledgeScope): string {
-        // Normalize title: lowercase, collapse whitespace, remove punctuation
-        const normalizedTitle = title
-            .toLowerCase()
-            .replace(/\s+/g, ' ')
-            .replace(/[^\w\s]/g, '')
-            .trim();
-
-        // Build scope identity (sorted for determinism)
-        const scopeParts: string[] = [];
-        if (scope.global) {
-            scopeParts.push('global');
-        }
-        if (scope.modules && scope.modules.length > 0) {
-            scopeParts.push(`modules:${[...scope.modules].sort().join(',')}`);
-        }
-        if (scope.filePatterns && scope.filePatterns.length > 0) {
-            scopeParts.push(`files:${[...scope.filePatterns].sort().join(',')}`);
-        }
-
-        const identity = `${type}|${normalizedTitle}|${scopeParts.join('|')}`;
-
-        // Hash to fixed-length fingerprint
-        return crypto
-            .createHash('sha256')
-            .update(identity)
-            .digest('hex')
-            .slice(0, 16);
-    }
-
-    /**
-     * Find an existing item by fingerprint (exact match).
-     * This replaces fuzzy title matching for more reliable duplicate detection.
-     */
-    private findByFingerprint(fingerprint: string): KnowledgeItem | undefined {
-        if (!this.index) return undefined;
-        return this.index.items.find(item => item.fingerprint === fingerprint);
-    }
-
-    /**
-     * String similarity using Jaccard index (kept for potential future use)
-     */
-    private stringSimilarity(a: string, b: string): number {
-        const aLower = a.toLowerCase();
-        const bLower = b.toLowerCase();
-
-        if (aLower === bLower) return 1;
-
-        // Simple Jaccard similarity on words
-        const aWords = new Set(aLower.split(/\s+/));
-        const bWords = new Set(bLower.split(/\s+/));
-
-        let intersection = 0;
-        for (const word of aWords) {
-            if (bWords.has(word)) intersection++;
-        }
-
-        const union = aWords.size + bWords.size - intersection;
-        return union === 0 ? 0 : intersection / union;
-    }
 
     private matchesScope(scope: KnowledgeScope, query: KnowledgeQuery): boolean {
-        // Global knowledge always matches
         if (scope.global) return true;
 
-        // Check project match (always matches since we filter by project)
         if (scope.projectIds && !scope.projectIds.includes(this.projectId)) {
             return false;
         }
 
-        // FAIL-CLOSED: If item is module-scoped but query has no module context, don't match
-        // This prevents module-scoped knowledge from leaking into global queries
-        if (scope.modules && scope.modules.length > 0) {
+        // Fail-closed: scoped items require matching context
+        if (scope.modules?.length) {
             if (!query.moduleName || !scope.modules.includes(query.moduleName)) {
                 return false;
             }
         }
 
-        // FAIL-CLOSED: If item is file-scoped but query has no file context, don't match
-        // This prevents file-scoped knowledge from leaking into global queries
-        if (scope.filePatterns && scope.filePatterns.length > 0) {
-            if (!query.filePath) {
-                return false;
-            }
-            const matches = scope.filePatterns.some(pattern =>
-                this.matchGlob(query.filePath!, pattern)
+        if (scope.filePatterns?.length) {
+            if (!query.filePath) return false;
+            const normalizedPath = query.filePath.replace(/\\/g, '/');
+            const matches = scope.filePatterns.some(p =>
+                picomatch.isMatch(normalizedPath, p.replace(/\\/g, '/'), {
+                    dot: true,
+                    nocase: process.platform === 'win32'
+                })
             );
             if (!matches) return false;
         }
@@ -979,70 +577,19 @@ export class KnowledgeStore {
         return true;
     }
 
-    /**
-     * Match a file path against a glob pattern using picomatch
-     * Normalizes path separators for cross-platform compatibility
-     */
-    private matchGlob(filePath: string, pattern: string): boolean {
-        // Normalize path separators for cross-platform (Windows uses \, Unix uses /)
-        const normalizedPath = filePath.replace(/\\/g, '/');
-        const normalizedPattern = pattern.replace(/\\/g, '/');
-
-        return picomatch.isMatch(normalizedPath, normalizedPattern, {
-            dot: true,  // Match dotfiles
-            nocase: process.platform === 'win32'  // Case-insensitive on Windows
-        });
-    }
-
-    private scoreRelevance(item: KnowledgeItem, query: KnowledgeQuery): number {
-        let score = 0;
-
-        // Base confidence
-        score += item.confidence * 0.3;
-
-        // Text query matching
-        if (query.query) {
-            const queryTerms = query.query.toLowerCase().split(/\s+/);
-            const itemText = `${item.title} ${item.content} ${item.tags.join(' ')} ${item.keywords.join(' ')}`.toLowerCase();
-
-            let matchCount = 0;
-            for (const term of queryTerms) {
-                if (itemText.includes(term)) matchCount++;
-            }
-            score += (matchCount / queryTerms.length) * 0.4;
-        }
-
-        // Tag matching
-        if (query.tags && query.tags.length > 0) {
-            const tagOverlap = query.tags.filter(t => item.tags.includes(t)).length;
-            score += (tagOverlap / query.tags.length) * 0.2;
-        }
-
-        // Recency boost (more recent = higher score)
-        const daysSinceAccess = (Date.now() - item.lastAccessed) / (24 * 60 * 60 * 1000);
-        score += Math.max(0, 0.1 - daysSinceAccess * 0.001);
-
-        // Usage boost
-        score += Math.min(item.useCount * 0.02, 0.1);
-
-        return Math.min(score, 1);
-    }
-
     private getMatchReason(item: KnowledgeItem, query: KnowledgeQuery): string {
         const reasons: string[] = [];
 
         if (query.query) {
-            const queryTerms = query.query.toLowerCase().split(/\s+/);
-            const matchedTerms = queryTerms.filter(term =>
-                item.keywords.some(k => k.toLowerCase().includes(term)) ||
-                item.tags.some(t => t.toLowerCase().includes(term))
+            const terms = this.tokenizeQuery(query.query);
+            const matched = terms.filter(t =>
+                item.keywords.some(k => k.toLowerCase().includes(t)) ||
+                item.tags.some(tag => tag.toLowerCase().includes(t))
             );
-            if (matchedTerms.length > 0) {
-                reasons.push(`Keywords: ${matchedTerms.join(', ')}`);
-            }
+            if (matched.length) reasons.push(`Keywords: ${matched.join(', ')}`);
         }
 
-        if (query.tags && query.tags.some(t => item.tags.includes(t))) {
+        if (query.tags?.some(t => item.tags.includes(t))) {
             reasons.push(`Tags: ${query.tags.filter(t => item.tags.includes(t)).join(', ')}`);
         }
 
@@ -1053,120 +600,195 @@ export class KnowledgeStore {
         return reasons.join('; ') || 'General relevance';
     }
 
-    private formatKnowledgeItem(item: KnowledgeItem): string {
-        return `### ${item.title}\n${item.content}\n`;
-    }
+    // ========================================================================
+    // Pruning
+    // ========================================================================
 
-    private categorizeError(message: string): string {
-        // Categorize lint errors by common patterns
-        const categories = [
-            { pattern: /unused/i, category: 'Unused signal' },
-            { pattern: /width mismatch/i, category: 'Width mismatch' },
-            { pattern: /undeclared|undefined/i, category: 'Undeclared identifier' },
-            { pattern: /type mismatch/i, category: 'Type mismatch' },
-            { pattern: /sensitivity/i, category: 'Sensitivity list' },
-            { pattern: /blocking.*non-blocking/i, category: 'Assignment style' },
-            { pattern: /latch/i, category: 'Inferred latch' },
-            { pattern: /clock/i, category: 'Clock issue' },
-            { pattern: /reset/i, category: 'Reset issue' }
-        ];
-
-        for (const { pattern, category } of categories) {
-            if (pattern.test(message)) return category;
-        }
-
-        return 'Other';
-    }
-
-    private analyzeCodePatterns(code: string): string[] {
-        const patterns: string[] = [];
-
-        // Detect common patterns
-        if (/always_ff\s*@\s*\(posedge\s+clk/.test(code)) {
-            patterns.push('Uses always_ff with positive edge clock');
-        }
-        if (/always_comb/.test(code)) {
-            patterns.push('Uses always_comb for combinational logic');
-        }
-        if (/if\s*\(!?rst_n\)/.test(code) || /if\s*\(rst\)/.test(code)) {
-            patterns.push('Uses synchronous reset');
-        }
-        if (/typedef\s+enum/.test(code)) {
-            patterns.push('Uses typedef enum for state machines');
-        }
-        if (/case\s*\(state\)/.test(code)) {
-            patterns.push('Uses case statement for FSM');
-        }
-        if (/`include/.test(code)) {
-            patterns.push('Uses include files');
-        }
-        if (/import\s+\w+::\*/.test(code)) {
-            patterns.push('Uses package imports');
-        }
-
-        return patterns;
-    }
-
-    private pruneOldItems(): void {
+    private pruneStaleItems(): void {
         if (!this.index) return;
 
         const now = Date.now();
+        const maxAge = this.config.maxUnusedAge;
+        const before = this.index.items.length;
 
-        // Sort by score (lower = more likely to prune)
+        this.index.items = this.index.items.filter(item => {
+            const age = now - item.lastAccessed;
+            return age < maxAge || item.source.method === 'user_provided';
+        });
+
+        if (this.index.items.length < before) {
+            this.dirty = true;
+        }
+    }
+
+    private pruneLowestScoring(): void {
+        if (!this.index) return;
+
+        const now = Date.now();
         const scored = this.index.items.map(item => ({
             item,
             score: this.pruneScore(item, now)
         }));
-
         scored.sort((a, b) => a.score - b.score);
 
-        // Remove bottom 10%
         const removeCount = Math.ceil(this.index.items.length * 0.1);
         const toRemove = new Set(scored.slice(0, removeCount).map(s => s.item.id));
+
+        for (const id of toRemove) {
+            const item = this.itemById.get(id);
+            if (item) this.removeFromIndices(item);
+        }
 
         this.index.items = this.index.items.filter(i => !toRemove.has(i.id));
         this.dirty = true;
     }
 
     private pruneScore(item: KnowledgeItem, now: number): number {
-        // Higher score = keep, lower score = prune
-        let score = 0;
-
-        // Confidence
-        score += item.confidence * 10;
-
-        // Use count
-        score += item.useCount * 2;
-
-        // Recency
+        let score = item.confidence * 10 + item.useCount * 2;
         const daysSinceAccess = (now - item.lastAccessed) / (24 * 60 * 60 * 1000);
         score -= daysSinceAccess;
-
-        // User-provided knowledge gets bonus
-        if (item.source.method === 'user_provided') {
-            score += 20;
-        }
-
+        if (item.source.method === 'user_provided') score += 20;
         return score;
+    }
+
+    // ========================================================================
+    // Helpers
+    // ========================================================================
+
+    private computeFingerprint(type: KnowledgeType, title: string, scope: KnowledgeScope): string {
+        const normalizedTitle = title.toLowerCase().replace(/\s+/g, ' ').replace(/[^\w\s]/g, '').trim();
+        const scopeParts: string[] = [];
+        if (scope.global) scopeParts.push('global');
+        if (scope.modules?.length) scopeParts.push(`m:${[...scope.modules].sort().join(',')}`);
+        if (scope.filePatterns?.length) scopeParts.push(`f:${[...scope.filePatterns].sort().join(',')}`);
+
+        return crypto
+            .createHash('sha256')
+            .update(`${type}|${normalizedTitle}|${scopeParts.join('|')}`)
+            .digest('hex')
+            .slice(0, 16);
+    }
+
+    private createDefaultIndex(): KnowledgeIndex {
+        return {
+            version: 1,
+            projectId: this.projectId,
+            items: [],
+            stats: { totalItems: 0, byType: {} as Record<KnowledgeType, number>, lastUpdated: Date.now() }
+        };
+    }
+
+    private migrate(index: KnowledgeIndex): KnowledgeIndex {
+        const migrated = { ...this.createDefaultIndex(), ...index };
+        for (const item of migrated.items) {
+            if (!item.fingerprint) {
+                item.fingerprint = this.computeFingerprint(item.type, item.title, item.scope);
+            }
+        }
+        return migrated;
+    }
+
+    private updateStats(): void {
+        if (!this.index) return;
+        const byType: Record<string, number> = {};
+        for (const item of this.index.items) {
+            byType[item.type] = (byType[item.type] || 0) + 1;
+        }
+        this.index.stats = {
+            totalItems: this.index.items.length,
+            byType: byType as Record<KnowledgeType, number>,
+            lastUpdated: Date.now()
+        };
+    }
+
+    // ========================================================================
+    // File Locking
+    // ========================================================================
+
+    private async acquireLock(): Promise<boolean> {
+        const start = Date.now();
+        while (Date.now() - start < this.LOCK_TIMEOUT_MS) {
+            try {
+                await fs.writeFile(
+                    this.lockPath,
+                    JSON.stringify({ pid: process.pid, time: Date.now() }),
+                    { flag: 'wx' }
+                );
+                this.lockAcquired = true;
+                return true;
+            } catch (e: unknown) {
+                if ((e as NodeJS.ErrnoException).code === 'EEXIST') {
+                    if (await this.isLockStale()) {
+                        try { await fs.unlink(this.lockPath); } catch { /* ignore */ }
+                        continue;
+                    }
+                    await new Promise(r => setTimeout(r, 100));
+                } else {
+                    throw e;
+                }
+            }
+        }
+        return false;
+    }
+
+    private async releaseLock(): Promise<void> {
+        if (this.lockAcquired) {
+            try { await fs.unlink(this.lockPath); } catch { /* ignore */ }
+            this.lockAcquired = false;
+        }
+    }
+
+    private async isLockStale(): Promise<boolean> {
+        try {
+            const content = await fs.readFile(this.lockPath, 'utf-8');
+            const lock = JSON.parse(content);
+            if (Date.now() - lock.time > 5 * 60 * 1000) return true;
+
+            if (process.platform === 'win32') {
+                const { spawnSync } = await import('child_process');
+                const result = spawnSync('tasklist', ['/FI', `PID eq ${lock.pid}`, '/NH'], {
+                    encoding: 'utf-8',
+                    timeout: 2000
+                });
+                return !result.stdout.includes(lock.pid.toString());
+            } else {
+                try { process.kill(lock.pid, 0); return false; }
+                catch { return true; }
+            }
+        } catch {
+            return true;
+        }
+    }
+
+    // ========================================================================
+    // Public Accessors
+    // ========================================================================
+
+    getByType(type: KnowledgeType): KnowledgeItem[] {
+        return this.index?.items.filter(i => i.type === type) ?? [];
+    }
+
+    getStats(): KnowledgeIndex['stats'] | null {
+        if (!this.index) return null;
+        this.updateStats();
+        return this.index.stats;
+    }
+
+    getProjectId(): string {
+        return this.projectId;
     }
 }
 
 // ============================================================================
-// Singleton Management
+// Factory
 // ============================================================================
 
-let globalKnowledgeStore: KnowledgeStore | null = null;
+let globalStore: KnowledgeStore | null = null;
 
-/**
- * Get the global KnowledgeStore instance
- */
 export function getKnowledgeStore(): KnowledgeStore | null {
-    return globalKnowledgeStore;
+    return globalStore;
 }
 
-/**
- * Create a new KnowledgeStore
- */
 export function createKnowledgeStore(
     projectRoot: string,
     bus: EventBus,
@@ -1175,9 +797,6 @@ export function createKnowledgeStore(
     return new KnowledgeStore(projectRoot, bus, config);
 }
 
-/**
- * Set the global KnowledgeStore instance
- */
 export function setGlobalKnowledgeStore(store: KnowledgeStore): void {
-    globalKnowledgeStore = store;
+    globalStore = store;
 }
