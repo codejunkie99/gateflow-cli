@@ -21,38 +21,38 @@ A production-grade CLI that brings AI-powered natural language interactions to S
 
 ---
 
-## ✨ Features
+##  Features
 
-### 🤖 **AI-Powered Multi-Agent System**
+###  **AI-Powered Multi-Agent System**
 - **Specialized Worker Agents**: Understanding, Code Generation, Testbench, Debug, and Refactoring agents
 - **Intelligent Orchestration**: Automatic complexity detection and task routing
 - **Execution Planning**: Multi-step task decomposition with dependency resolution
 - **Thinking Visibility**: Real-time insight into agent reasoning and decision-making
 
-### 🔧 **Smart Development Tools**
+###  **Smart Development Tools**
 - **Natural Language Queries**: Ask questions about your codebase in plain English
 - **Auto-Fix Lint Errors**: Iterative Verilator-based error fixing with AI suggestions
 - **Code Generation**: Create synthesizable SystemVerilog modules, testbenches, and packages
 - **Project Indexing**: Fast module discovery, dependency analysis, and compilation order
 
-### 📊 **Waveform Analysis**
+###  **Waveform Analysis**
 - **Terminal Viewer**: VCD waveform visualization directly in your terminal
 - **Web Viewer**: Full-featured browser-based waveform explorer
 - **MCP Integration**: Model Context Protocol server for waveform data access
 
-### 🛡️ **Production-Ready Safety**
+###  **Production-Ready Safety**
 - **Diff Preview System**: Visual diff for all file changes before applying
 - **Policy Engine**: Fine-grained approval controls for file operations
 - **Dry-Run Mode**: Preview changes without touching files
 - **Exit Code Standards**: Standardized error codes for CI/CD integration
 
-### 🌐 **Multi-Language Support** *(Roadmap)*
+###  **Multi-Language Support** *(Roadmap)*
 - SystemVerilog (current), Verilog, and VHDL support planned
 - Cross-language project analysis and dependency resolution
 
 ---
 
-## 🚀 Quick Start
+##  Quick Start
 
 ### Prerequisites
 - **Node.js** ≥18.0.0
@@ -174,7 +174,7 @@ $env:VERILATOR_PATH = "/usr/bin/verilator"
 
 ---
 
-## 🏗️ Architecture
+##  Architecture
 
 GateFlow CLI is built on a sophisticated multi-agent architecture:
 
@@ -232,7 +232,7 @@ For detailed architecture documentation, see:
 
 ---
 
-## 🔒 Safety & Reliability
+## Safety & Reliability
 
 ### Diff Preview System
 Every file modification shows a colorized diff before applying:
@@ -317,7 +317,7 @@ npm test ThinkingChain.test.ts
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
 We welcome contributions! Here's how you can help:
 
@@ -403,8 +403,7 @@ Testbench ready! Run with:
 
 ---
 
-## 🗺️ Roadmap
-
+##  Roadmap
 - [ ] **Multi-Language Support**: VHDL and Verilog support (see `docs/MULTI_LANGUAGE_ARCHITECTURE.md`)
 - [ ] **Plugin System**: Extensible tool integrations
 - [ ] **Cloud Indexing**: Remote codebase analysis
@@ -416,7 +415,7 @@ See [`docs/COMMERCIAL_VIABILITY_ROADMAP.md`](./docs/COMMERCIAL_VIABILITY_ROADMAP
 
 ---
 
-## 📄 License
+## License
 
 This project is licensed under the **MIT License** - see the [LICENSE](./LICENSE) file for details.
 
@@ -427,7 +426,7 @@ Copyright (c) 2024 GateFlow
 
 ---
 
-## 🙏 Acknowledgments
+##  Acknowledgments
 
 - **Anthropic** - Claude AI powers the multi-agent system
 - **Verilator** - Open-source SystemVerilog linting and simulation
@@ -436,7 +435,7 @@ Copyright (c) 2024 GateFlow
 
 ---
 
-## 📧 Support
+##  Support
 
 - **Documentation**: [`docs/`](./docs/)
 - **Issues**: [GitHub Issues](https://github.com/your-org/cursor-for-vhdl/issues)
