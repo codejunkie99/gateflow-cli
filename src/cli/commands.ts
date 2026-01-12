@@ -37,7 +37,7 @@ import {
     type ToolDescriptionManager,
     type SemanticSummarizer
 } from '../context/index.js';
-import { MemoryManager, createKnowledgeStore, type KnowledgeStore } from '../memory/index.js';
+import { createMemoryService, type MemoryService } from '../memory/index.js';
 
 // ============================================================================
 // Types
@@ -66,8 +66,9 @@ export interface CommandContext {
     toolRegistry: ToolRegistry;
     contextFileManager: ContextFileManager;
     terminalSessionManager: TerminalSessionManager;
-    memoryManager: MemoryManager;
     sessionId: string;
+    // Unified memory service (provides memoryManager + knowledgeStore + token budgeting)
+    memoryService: MemoryService;
     // Phase 2: Context Window Management managers
     dynamicContextManager: DynamicContextManager;
     tokenBudgetManager: TokenBudgetManager;
@@ -75,7 +76,6 @@ export interface CommandContext {
     skillManager: SkillManager;
     toolDescriptionManager: ToolDescriptionManager;
     semanticSummarizer: SemanticSummarizer;
-    knowledgeStore: KnowledgeStore;
 }
 
 // ============================================================================
@@ -144,12 +144,14 @@ export async function setupContext(options: GlobalOptions): Promise<CommandConte
     // Initialize context file manager
     await contextFileManager.initialize();
 
-    // Memory manager for persistent context and history archiving
-    const memoryManager = new MemoryManager(projectRoot, bus);
-    await memoryManager.load();
-
     // Generate unique session ID
     const sessionId = `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    // Unified memory service for persistent context, knowledge, and token budgeting
+    const memoryService = createMemoryService(projectRoot, bus, {
+        contextTokenBudget: 2000  // Token budget for AI context injection
+    });
+    await memoryService.initialize();
 
     // Phase 2: Context Window Management managers (Cursor's Dynamic Context Discovery)
     const dynamicContextManager = createDynamicContextManager(bus, { projectId: sessionId });
@@ -167,9 +169,6 @@ export async function setupContext(options: GlobalOptions): Promise<CommandConte
     await toolDescriptionManager.initialize();
 
     const semanticSummarizer = createSemanticSummarizer();
-
-    const knowledgeStore = createKnowledgeStore(projectRoot, bus);
-    await knowledgeStore.load();
 
     // Initialize centralized input manager
     const inputManager = initInputManager(bus);
@@ -199,16 +198,16 @@ export async function setupContext(options: GlobalOptions): Promise<CommandConte
         toolRegistry,
         contextFileManager,
         terminalSessionManager,
-        memoryManager,
         sessionId,
+        // Unified memory service
+        memoryService,
         // Phase 2: Context Window Management
         dynamicContextManager,
         tokenBudgetManager,
         fileChunker,
         skillManager,
         toolDescriptionManager,
-        semanticSummarizer,
-        knowledgeStore
+        semanticSummarizer
     };
 }
 
@@ -231,8 +230,11 @@ function buildToolContext(ctx: CommandContext): ToolContext {
         toolRegistry: ctx.toolRegistry,
         contextFileManager: ctx.contextFileManager,
         terminalSessionManager: ctx.terminalSessionManager,
-        memoryManager: ctx.memoryManager,
         sessionId: ctx.sessionId,
+        // Memory service and its accessors for backward compatibility with tool executors
+        memoryService: ctx.memoryService,
+        memoryManager: ctx.memoryService.memory,
+        knowledgeStore: ctx.memoryService.knowledge,
         // Centralized input manager
         inputManager: ctx.inputManager,
         // Phase 2: Context Window Management (Cursor's Dynamic Context Discovery)
@@ -241,8 +243,7 @@ function buildToolContext(ctx: CommandContext): ToolContext {
         fileChunker: ctx.fileChunker,
         skillManager: ctx.skillManager,
         toolDescriptionManager: ctx.toolDescriptionManager,
-        semanticSummarizer: ctx.semanticSummarizer,
-        knowledgeStore: ctx.knowledgeStore
+        semanticSummarizer: ctx.semanticSummarizer
     };
 }
 

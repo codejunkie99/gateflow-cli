@@ -15,6 +15,7 @@ import type { EventBus } from '../events/index.js';
 import type { ToolContext } from './tools.js';
 import { createToolExecutors, getToolSpecs as getToolDefinitions, TOOL_APPROVAL_CONFIG } from './tools.js';
 import type { MemoryManager } from '../memory/manager.js';
+import type { MemoryService } from '../memory/MemoryService.js';
 import { getSystemPrompt, detectMode, type PromptMode, type DetectModeContext } from './prompts.js';
 import { ThinkingChain } from './reasoning/ThinkingChain.js';
 import { Orchestrator } from './orchestrator/Orchestrator.js';
@@ -106,6 +107,7 @@ export class GateFlowAgent {
     private tools: Record<string, Tool>;
     private executors: ReturnType<typeof createToolExecutors>;
     private orchestrator: Orchestrator | null = null;
+    private memoryService?: MemoryService;
     private memoryManager?: MemoryManager;
     /** AI SDK 6: Agent bundle with approval-aware tools */
     private agentBundle: AgentBundle | null = null;
@@ -124,7 +126,8 @@ export class GateFlowAgent {
         };
 
         this.toolContext = toolContext;
-        this.memoryManager = toolContext.memoryManager;
+        this.memoryService = toolContext.memoryService;
+        this.memoryManager = toolContext.memoryManager ?? toolContext.memoryService?.memory;
         this.executors = createToolExecutors(toolContext);
         this.tools = this.buildTools();
         this.session = this.createSession();
@@ -141,7 +144,7 @@ export class GateFlowAgent {
      */
     private initializeOrchestrator(): void {
         this.orchestrator = new Orchestrator(this.bus, this.toolContext.projectRoot, this.config.model);
-        
+
         // Register all worker agents
         // Note: Planning is handled by Orchestrator.executeWithPlan(), not as a worker agent
         this.orchestrator.registerWorker('understanding', createUnderstandingAgent(this.tools));
@@ -337,45 +340,45 @@ export class GateFlowAgent {
         let lastUsage: { inputTokens?: number; outputTokens?: number } | undefined;
 
         try {
-        // Emit status immediately so spinner shows during processing
-        this.bus.emit({
-            type: 'status',
-            phase: 'thinking',
-            label: 'Thinking...'
-        });
+            // Emit status immediately so spinner shows during processing
+            this.bus.emit({
+                type: 'status',
+                phase: 'thinking',
+                label: 'Thinking...'
+            });
 
-        // AI SDK 6: Apply call options if provided
-        const callOptions = options?.callOptions;
-        if (callOptions?.sessionId && this.toolContext.sessionId !== callOptions.sessionId) {
-            this.toolContext.sessionId = callOptions.sessionId;
-        }
-        
-        // Detect mode for this query (can be overridden by call options)
-        const modeContext: DetectModeContext = {
-            hasErrors: this.session.hasErrors,
-            ...options?.modeContext
-        };
-        const mode = callOptions?.mode ?? options?.mode ?? detectMode(userMessage, modeContext);
-        this.session.currentMode = mode;
-        
-        // Apply approval policy overrides from call options
-        if (callOptions?.approvalPolicy) {
-            // This would integrate with PolicyEngine to override auto-approve settings
-            // For now, we track it for potential future use
-        }
+            // AI SDK 6: Apply call options if provided
+            const callOptions = options?.callOptions;
+            if (callOptions?.sessionId && this.toolContext.sessionId !== callOptions.sessionId) {
+                this.toolContext.sessionId = callOptions.sessionId;
+            }
 
-        // Add thinking step at mode detection
-        this.session.thinkingChain.addAnalysisStep(
-            `Analyzing request in ${mode} mode`,
-            { mode, userMessage },
-            0.9
-        );
+            // Detect mode for this query (can be overridden by call options)
+            const modeContext: DetectModeContext = {
+                hasErrors: this.session.hasErrors,
+                ...options?.modeContext
+            };
+            const mode = callOptions?.mode ?? options?.mode ?? detectMode(userMessage, modeContext);
+            this.session.currentMode = mode;
 
-        // AI SDK 6: Use generateObject for complexity detection
-        const { object: complexity } = await generateObject({
-            model: anthropic(this.config.model) as any,
-            schema: ComplexityDetectionSchema,
-            prompt: `Does this request need multi-agent coordination?
+            // Apply approval policy overrides from call options
+            if (callOptions?.approvalPolicy) {
+                // This would integrate with PolicyEngine to override auto-approve settings
+                // For now, we track it for potential future use
+            }
+
+            // Add thinking step at mode detection
+            this.session.thinkingChain.addAnalysisStep(
+                `Analyzing request in ${mode} mode`,
+                { mode, userMessage },
+                0.9
+            );
+
+            // AI SDK 6: Use generateObject for complexity detection
+            const { object: complexity } = await generateObject({
+                model: anthropic(this.config.model) as any,
+                schema: ComplexityDetectionSchema,
+                prompt: `Does this request need multi-agent coordination?
 
 Request: "${userMessage}"
 
@@ -386,234 +389,262 @@ Multi-agent is needed for:
 - Multi-step operations requiring different agents
 
 Return needsMultiAgent: true only for genuinely complex requests.`
-        });
-
-        if (complexity.needsMultiAgent && this.orchestrator) {
-            this.session.thinkingChain.addCoordinationStep(
-                'Using multi-agent orchestrator',
-                { reasoning: complexity.reasoning },
-                0.9
-            );
-
-            // Update spinner for multi-agent mode
-            this.bus.emit({
-                type: 'status',
-                phase: 'thinking',
-                label: 'Planning multi-agent execution...'
             });
 
-            // Use orchestrator for complex requests
-            return this.orchestrator.executeWithPlan(userMessage);
-        }
+            if (complexity.needsMultiAgent && this.orchestrator) {
+                this.session.thinkingChain.addCoordinationStep(
+                    'Using multi-agent orchestrator',
+                    { reasoning: complexity.reasoning },
+                    0.9
+                );
 
-        // Simple requests: continue with single-agent flow
-        // AI SDK 6: Get agent bundle with approval-aware tools
-        const bundle = this.getAgentBundle(mode);
-
-        // Update spinner with detected mode
-        this.bus.emit({
-            type: 'status',
-            phase: 'thinking',
-            label: `[${mode}] Generating response...`
-        });
-
-        // AI SDK 6: Use bundle configuration with stopWhen
-        const result = streamText({
-            model: bundle.model as any,
-            system: bundle.instructions,
-            messages: this.session.messages,
-            tools: bundle.tools,
-            maxOutputTokens: this.config.maxTokens,
-            temperature: this.config.temperature,
-            abortSignal: options?.signal,
-            stopWhen: bundle.stopWhen,  // AI SDK handles the loop automatically
-            
-            // Thinking visibility via onStepFinish
-            // Note: Tool call/result events are emitted from the stream loop for real-time updates
-            // We only handle thinking chain and error tracking here to avoid duplicate events
-            onStepFinish: (step: StepResult<any>) => {
-                this.session.thinkingChain.onStepFinish(step);
-
-                // Track lint errors for mode detection (from tool results)
-                if (step.toolResults) {
-                    for (const toolResult of step.toolResults) {
-                        if (toolResult.toolName === 'lint_file') {
-                            const output = toolResult.output as { errors?: unknown[] } | null;
-                            if (output?.errors && Array.isArray(output.errors) && output.errors.length > 0) {
-                                this.session.hasErrors = true;
-                            }
-                        }
-                    }
-                }
-            },
-
-            // Error callback for stream errors (AI SDK v6)
-            onError: ({ error }) => {
-                this.bus.emit({
-                    type: 'error',
-                    message: error instanceof Error ? error.message : String(error)
-                });
-            },
-
-            // Abort callback for cleanup (AI SDK v6)
-            onAbort: ({ steps }) => {
+                // Update spinner for multi-agent mode
                 this.bus.emit({
                     type: 'status',
                     phase: 'thinking',
-                    label: `Aborted after ${steps.length} steps`
+                    label: 'Planning multi-agent execution...'
                 });
-            },
 
-            // Finish callback for token tracking (AI SDK v6)
-            // Enhanced with extended usage tracking
-            // Note: Tool approval is handled in tool executors via PolicyEngine (see tools.ts)
-            onFinish: ({ totalUsage, finishReason }) => {
-                lastUsage = totalUsage;
-                
-                // AI SDK 6: Extended usage tracking
-                // Store detailed token breakdown for cost optimization and debugging
-                if (totalUsage) {
-                    // Store extended usage details for agent_complete event
-                    (lastUsage as any).extended = {
-                        inputTokens: totalUsage.inputTokens,
-                        outputTokens: totalUsage.outputTokens,
-                        // Extended usage details (when available from provider)
-                        reasoningTokens: (totalUsage as any).outputTokenDetails?.reasoningTokens,
-                        textTokens: (totalUsage as any).outputTokenDetails?.textTokens,
-                        cachedTokens: (totalUsage as any).cachedTokens,
-                        finishReason: finishReason,
-                        // Raw provider usage for detailed analysis
-                        rawUsage: (totalUsage as any).raw
-                    };
+                // Use orchestrator for complex requests
+                return this.orchestrator.executeWithPlan(userMessage);
+            }
+
+            // Simple requests: continue with single-agent flow
+            // AI SDK 6: Get agent bundle with approval-aware tools
+            const bundle = this.getAgentBundle(mode);
+
+            // Inject context from MemoryService (token-budgeted project + knowledge context)
+            let systemPrompt = bundle.instructions;
+            if (this.memoryService) {
+                const contextInjection = this.memoryService.getContextForAI({
+                    query: userMessage  // Use user message as context hint for relevance filtering
+                });
+
+                if (contextInjection.totalTokens > 0) {
+                    const contextBlock = this.memoryService.getContextString({
+                        query: userMessage
+                    });
+
+                    if (contextBlock.trim()) {
+                        systemPrompt = `${bundle.instructions}
+
+<project_context>
+${contextBlock}
+</project_context>`;
+
+                        this.bus.emit({
+                            type: 'status',
+                            phase: 'thinking',
+                            label: `Injected ${contextInjection.totalTokens} tokens of context`
+                        });
+                    }
                 }
             }
-        });
 
-        let fullResponse = '';
-        
-        // Process the stream for all event types (AI SDK 6)
-        for await (const part of result.fullStream) {
-            if (options?.signal?.aborted) {
-                throw new Error('Aborted');
-            }
+            // Update spinner with detected mode
+            this.bus.emit({
+                type: 'status',
+                phase: 'thinking',
+                label: `[${mode}] Generating response...`
+            });
 
-            switch (part.type) {
-                case 'text-delta':
-                    fullResponse += part.text;
-                    this.bus.emit({
-                        type: 'token',
-                        text: part.text
-                    });
-                    break;
-                
-                case 'tool-call':
-                    // AI SDK 6: Emit tool call event from stream (uses 'input' not 'args')
-                    this.bus.emit({
-                        type: 'tool_call',
-                        tool: part.toolName,
-                        argsSummary: this.summarizeArgs(part.input),
-                        args: part.input as Record<string, unknown>
-                    });
-                    options?.onToolCall?.(part.toolName, part.input);
-                    break;
-                
-                case 'tool-result':
-                    // AI SDK 6: Emit tool result event from stream (uses 'output' not 'result')
-                    const streamHasError = part.output && typeof part.output === 'object' && 
-                                    part.output !== null && 'error' in part.output;
-                    this.bus.emit({
-                        type: 'tool_result',
-                        tool: part.toolName,
-                        ok: !streamHasError,
-                        summary: this.summarizeResult(part.output),
-                        result: part.output
-                    });
-                    options?.onToolResult?.(part.toolName, part.output);
-                    
-                    // Track lint errors for mode detection
-                    if (part.toolName === 'lint_file') {
-                        const lintResult = part.output as { errors?: unknown[] } | null;
-                        if (lintResult?.errors && Array.isArray(lintResult.errors) && lintResult.errors.length > 0) {
-                            this.session.hasErrors = true;
+            // AI SDK 6: Use bundle configuration with stopWhen
+            const result = streamText({
+                model: bundle.model as any,
+                system: systemPrompt,
+                messages: this.session.messages,
+                tools: bundle.tools,
+                maxOutputTokens: this.config.maxTokens,
+                temperature: this.config.temperature,
+                abortSignal: options?.signal,
+                stopWhen: bundle.stopWhen,  // AI SDK handles the loop automatically
+
+                // Thinking visibility via onStepFinish
+                // Note: Tool call/result events are emitted from the stream loop for real-time updates
+                // We only handle thinking chain and error tracking here to avoid duplicate events
+                onStepFinish: (step: StepResult<any>) => {
+                    this.session.thinkingChain.onStepFinish(step);
+
+                    // Track lint errors for mode detection (from tool results)
+                    if (step.toolResults) {
+                        for (const toolResult of step.toolResults) {
+                            if (toolResult.toolName === 'lint_file') {
+                                const output = toolResult.output as { errors?: unknown[] } | null;
+                                if (output?.errors && Array.isArray(output.errors) && output.errors.length > 0) {
+                                    this.session.hasErrors = true;
+                                }
+                            }
                         }
                     }
-                    break;
+                },
 
-                // Handle error stream parts (AI SDK v6)
-                case 'error': {
-                    const errorMsg = (part as any).error instanceof Error
-                        ? (part as any).error.message
-                        : String((part as any).error);
+                // Error callback for stream errors (AI SDK v6)
+                onError: ({ error }) => {
                     this.bus.emit({
                         type: 'error',
-                        message: `Stream error: ${errorMsg}`
+                        message: error instanceof Error ? error.message : String(error)
                     });
-                    break;
-                }
+                },
 
-                // Handle tool errors (AI SDK v6)
-                case 'tool-error': {
-                    const toolError = part as any;
-                    const errorMsg = toolError.error instanceof Error
-                        ? toolError.error.message
-                        : String(toolError.error);
-                    this.bus.emit({
-                        type: 'error',
-                        message: `Tool ${toolError.toolName} failed: ${errorMsg}`
-                    });
-                    break;
-                }
-
-                // Handle abort (AI SDK v6)
-                case 'abort':
+                // Abort callback for cleanup (AI SDK v6)
+                onAbort: ({ steps }) => {
                     this.bus.emit({
                         type: 'status',
                         phase: 'thinking',
-                        label: 'Stream aborted'
+                        label: `Aborted after ${steps.length} steps`
                     });
-                    break;
-            }
-        }
+                },
 
-        // Get final result
-        const finalResult = await result;
-        const textContent = await finalResult.text;
-        
-        if (textContent && textContent.trim()) {
-            fullResponse = textContent;
-            this.session.messages.push({
-                role: 'assistant',
-                content: textContent
+                // Finish callback for token tracking (AI SDK v6)
+                // Enhanced with extended usage tracking
+                // Note: Tool approval is handled in tool executors via PolicyEngine (see tools.ts)
+                onFinish: ({ totalUsage, finishReason }) => {
+                    lastUsage = totalUsage;
+
+                    // AI SDK 6: Extended usage tracking
+                    // Store detailed token breakdown for cost optimization and debugging
+                    if (totalUsage) {
+                        // Store extended usage details for agent_complete event
+                        (lastUsage as any).extended = {
+                            inputTokens: totalUsage.inputTokens,
+                            outputTokens: totalUsage.outputTokens,
+                            // Extended usage details (when available from provider)
+                            reasoningTokens: (totalUsage as any).outputTokenDetails?.reasoningTokens,
+                            textTokens: (totalUsage as any).outputTokenDetails?.textTokens,
+                            cachedTokens: (totalUsage as any).cachedTokens,
+                            finishReason: finishReason,
+                            // Raw provider usage for detailed analysis
+                            rawUsage: (totalUsage as any).raw
+                        };
+                    }
+                }
             });
-        }
-        
-        // Update tool call count from final result
-        const steps = await finalResult.steps;
-        if (steps) {
-            this.session.toolCallCount += steps.length;
-        }
 
-        this.bus.emit({ type: 'token_done' });
+            let fullResponse = '';
 
-        // Emit agent lifecycle complete with token usage
-        // AI SDK 6: Include extended usage details when available
-        const extendedUsage = (lastUsage as any)?.extended;
-        this.bus.emit({
-            type: 'agent_complete',
-            agentName: 'gateflow',
-            success: true,
-            durationMs: Date.now() - agentStartTime,
-            inputTokens: lastUsage?.inputTokens,
-            outputTokens: lastUsage?.outputTokens,
-            // Extended usage details (AI SDK 6)
-            reasoningTokens: extendedUsage?.reasoningTokens,
-            textTokens: extendedUsage?.textTokens,
-            cachedTokens: extendedUsage?.cachedTokens,
-            finishReason: extendedUsage?.finishReason,
-            rawUsage: extendedUsage?.rawUsage
-        });
+            // Process the stream for all event types (AI SDK 6)
+            for await (const part of result.fullStream) {
+                if (options?.signal?.aborted) {
+                    throw new Error('Aborted');
+                }
 
-        return fullResponse;
+                switch (part.type) {
+                    case 'text-delta':
+                        fullResponse += part.text;
+                        this.bus.emit({
+                            type: 'token',
+                            text: part.text
+                        });
+                        break;
+
+                    case 'tool-call':
+                        // AI SDK 6: Emit tool call event from stream (uses 'input' not 'args')
+                        this.bus.emit({
+                            type: 'tool_call',
+                            tool: part.toolName,
+                            argsSummary: this.summarizeArgs(part.input),
+                            args: part.input as Record<string, unknown>
+                        });
+                        options?.onToolCall?.(part.toolName, part.input);
+                        break;
+
+                    case 'tool-result':
+                        // AI SDK 6: Emit tool result event from stream (uses 'output' not 'result')
+                        const streamHasError = part.output && typeof part.output === 'object' &&
+                            part.output !== null && 'error' in part.output;
+                        this.bus.emit({
+                            type: 'tool_result',
+                            tool: part.toolName,
+                            ok: !streamHasError,
+                            summary: this.summarizeResult(part.output),
+                            result: part.output
+                        });
+                        options?.onToolResult?.(part.toolName, part.output);
+
+                        // Track lint errors for mode detection
+                        if (part.toolName === 'lint_file') {
+                            const lintResult = part.output as { errors?: unknown[] } | null;
+                            if (lintResult?.errors && Array.isArray(lintResult.errors) && lintResult.errors.length > 0) {
+                                this.session.hasErrors = true;
+                            }
+                        }
+                        break;
+
+                    // Handle error stream parts (AI SDK v6)
+                    case 'error': {
+                        const errorMsg = (part as any).error instanceof Error
+                            ? (part as any).error.message
+                            : String((part as any).error);
+                        this.bus.emit({
+                            type: 'error',
+                            message: `Stream error: ${errorMsg}`
+                        });
+                        break;
+                    }
+
+                    // Handle tool errors (AI SDK v6)
+                    case 'tool-error': {
+                        const toolError = part as any;
+                        const errorMsg = toolError.error instanceof Error
+                            ? toolError.error.message
+                            : String(toolError.error);
+                        this.bus.emit({
+                            type: 'error',
+                            message: `Tool ${toolError.toolName} failed: ${errorMsg}`
+                        });
+                        break;
+                    }
+
+                    // Handle abort (AI SDK v6)
+                    case 'abort':
+                        this.bus.emit({
+                            type: 'status',
+                            phase: 'thinking',
+                            label: 'Stream aborted'
+                        });
+                        break;
+                }
+            }
+
+            // Get final result
+            const finalResult = await result;
+            const textContent = await finalResult.text;
+
+            if (textContent && textContent.trim()) {
+                fullResponse = textContent;
+                this.session.messages.push({
+                    role: 'assistant',
+                    content: textContent
+                });
+            }
+
+            // Update tool call count from final result
+            const steps = await finalResult.steps;
+            if (steps) {
+                this.session.toolCallCount += steps.length;
+            }
+
+            this.bus.emit({ type: 'token_done' });
+
+            // Emit agent lifecycle complete with token usage
+            // AI SDK 6: Include extended usage details when available
+            const extendedUsage = (lastUsage as any)?.extended;
+            this.bus.emit({
+                type: 'agent_complete',
+                agentName: 'gateflow',
+                success: true,
+                durationMs: Date.now() - agentStartTime,
+                inputTokens: lastUsage?.inputTokens,
+                outputTokens: lastUsage?.outputTokens,
+                // Extended usage details (AI SDK 6)
+                reasoningTokens: extendedUsage?.reasoningTokens,
+                textTokens: extendedUsage?.textTokens,
+                cachedTokens: extendedUsage?.cachedTokens,
+                finishReason: extendedUsage?.finishReason,
+                rawUsage: extendedUsage?.rawUsage
+            });
+
+            return fullResponse;
 
         } catch (error) {
             // Emit error event
@@ -648,9 +679,9 @@ Return needsMultiAgent: true only for genuinely complex requests.`
 
     private summarizeArgs(args: unknown): string {
         if (!args || typeof args !== 'object') return '';
-        
+
         const obj = args as Record<string, unknown>;
-        
+
         // Common patterns
         if ('path' in obj) return String(obj.path);
         if ('directory' in obj) return String(obj.directory);
@@ -658,15 +689,15 @@ Return needsMultiAgent: true only for genuinely complex requests.`
         if ('module' in obj) return String(obj.module);
         if ('pattern' in obj) return String(obj.pattern);
         if ('top' in obj) return String(obj.top);
-        
+
         return Object.keys(obj).slice(0, 2).join(', ');
     }
 
     private summarizeResult(result: unknown): string {
         if (!result || typeof result !== 'object') return String(result);
-        
+
         const obj = result as Record<string, unknown>;
-        
+
         if ('error' in obj) return `Error: ${obj.error}`;
         // FIX E: Show stderr or meaningful error for simulation failures
         if ('success' in obj && obj.success === false) {
@@ -685,7 +716,7 @@ Return needsMultiAgent: true only for genuinely complex requests.`
         if ('errors' in obj && Array.isArray(obj.errors)) {
             return obj.errors.length === 0 ? 'Success' : `${obj.errors.length} errors`;
         }
-        
+
         return 'Done';
     }
 
@@ -734,7 +765,7 @@ Return needsMultiAgent: true only for genuinely complex requests.`
      */
     addContext(content: string): void {
         if (!content || !content.trim()) return;
-        
+
         this.session.messages.push({
             role: 'user',
             content: `[Context]: ${content.trim()}`
