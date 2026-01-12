@@ -10,6 +10,8 @@ import os from 'os';
 import type { EventBus } from '../events/index.js';
 import type { ApprovalGrant } from '../approval/index.js';
 import type { ChatHistoryFile, RelevantMessage } from '../context/types.js';
+import { AsyncMutex } from '../concurrency/index.js';
+import { estimateTokens } from './utils.js';
 
 // ============================================================================
 // Types
@@ -77,6 +79,10 @@ export class MemoryManager {
     private memoryPath: string;
     private lockPath: string;
     private lockAcquired: boolean = false;
+    private ioMutex = new AsyncMutex();
+    private dirty: boolean = false;
+    private saveTimeout: ReturnType<typeof setTimeout> | null = null;
+    private readonly SAVE_DEBOUNCE_MS = 5000;
 
     constructor(
         private projectRoot: string,
@@ -108,64 +114,82 @@ export class MemoryManager {
 
     /**
      * Load memory from disk
+     * Uses AsyncMutex for intra-process safety
      */
     async load(): Promise<ProjectMemory> {
-        // Ensure memory directory exists
-        await fs.mkdir(this.config.memoryDir, { recursive: true });
+        return this.ioMutex.withLock(async () => {
+            // Ensure memory directory exists
+            await fs.mkdir(this.config.memoryDir, { recursive: true });
 
-        try {
-            const content = await fs.readFile(this.memoryPath, 'utf-8');
-            this.memory = JSON.parse(content) as ProjectMemory;
-            
-            // Update last access
-            this.memory.lastAccess = Date.now();
-            
-            // Migrate if needed
-            this.memory = this.migrate(this.memory);
-            
-            return this.memory;
-        } catch (error) {
-            // Create new memory
-            this.memory = this.createDefaultMemory();
-            return this.memory;
-        }
+            try {
+                const content = await fs.readFile(this.memoryPath, 'utf-8');
+                this.memory = JSON.parse(content) as ProjectMemory;
+
+                // Update last access
+                this.memory.lastAccess = Date.now();
+
+                // Migrate if needed
+                this.memory = this.migrate(this.memory);
+
+                return this.memory;
+            } catch (error) {
+                // Create new memory
+                this.memory = this.createDefaultMemory();
+                return this.memory;
+            }
+        });
     }
 
     /**
      * Save memory to disk (atomic)
+     * Uses AsyncMutex for intra-process safety and file lock for inter-process safety
+     * Only writes if dirty flag is set
      */
     async save(): Promise<void> {
-        if (!this.memory) return;
+        return this.ioMutex.withLock(async () => {
+            if (!this.memory || !this.dirty) return;
 
-        // Atomic write: write to temp, then rename
-        const tempPath = `${this.memoryPath}.${Date.now()}.tmp`;
-
-        try {
-            await fs.writeFile(
-                tempPath,
-                JSON.stringify(this.memory, null, 2),
-                'utf-8'
-            );
-
-            // Rename (atomic on most filesystems)
-            await fs.rename(tempPath, this.memoryPath);
-
-            this.bus.emit({
-                type: 'memory_saved',
-                path: this.memoryPath,
-                size: JSON.stringify(this.memory).length
-            });
-
-        } catch (error) {
-            // Clean up temp file if it exists
-            try {
-                await fs.unlink(tempPath);
-            } catch {
-                // Temp file may not exist or already cleaned up - safe to ignore
+            // Acquire file lock for inter-process safety - MUST succeed
+            const acquired = await this.acquireLock();
+            if (!acquired) {
+                throw new Error(`Failed to acquire memory lock: ${this.lockPath}`);
             }
 
-            throw error;
-        }
+            try {
+                // Atomic write: write to temp, then rename
+                const tempPath = `${this.memoryPath}.${Date.now()}.tmp`;
+
+                try {
+                    await fs.writeFile(
+                        tempPath,
+                        JSON.stringify(this.memory, null, 2),
+                        'utf-8'
+                    );
+
+                    // Rename (atomic on most filesystems)
+                    await fs.rename(tempPath, this.memoryPath);
+                    this.dirty = false;
+
+                    this.bus.emit({
+                        type: 'memory_saved',
+                        path: this.memoryPath,
+                        size: JSON.stringify(this.memory).length
+                    });
+
+                } catch (error) {
+                    // Clean up temp file if it exists
+                    try {
+                        await fs.unlink(tempPath);
+                    } catch {
+                        // Temp file may not exist or already cleaned up - safe to ignore
+                    }
+
+                    throw error;
+                }
+            } finally {
+                await this.releaseLock();
+            }
+        });
     }
 
     // ========================================================================
@@ -221,6 +245,40 @@ export class MemoryManager {
     }
 
     /**
+     * Schedule a debounced save operation
+     * Prevents excessive writes when multiple mutations happen in quick succession
+     */
+    private scheduleSave(): void {
+        if (this.saveTimeout) return;  // Already scheduled
+
+        this.saveTimeout = setTimeout(async () => {
+            this.saveTimeout = null;
+            if (this.dirty) {
+                try {
+                    await this.save();
+                } catch (error) {
+                    // Log but don't throw - this is a background save
+                    console.error('Auto-save failed:', error);
+                }
+            }
+        }, this.SAVE_DEBOUNCE_MS);
+    }
+
+    /**
+     * Cancel any pending auto-save and save immediately if dirty
+     * Call this before process exit to ensure data is persisted
+     */
+    async flush(): Promise<void> {
+        if (this.saveTimeout) {
+            clearTimeout(this.saveTimeout);
+            this.saveTimeout = null;
+        }
+        if (this.dirty) {
+            await this.save();
+        }
+    }
+
+    /**
      * Check if lock is stale (process died)
      */
     private async isLockStale(): Promise<boolean> {
@@ -262,6 +320,32 @@ export class MemoryManager {
     }
 
     // ========================================================================
+    // Utilities
+    // ========================================================================
+
+    /**
+     * Sanitize a string for safe use in filenames
+     * - Replaces path separators and invalid characters
+     * - Limits length
+     * - Cross-platform safe (Windows + Unix)
+     */
+    private sanitizeForFilename(input: string, maxLength = 100): string {
+        return input
+            // Replace path separators
+            .replace(/[/\\]/g, '_')
+            // Remove or replace invalid chars (Windows: < > : " | ? *)
+            .replace(/[<>:"|?*]/g, '_')
+            // Replace control characters
+            .replace(/[\x00-\x1f\x7f]/g, '')
+            // Collapse multiple underscores
+            .replace(/_+/g, '_')
+            // Trim underscores from ends
+            .replace(/^_+|_+$/g, '')
+            // Limit length
+            .slice(0, maxLength);
+    }
+
+    // ========================================================================
     // Memory Operations
     // ========================================================================
 
@@ -282,6 +366,9 @@ export class MemoryManager {
         if (this.memory.history.length > this.config.maxHistory) {
             this.memory.history = this.memory.history.slice(0, this.config.maxHistory);
         }
+
+        this.dirty = true;
+        this.scheduleSave();
     }
 
     /**
@@ -290,6 +377,8 @@ export class MemoryManager {
     updateContext(updates: Partial<ProjectMemory['context']>): void {
         if (!this.memory) return;
         this.memory.context = { ...this.memory.context, ...updates };
+        this.dirty = true;
+        this.scheduleSave();
     }
 
     /**
@@ -299,7 +388,7 @@ export class MemoryManager {
         if (!this.memory) return;
 
         const relativePath = path.relative(this.projectRoot, filePath);
-        
+
         // Remove if already exists
         const existing = this.memory.context.recentFiles.indexOf(relativePath);
         if (existing > -1) {
@@ -313,6 +402,9 @@ export class MemoryManager {
         if (this.memory.context.recentFiles.length > 20) {
             this.memory.context.recentFiles = this.memory.context.recentFiles.slice(0, 20);
         }
+
+        this.dirty = true;
+        this.scheduleSave();
     }
 
     /**
@@ -321,6 +413,8 @@ export class MemoryManager {
     addModuleNote(moduleName: string, note: string): void {
         if (!this.memory) return;
         this.memory.context.moduleNotes[moduleName] = note;
+        this.dirty = true;
+        this.scheduleSave();
     }
 
     /**
@@ -336,6 +430,8 @@ export class MemoryManager {
     addApproval(approval: ApprovalGrant): void {
         if (!this.memory) return;
         this.memory.approvals.push(approval);
+        this.dirty = true;
+        this.scheduleSave();
     }
 
     /**
@@ -346,6 +442,8 @@ export class MemoryManager {
         this.memory.approvals = this.memory.approvals.filter(
             a => a.scope === 'project'
         );
+        this.dirty = true;
+        this.scheduleSave();
     }
 
     /**
@@ -466,26 +564,40 @@ export class MemoryManager {
         await fs.mkdir(archiveDir, { recursive: true });
 
         const timestamp = Date.now();
-        const filename = `${sessionId}-${timestamp}.json`;
+        // Sanitize sessionId to prevent path traversal and invalid filenames
+        const safeSessionId = this.sanitizeForFilename(sessionId);
+        const filename = `${safeSessionId}-${timestamp}.json`;
         const filePath = path.join(archiveDir, filename);
 
+        // Calculate turn numbers based on user message count (not message index)
+        // This correctly handles tool/system messages without breaking turn tracking
+        let turnCounter = 0;
         const archiveData = {
             sessionId,
             timestamp,
             summary,
             messageCount: messages.length,
-            messages: messages.map((m, i) => ({
-                turn: Math.floor(i / 2),
-                role: m.role,
-                content: m.content
-            }))
+            messages: messages.map((m, i) => {
+                // Increment turn on each user message (turn = completed exchanges)
+                if (m.role === 'user') {
+                    turnCounter++;
+                }
+                return {
+                    index: i,
+                    turn: turnCounter - 1, // 0-indexed: turn 0 starts at first user message
+                    role: m.role,
+                    content: m.content
+                };
+            })
         };
 
         await fs.writeFile(filePath, JSON.stringify(archiveData, null, 2), 'utf-8');
 
+        // Calculate actual turn count based on user messages
+        const userMessageCount = messages.filter(m => m.role === 'user').length;
         const result: ChatHistoryFile = {
             sessionId,
-            turnRange: { start: 0, end: Math.floor(messages.length / 2) },
+            turnRange: { start: 0, end: Math.max(0, userMessageCount - 1) },
             summary,
             filePath,
             timestamp
@@ -506,15 +618,17 @@ export class MemoryManager {
      *
      * @param sessionId Current session ID
      * @param messages All messages in the current conversation
-     * @param threshold Number of messages that triggers archiving (default from config)
-     * @param keepRecent Number of recent messages to keep (default from config)
+     * @param options Optional thresholds for triggering archive
      * @returns SummarizationResult with history reference if triggered
      */
     async triggerSummarization(
         sessionId: string,
         messages: Array<{ role: string; content: string }>,
-        threshold?: number,
-        keepRecent?: number
+        options?: {
+            tokenThreshold?: number;   // Approximate token threshold (chars/4)
+            messageThreshold?: number; // Message count threshold
+            keepRecent?: number;       // Recent messages to keep
+        }
     ): Promise<{
         triggered: boolean;
         historyRef?: {
@@ -529,11 +643,20 @@ export class MemoryManager {
         remainingMessages: Array<{ role: string; content: string }>;
         summary: string;
     }> {
-        const archiveThreshold = threshold ?? this.config.archiveThreshold;
-        const keepRecentCount = keepRecent ?? this.config.keepRecentMessages;
+        // Default thresholds
+        const tokenThreshold = options?.tokenThreshold ?? 8000;  // ~32K chars
+        const messageThreshold = options?.messageThreshold ?? this.config.archiveThreshold;
+        const keepRecentCount = options?.keepRecent ?? this.config.keepRecentMessages;
 
-        // Check if we need to archive
-        if (messages.length < archiveThreshold) {
+        // Estimate total tokens in the conversation
+        const estimatedTokensTotal = messages.reduce(
+            (sum, m) => sum + estimateTokens(m.content),
+            0
+        );
+
+        // Check if we need to archive (token-based OR message-based)
+        const shouldArchive = estimatedTokensTotal > tokenThreshold || messages.length >= messageThreshold;
+        if (!shouldArchive) {
             return {
                 triggered: false,
                 remainingMessages: messages,
@@ -568,11 +691,11 @@ Archive file: ${archiveResult.filePath}
 Archived messages: ${messagesToArchive.length} (turns ${archiveResult.turnRange.start}-${archiveResult.turnRange.end})
 Summary: ${summary}
 
-If you need details from the archived conversation, use the search_history tool:
-  search_history({ query: "what you're looking for" })
+To search the archived conversation, grep the archive file:
+  grep "pattern" ${archiveResult.filePath}
 
-You can also grep the archive file directly:
-  grep "pattern" ${archiveResult.filePath}`
+Or read the file directly for full context:
+  cat ${archiveResult.filePath} | jq '.messages[] | select(.content | test("pattern"))'`
         };
 
         this.bus.emit({
@@ -631,9 +754,12 @@ You can also grep the archive file directly:
             const queryLower = query.toLowerCase();
 
             for (const file of files) {
-                // Filter by session if specified
-                if (sessionId && !file.startsWith(sessionId)) {
-                    continue;
+                // Filter by session if specified (sanitize to match filename format)
+                if (sessionId) {
+                    const safeSessionId = this.sanitizeForFilename(sessionId);
+                    if (!file.startsWith(safeSessionId)) {
+                        continue;
+                    }
                 }
 
                 if (!file.endsWith('.json')) continue;
@@ -645,14 +771,10 @@ You can also grep the archive file directly:
                     );
                     const archive = JSON.parse(content);
 
-                    // Search through messages
+                    // Search through messages using improved relevance scoring
                     for (const msg of archive.messages) {
-                        const contentLower = msg.content.toLowerCase();
-                        if (contentLower.includes(queryLower)) {
-                            // Calculate simple relevance score
-                            const occurrences = (contentLower.match(new RegExp(queryLower, 'g')) || []).length;
-                            const relevance = Math.min(occurrences / 5, 1);
-
+                        const relevance = this.calculateRelevance(msg.content, query);
+                        if (relevance > 0) {
                             results.push({
                                 turnNumber: msg.turn,
                                 role: msg.role as 'user' | 'assistant',
@@ -688,9 +810,10 @@ You can also grep the archive file directly:
 
         try {
             const files = await fs.readdir(archiveDir);
+            const safeSessionId = this.sanitizeForFilename(sessionId);
 
             for (const file of files) {
-                if (!file.startsWith(sessionId) || !file.endsWith('.json')) continue;
+                if (!file.startsWith(safeSessionId) || !file.endsWith('.json')) continue;
 
                 const content = await fs.readFile(
                     path.join(archiveDir, file),
@@ -715,21 +838,29 @@ You can also grep the archive file directly:
     }
 
     /**
-     * List all archived sessions
+     * List all archived sessions, aggregated by sessionId.
+     * Returns one entry per session with:
+     * - Latest archive's summary and timestamp
+     * - Total message count across all archives for that session
+     * - Archive count showing how many archive files exist
      */
     async listArchivedSessions(): Promise<Array<{
         sessionId: string;
         timestamp: number;
         summary: string;
         messageCount: number;
+        archiveCount: number;
     }>> {
         const archiveDir = this.getArchiveDir();
-        const sessions: Array<{
+
+        // Aggregate by sessionId
+        const sessionMap = new Map<string, {
             sessionId: string;
-            timestamp: number;
-            summary: string;
-            messageCount: number;
-        }> = [];
+            latestTimestamp: number;
+            latestSummary: string;
+            totalMessages: number;
+            archiveCount: number;
+        }>();
 
         try {
             const files = await fs.readdir(archiveDir);
@@ -743,18 +874,42 @@ You can also grep the archive file directly:
                         'utf-8'
                     );
                     const archive = JSON.parse(content);
-                    sessions.push({
-                        sessionId: archive.sessionId,
-                        timestamp: archive.timestamp,
-                        summary: archive.summary,
-                        messageCount: archive.messageCount
-                    });
+                    const existing = sessionMap.get(archive.sessionId);
+
+                    if (existing) {
+                        // Update existing session entry
+                        existing.totalMessages += archive.messageCount || 0;
+                        existing.archiveCount++;
+                        // Keep the latest summary and timestamp
+                        if (archive.timestamp > existing.latestTimestamp) {
+                            existing.latestTimestamp = archive.timestamp;
+                            existing.latestSummary = archive.summary;
+                        }
+                    } else {
+                        // Create new session entry
+                        sessionMap.set(archive.sessionId, {
+                            sessionId: archive.sessionId,
+                            latestTimestamp: archive.timestamp,
+                            latestSummary: archive.summary,
+                            totalMessages: archive.messageCount || 0,
+                            archiveCount: 1
+                        });
+                    }
                 } catch {
                     // Skip unreadable files
                 }
             }
 
-            return sessions.sort((a, b) => b.timestamp - a.timestamp);
+            // Convert to array and sort by timestamp (newest first)
+            return Array.from(sessionMap.values())
+                .map(s => ({
+                    sessionId: s.sessionId,
+                    timestamp: s.latestTimestamp,
+                    summary: s.latestSummary,
+                    messageCount: s.totalMessages,
+                    archiveCount: s.archiveCount
+                }))
+                .sort((a, b) => b.timestamp - a.timestamp);
         } catch {
             return [];
         }
@@ -790,6 +945,49 @@ You can also grep the archive file directly:
         }
 
         return cleaned;
+    }
+
+    /**
+     * Calculate relevance score for search results
+     * Uses term frequency and position-based scoring
+     */
+    private calculateRelevance(content: string, query: string): number {
+        const contentLower = content.toLowerCase();
+        const queryLower = query.toLowerCase();
+
+        // Tokenize query into terms (filter short words)
+        const queryTerms = queryLower.split(/\s+/).filter(t => t.length > 2);
+        if (queryTerms.length === 0) {
+            // Fall back to exact match for short queries
+            return contentLower.includes(queryLower) ? 0.5 : 0;
+        }
+
+        let score = 0;
+
+        // Exact phrase match is highest value
+        if (contentLower.includes(queryLower)) {
+            score += 0.5;
+        }
+
+        // Score each term
+        for (const term of queryTerms) {
+            // Escape regex special chars
+            const escapedTerm = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const regex = new RegExp(escapedTerm, 'gi');
+            const matches = content.match(regex) || [];
+
+            // Term frequency contribution (capped)
+            score += Math.min(matches.length * 0.1, 0.3);
+
+            // Position bonus (earlier matches = more relevant)
+            const firstIndex = contentLower.indexOf(term);
+            if (firstIndex !== -1) {
+                score += (1 - firstIndex / content.length) * 0.1;
+            }
+        }
+
+        // Normalize by query term count
+        return Math.min(score / queryTerms.length, 1);
     }
 
     /**
