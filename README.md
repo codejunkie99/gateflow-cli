@@ -35,18 +35,18 @@ A production-grade CLI that brings AI-powered natural language interactions to S
 - **Code Generation**: Create synthesizable SystemVerilog modules, testbenches, and packages
 - **Project Indexing**: Fast module discovery, dependency analysis, and compilation order
 
-### 📊 **Waveform Analysis**
+### **Waveform Analysis**
 - **Terminal Viewer**: VCD waveform visualization directly in your terminal
 - **Web Viewer**: Full-featured browser-based waveform explorer
 - **MCP Integration**: Model Context Protocol server for waveform data access
 
-### 🛡️ **Production-Ready Safety**
+###  **Production-Ready Safety**
 - **Diff Preview System**: Visual diff for all file changes before applying
 - **Policy Engine**: Fine-grained approval controls for file operations
 - **Dry-Run Mode**: Preview changes without touching files
 - **Exit Code Standards**: Standardized error codes for CI/CD integration
 
-### 🌐 **Multi-Language Support** *(Roadmap)*
+###  **Multi-Language Support** *(Roadmap)*
 - SystemVerilog (current), Verilog, and VHDL support planned
 - Cross-language project analysis and dependency resolution
 
