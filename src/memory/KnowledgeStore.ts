@@ -8,15 +8,23 @@
  * - User preferences in code style
  * - Module relationships and dependencies
  *
- * Implements semantic retrieval for contextually relevant knowledge injection
- * into agent prompts.
+ * Implements keyword-based retrieval with:
+ * - Term frequency scoring on title, content, tags, and keywords
+ * - Scope-based filtering (fail-closed: scoped items require matching context)
+ * - Recency and usage boosting
+ * - Glob pattern matching for file scopes via picomatch
+ *
+ * Knowledge is injected into agent prompts based on current context.
  */
 
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import * as os from 'os';
+import picomatch from 'picomatch';
 import type { EventBus } from '../events/index.js';
+import { AsyncMutex } from '../concurrency/index.js';
+import { estimateTokens } from './utils.js';
 
 // ============================================================================
 // Types
@@ -28,6 +36,13 @@ import type { EventBus } from '../events/index.js';
 export interface KnowledgeItem {
     /** Unique identifier */
     id: string;
+
+    /**
+     * Content-addressable fingerprint for duplicate detection.
+     * Computed from: type + normalized title + scope (modules/filePatterns).
+     * Two items with the same fingerprint are considered duplicates.
+     */
+    fingerprint: string;
 
     /** Type of knowledge */
     type: KnowledgeType;
@@ -200,7 +215,7 @@ export interface KnowledgeIndex {
 // Default Configuration
 // ============================================================================
 
-export const DEFAULT_KNOWLEDGE_CONFIG: KnowledgeStoreConfig = {
+export const DEFAULT_KNOWLEDGE_STORE_CONFIG: KnowledgeStoreConfig = {
     knowledgeDir: path.join(os.homedir(), '.gateflow'),
     maxItems: 500,
     minExtractionConfidence: 0.6,
@@ -217,7 +232,13 @@ export class KnowledgeStore {
     private projectId: string;
     private index: KnowledgeIndex | null = null;
     private knowledgePath: string;
+    private lockPath: string;
     private dirty: boolean = false;
+    private ioMutex = new AsyncMutex();
+    private lockAcquired: boolean = false;
+    private saveTimeout: ReturnType<typeof setTimeout> | null = null;
+    private readonly SAVE_DEBOUNCE_MS = 5000;
+    private readonly LOCK_TIMEOUT_MS = 5000;
 
     constructor(
         private projectRoot: string,
@@ -231,10 +252,15 @@ export class KnowledgeStore {
             .digest('hex')
             .slice(0, 12);
 
-        this.config = { ...DEFAULT_KNOWLEDGE_CONFIG, ...config };
+        this.config = { ...DEFAULT_KNOWLEDGE_STORE_CONFIG, ...config };
         this.knowledgePath = path.join(
             this.config.knowledgeDir,
             `${this.projectId}-knowledge.json`
+        );
+        // Use same lock file as MemoryManager for coordinated access
+        this.lockPath = path.join(
+            this.config.knowledgeDir,
+            `${this.projectId}.lock`
         );
     }
 
@@ -244,55 +270,201 @@ export class KnowledgeStore {
 
     /**
      * Load knowledge index from disk
+     * Uses AsyncMutex for intra-process safety
      */
     async load(): Promise<KnowledgeIndex> {
-        await fs.mkdir(this.config.knowledgeDir, { recursive: true });
+        return this.ioMutex.withLock(async () => {
+            await fs.mkdir(this.config.knowledgeDir, { recursive: true });
 
-        try {
-            const content = await fs.readFile(this.knowledgePath, 'utf-8');
-            this.index = JSON.parse(content) as KnowledgeIndex;
-            this.index = this.migrate(this.index);
-            return this.index;
-        } catch {
-            // Create new index
-            this.index = this.createDefaultIndex();
-            return this.index;
+            try {
+                const content = await fs.readFile(this.knowledgePath, 'utf-8');
+                this.index = JSON.parse(content) as KnowledgeIndex;
+                this.index = this.migrate(this.index);
+
+                // Enforce maxUnusedAge to prune stale items
+                this.enforceMaxUnusedAge();
+
+                return this.index;
+            } catch {
+                // Create new index
+                this.index = this.createDefaultIndex();
+                return this.index;
+            }
+        });
+    }
+
+    /**
+     * Enforce maxUnusedAge by pruning items that haven't been accessed
+     * User-provided items are exempt from age-based pruning
+     */
+    private enforceMaxUnusedAge(): void {
+        if (!this.index) return;
+
+        const now = Date.now();
+        const maxAge = this.config.maxUnusedAge;
+        const before = this.index.items.length;
+
+        this.index.items = this.index.items.filter(item => {
+            const age = now - item.lastAccessed;
+            // Keep if: used recently OR user-provided (never auto-delete user input)
+            return age < maxAge || item.source.method === 'user_provided';
+        });
+
+        if (this.index.items.length < before) {
+            this.dirty = true;
+            const pruned = before - this.index.items.length;
+            this.bus.emit({
+                type: 'status',
+                phase: 'tool',
+                label: `Pruned ${pruned} stale knowledge items (unused > ${Math.floor(maxAge / (24 * 60 * 60 * 1000))} days)`
+            });
         }
     }
 
     /**
      * Save knowledge index to disk
+     * Uses AsyncMutex for intra-process safety and file lock for inter-process safety
      */
     async save(): Promise<void> {
-        if (!this.index || !this.dirty) return;
+        return this.ioMutex.withLock(async () => {
+            if (!this.index || !this.dirty) return;
 
-        // Update stats
-        this.updateStats();
-
-        // Atomic write
-        const tempPath = `${this.knowledgePath}.${Date.now()}.tmp`;
-
-        try {
-            await fs.writeFile(
-                tempPath,
-                JSON.stringify(this.index, null, 2),
-                'utf-8'
-            );
-            await fs.rename(tempPath, this.knowledgePath);
-            this.dirty = false;
-
-            this.bus.emit({
-                type: 'status',
-                phase: 'tool',
-                label: `Knowledge saved: ${this.index.items.length} items`
-            });
-        } catch (error) {
-            try {
-                await fs.unlink(tempPath);
-            } catch {
-                // Temp file cleanup
+            // Acquire file lock for inter-process safety - MUST succeed
+            const acquired = await this.acquireLock();
+            if (!acquired) {
+                throw new Error(`Failed to acquire knowledge lock: ${this.lockPath}`);
             }
-            throw error;
+
+            try {
+                // Update stats
+                this.updateStats();
+
+                // Atomic write
+                const tempPath = `${this.knowledgePath}.${Date.now()}.tmp`;
+
+                try {
+                    await fs.writeFile(
+                        tempPath,
+                        JSON.stringify(this.index, null, 2),
+                        'utf-8'
+                    );
+                    await fs.rename(tempPath, this.knowledgePath);
+                    this.dirty = false;
+
+                    this.bus.emit({
+                        type: 'status',
+                        phase: 'tool',
+                        label: `Knowledge saved: ${this.index.items.length} items`
+                    });
+                } catch (error) {
+                    try {
+                        await fs.unlink(tempPath);
+                    } catch {
+                        // Temp file cleanup
+                    }
+                    throw error;
+                }
+            } finally {
+                await this.releaseLock();
+            }
+        });
+    }
+
+    // ========================================================================
+    // File Locking (Inter-Process Safety)
+    // ========================================================================
+
+    /**
+     * Acquire lock for exclusive access
+     * Uses same lock file as MemoryManager for coordinated access
+     */
+    private async acquireLock(): Promise<boolean> {
+        const startTime = Date.now();
+
+        while (Date.now() - startTime < this.LOCK_TIMEOUT_MS) {
+            try {
+                // Try to create lock file (fails if exists)
+                await fs.writeFile(
+                    this.lockPath,
+                    JSON.stringify({ pid: process.pid, time: Date.now(), owner: 'knowledge' }),
+                    { flag: 'wx' }
+                );
+                this.lockAcquired = true;
+                return true;
+            } catch (error: unknown) {
+                if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+                    // Lock exists - check if stale
+                    if (await this.isLockStale()) {
+                        try {
+                            await fs.unlink(this.lockPath);
+                        } catch {
+                            // Another process may have removed it
+                        }
+                        continue;
+                    }
+                    // Wait and retry
+                    await new Promise(r => setTimeout(r, 100));
+                } else {
+                    throw error;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * Release lock
+     */
+    private async releaseLock(): Promise<void> {
+        if (this.lockAcquired) {
+            try {
+                await fs.unlink(this.lockPath);
+            } catch {
+                // Lock file may have been removed externally - safe to ignore
+            }
+            this.lockAcquired = false;
+        }
+    }
+
+    /**
+     * Check if lock is stale (process died)
+     */
+    private async isLockStale(): Promise<boolean> {
+        try {
+            const content = await fs.readFile(this.lockPath, 'utf-8');
+            const lock = JSON.parse(content);
+
+            // Consider stale if > 5 minutes old
+            if (Date.now() - lock.time > 5 * 60 * 1000) {
+                return true;
+            }
+
+            if (process.platform === 'win32') {
+                // Windows: Use tasklist to check if process exists
+                try {
+                    const { spawnSync } = await import('child_process');
+                    const result = spawnSync('tasklist', ['/FI', `PID eq ${lock.pid}`, '/NH'], {
+                        encoding: 'utf-8',
+                        timeout: 2000
+                    });
+                    // If PID not found, tasklist returns "INFO: No tasks..."
+                    return !result.stdout.includes(lock.pid.toString());
+                } catch {
+                    // If tasklist fails, fall back to time-based only
+                    return false;
+                }
+            } else {
+                // Unix: Use signal 0 test
+                try {
+                    process.kill(lock.pid, 0);
+                    return false; // Process exists
+                } catch {
+                    return true; // Process doesn't exist
+                }
+            }
+        } catch {
+            return true;
         }
     }
 
@@ -303,33 +475,38 @@ export class KnowledgeStore {
     /**
      * Add a new knowledge item
      */
-    addKnowledge(item: Omit<KnowledgeItem, 'id' | 'created' | 'updated' | 'useCount' | 'lastAccessed'>): KnowledgeItem {
+    addKnowledge(item: Omit<KnowledgeItem, 'id' | 'fingerprint' | 'created' | 'updated' | 'useCount' | 'lastAccessed'>): KnowledgeItem {
         if (!this.index) {
             throw new Error('KnowledgeStore not loaded');
         }
 
         const now = Date.now();
+
+        // Compute fingerprint from semantic identity: type + normalized title + scope
+        const fingerprint = this.computeFingerprint(item.type, item.title, item.scope);
+
+        // Check for duplicate by fingerprint (exact match)
+        const existing = this.findByFingerprint(fingerprint);
+        if (existing) {
+            // Merge with existing: update content but keep identity
+            existing.content = item.content;
+            existing.confidence = Math.max(existing.confidence, item.confidence);
+            existing.tags = [...new Set([...existing.tags, ...item.tags])];
+            existing.keywords = [...new Set([...existing.keywords, ...item.keywords])];
+            existing.updated = now;
+            this.dirty = true;
+            return existing;
+        }
+
         const knowledge: KnowledgeItem = {
             id: crypto.randomUUID(),
+            fingerprint,
             ...item,
             useCount: 0,
             lastAccessed: now,
             created: now,
             updated: now
         };
-
-        // Check for duplicates
-        const existing = this.findSimilar(knowledge);
-        if (existing) {
-            // Merge with existing
-            existing.content = knowledge.content;
-            existing.confidence = Math.max(existing.confidence, knowledge.confidence);
-            existing.tags = [...new Set([...existing.tags, ...knowledge.tags])];
-            existing.keywords = [...new Set([...existing.keywords, ...knowledge.keywords])];
-            existing.updated = now;
-            this.dirty = true;
-            return existing;
-        }
 
         // Enforce max items
         if (this.index.items.length >= this.config.maxItems) {
@@ -380,6 +557,7 @@ export class KnowledgeStore {
 
     /**
      * Mark knowledge as used (increments use count)
+     * Triggers debounced auto-save to persist usage tracking
      */
     markUsed(id: string): void {
         if (!this.index) return;
@@ -389,6 +567,41 @@ export class KnowledgeStore {
             item.useCount++;
             item.lastAccessed = Date.now();
             this.dirty = true;
+            this.scheduleSave();
+        }
+    }
+
+    /**
+     * Schedule a debounced save operation
+     * Prevents excessive writes when multiple markUsed calls happen in quick succession
+     */
+    private scheduleSave(): void {
+        if (this.saveTimeout) return;  // Already scheduled
+
+        this.saveTimeout = setTimeout(async () => {
+            this.saveTimeout = null;
+            if (this.dirty) {
+                try {
+                    await this.save();
+                } catch (error) {
+                    // Log but don't throw - this is a background save
+                    console.error('Auto-save failed:', error);
+                }
+            }
+        }, this.SAVE_DEBOUNCE_MS);
+    }
+
+    /**
+     * Cancel any pending auto-save and save immediately if dirty
+     * Call this before process exit to ensure data is persisted
+     */
+    async flush(): Promise<void> {
+        if (this.saveTimeout) {
+            clearTimeout(this.saveTimeout);
+            this.saveTimeout = null;
+        }
+        if (this.dirty) {
+            await this.save();
         }
     }
 
@@ -464,7 +677,7 @@ export class KnowledgeStore {
 
         for (const result of results) {
             const itemText = this.formatKnowledgeItem(result.item);
-            const itemTokens = Math.ceil(itemText.length / 4); // Rough estimate
+            const itemTokens = estimateTokens(itemText);
 
             if (estimatedTokens + itemTokens > maxTokens) break;
 
@@ -638,11 +851,19 @@ export class KnowledgeStore {
     }
 
     private migrate(index: KnowledgeIndex): KnowledgeIndex {
-        // Version migrations would go here
-        return {
+        const migrated = {
             ...this.createDefaultIndex(),
             ...index
         };
+
+        // Migration: Add fingerprints to items that don't have them
+        for (const item of migrated.items) {
+            if (!item.fingerprint) {
+                item.fingerprint = this.computeFingerprint(item.type, item.title, item.scope);
+            }
+        }
+
+        return migrated;
     }
 
     private updateStats(): void {
@@ -660,16 +881,53 @@ export class KnowledgeStore {
         };
     }
 
-    private findSimilar(item: KnowledgeItem): KnowledgeItem | undefined {
-        if (!this.index) return undefined;
+    /**
+     * Compute a content-addressable fingerprint for duplicate detection.
+     * The fingerprint captures semantic identity: type + normalized title + scope constraints.
+     * Items with the same fingerprint are considered duplicates regardless of content differences.
+     */
+    private computeFingerprint(type: KnowledgeType, title: string, scope: KnowledgeScope): string {
+        // Normalize title: lowercase, collapse whitespace, remove punctuation
+        const normalizedTitle = title
+            .toLowerCase()
+            .replace(/\s+/g, ' ')
+            .replace(/[^\w\s]/g, '')
+            .trim();
 
-        // Check for items with same type and very similar title
-        return this.index.items.find(existing =>
-            existing.type === item.type &&
-            this.stringSimilarity(existing.title, item.title) > 0.8
-        );
+        // Build scope identity (sorted for determinism)
+        const scopeParts: string[] = [];
+        if (scope.global) {
+            scopeParts.push('global');
+        }
+        if (scope.modules && scope.modules.length > 0) {
+            scopeParts.push(`modules:${[...scope.modules].sort().join(',')}`);
+        }
+        if (scope.filePatterns && scope.filePatterns.length > 0) {
+            scopeParts.push(`files:${[...scope.filePatterns].sort().join(',')}`);
+        }
+
+        const identity = `${type}|${normalizedTitle}|${scopeParts.join('|')}`;
+
+        // Hash to fixed-length fingerprint
+        return crypto
+            .createHash('sha256')
+            .update(identity)
+            .digest('hex')
+            .slice(0, 16);
     }
 
+    /**
+     * Find an existing item by fingerprint (exact match).
+     * This replaces fuzzy title matching for more reliable duplicate detection.
+     */
+    private findByFingerprint(fingerprint: string): KnowledgeItem | undefined {
+        if (!this.index) return undefined;
+        return this.index.items.find(item => item.fingerprint === fingerprint);
+    }
+
+    /**
+     * String similarity using Jaccard index (kept for potential future use)
+     */
     private stringSimilarity(a: string, b: string): number {
         const aLower = a.toLowerCase();
         const bLower = b.toLowerCase();
@@ -698,15 +956,20 @@ export class KnowledgeStore {
             return false;
         }
 
-        // Check module match
-        if (scope.modules && query.moduleName) {
-            if (!scope.modules.includes(query.moduleName)) {
+        // FAIL-CLOSED: If item is module-scoped but query has no module context, don't match
+        // This prevents module-scoped knowledge from leaking into global queries
+        if (scope.modules && scope.modules.length > 0) {
+            if (!query.moduleName || !scope.modules.includes(query.moduleName)) {
                 return false;
             }
         }
 
-        // Check file pattern match
-        if (scope.filePatterns && query.filePath) {
+        // FAIL-CLOSED: If item is file-scoped but query has no file context, don't match
+        // This prevents file-scoped knowledge from leaking into global queries
+        if (scope.filePatterns && scope.filePatterns.length > 0) {
+            if (!query.filePath) {
+                return false;
+            }
             const matches = scope.filePatterns.some(pattern =>
                 this.matchGlob(query.filePath!, pattern)
             );
@@ -716,14 +979,19 @@ export class KnowledgeStore {
         return true;
     }
 
+    /**
+     * Match a file path against a glob pattern using picomatch
+     * Normalizes path separators for cross-platform compatibility
+     */
     private matchGlob(filePath: string, pattern: string): boolean {
-        // Simple glob matching (just handles * and **)
-        const regex = pattern
-            .replace(/\*\*/g, '{{DOUBLE}}')
-            .replace(/\*/g, '[^/]*')
-            .replace(/{{DOUBLE}}/g, '.*');
+        // Normalize path separators for cross-platform (Windows uses \, Unix uses /)
+        const normalizedPath = filePath.replace(/\\/g, '/');
+        const normalizedPattern = pattern.replace(/\\/g, '/');
 
-        return new RegExp(`^${regex}$`).test(filePath);
+        return picomatch.isMatch(normalizedPath, normalizedPattern, {
+            dot: true,  // Match dotfiles
+            nocase: process.platform === 'win32'  // Case-insensitive on Windows
+        });
     }
 
     private scoreRelevance(item: KnowledgeItem, query: KnowledgeQuery): number {
