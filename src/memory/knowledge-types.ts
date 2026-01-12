@@ -328,9 +328,10 @@ export interface KnowledgeBaseConfig {
 }
 
 /**
- * Default configuration values
+ * Default configuration values for KnowledgeBase (Phase 3 pattern learning)
+ * Note: This is distinct from DEFAULT_KNOWLEDGE_STORE_CONFIG in KnowledgeStore.ts
  */
-export const DEFAULT_KNOWLEDGE_CONFIG: KnowledgeBaseConfig = {
+export const DEFAULT_KNOWLEDGE_BASE_CONFIG: KnowledgeBaseConfig = {
     decayRate: 0.05,
     minDecayAgeDays: 7,
     pruneThreshold: 0.1,

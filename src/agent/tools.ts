@@ -240,6 +240,12 @@ export const grepContextSchema = z.object({
     context: z.number().optional().default(2).describe('Lines of context around matches (default: 2)')
 });
 
+// JQ Context - Filter JSON context files using jq
+export const jqContextSchema = z.object({
+    filePath: z.string().describe('Path to the JSON context file'),
+    filter: z.string().describe('JQ filter string (e.g. ".messages[] | select(.role==\\"user\\")")')
+});
+
 // Tail Context - Read last N lines of a context file
 export const tailContextSchema = z.object({
     filePath: z.string().describe('Path to the context file'),
@@ -278,7 +284,7 @@ export const selectChunksSchema = z.object({
 export const searchKnowledgeSchema = z.object({
     query: z.string().describe('What to search for in learned knowledge'),
     types: z.array(z.enum(['code_pattern', 'lint_fix', 'test_pattern', 'module_info', 'dependency',
-                          'style_preference', 'workflow', 'debug_solution', 'tool_usage', 'project_context']))
+        'style_preference', 'workflow', 'debug_solution', 'tool_usage', 'project_context']))
         .optional().describe('Filter by knowledge type'),
     maxResults: z.number().optional().default(10).describe('Maximum results (default: 10)')
 });
@@ -341,7 +347,9 @@ export const TOOL_APPROVAL_CONFIG: Record<string, boolean> = {
     get_terminal_file_path: false,
 
     // Phase 2: Context Window Management - no approval (read-only)
+    // Phase 2: Context Window Management - no approval (read-only)
     grep_context: false,
+    jq_context: false,
     tail_context: false,
     head_context: false,
     list_context: false,
@@ -480,13 +488,13 @@ export function createToolExecutors(ctx: ToolContext) {
 
         list_files: async (args: z.infer<typeof listFilesSchema>) => {
             // Default to .sv files only
-            const extensions = args.extensions && args.extensions.length > 0 
-                ? args.extensions 
+            const extensions = args.extensions && args.extensions.length > 0
+                ? args.extensions
                 : ['.sv'];
-            
+
             // Resolve '.' to project root
             const directory = args.directory === '.' ? ctx.projectRoot : args.directory;
-            
+
             // Check if this directory should be skipped
             const excludeDirs = ['node_modules', 'dist', 'obj_dir', '.git', 'target', 'dist-electron'];
             const dirBasename = directory.split(/[\/\\]/).pop() || '';
@@ -498,7 +506,7 @@ export function createToolExecutors(ctx: ToolContext) {
                     note: 'Directory excluded from search'
                 };
             }
-            
+
             const result = await ctx.fileTools.listFiles(directory, {
                 extensions: extensions,
                 recursive: false  // Don't recurse - let agent control traversal
@@ -532,7 +540,7 @@ export function createToolExecutors(ctx: ToolContext) {
         search_code: async (args: z.infer<typeof searchCodeSchema>) => {
             // Default to searching only .sv files
             const filePattern = args.filePattern || '**/*.sv';
-            
+
             const result = await ctx.fileTools.searchCode(args.pattern, {
                 rootPath: ctx.projectRoot,
                 filePattern: filePattern,
@@ -560,7 +568,7 @@ export function createToolExecutors(ctx: ToolContext) {
 
         find_module: async (args: z.infer<typeof findModuleSchema>) => {
             const module = ctx.indexer.findModule(args.name);
-            
+
             if (!module) {
                 return { error: `Module '${args.name}' not found in index` };
             }
@@ -1245,9 +1253,9 @@ export function createToolExecutors(ctx: ToolContext) {
                     content,
                     lines,
                     readMode: args.head ? `head ${args.head}` :
-                              args.tail ? `tail ${args.tail}` :
-                              args.startLine ? `range ${args.startLine}-${args.endLine || 'end'}` :
-                              'full'
+                        args.tail ? `tail ${args.tail}` :
+                            args.startLine ? `range ${args.startLine}-${args.endLine || 'end'}` :
+                                'full'
                 };
             } catch (err) {
                 return { error: `Failed to read context output: ${err}` };
@@ -1888,6 +1896,24 @@ export function createToolExecutors(ctx: ToolContext) {
             }
         },
 
+        // JQ on context file
+        jq_context: async (args: z.infer<typeof jqContextSchema>) => {
+            if (!ctx.dynamicContextManager) {
+                return { error: 'Dynamic context manager not configured' };
+            }
+
+            try {
+                const result = await ctx.dynamicContextManager.jq(args.filePath, args.filter);
+                return {
+                    filePath: args.filePath,
+                    filter: args.filter,
+                    result
+                };
+            } catch (err) {
+                return { error: `Failed to jq context: ${err}` };
+            }
+        },
+
         // Read last N lines of a context file (Cursor's tail pattern)
         tail_context: async (args: z.infer<typeof tailContextSchema>) => {
             if (!ctx.dynamicContextManager) {
@@ -2295,6 +2321,24 @@ export function getToolSpecs(): Record<string, ToolSpec> {
             description: 'Open an interactive terminal-based waveform viewer for a VCD file. Supports keyboard navigation, zoom, pan, and signal inspection. Blocks until the viewer is closed.',
             parameters: openWaveformSchema,
             needsApproval: TOOL_APPROVAL_CONFIG.open_waveform
+        },
+        // IMPORTANT: analyze_waveform is here but implementation was truncated in view. Assuming it exists.
+
+        // Context Tools
+        grep_context: {
+            description: 'Search through context files (tool outputs, history, logs) using regex patterns.',
+            parameters: grepContextSchema,
+            needsApproval: TOOL_APPROVAL_CONFIG.grep_context
+        },
+        jq_context: {
+            description: 'Filter JSON context files using JQ syntax. Falls back to simple parsing if JQ is missing.',
+            parameters: jqContextSchema,
+            needsApproval: TOOL_APPROVAL_CONFIG.jq_context
+        },
+        tail_context: {
+            description: 'Read the last N lines of a context file. Use to check if a process finished correctly.',
+            parameters: tailContextSchema,
+            needsApproval: TOOL_APPROVAL_CONFIG.tail_context
         },
         analyze_waveform: {
             description: 'Analyze a VCD waveform file from simulation. Detects clocks, checks for X/Z anomalies, and calculates signal coverage. Returns signal list, timing info, and analysis summary.',

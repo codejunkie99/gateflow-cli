@@ -12,7 +12,11 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
+import { exec } from 'node:child_process';
+import { promisify } from 'node:util';
 import type { EventBus } from '../events/bus.js';
+
+const execAsync = promisify(exec);
 
 // ============================================================================
 // Types
@@ -274,7 +278,7 @@ export class DynamicContextManager {
      */
     async writeHistoryFile(
         sessionId: string,
-        messages: Array<{ role: string; content: string; timestamp?: number; toolCalls?: Array<{ name: string }> }>
+        messages: Array<{ role: string; content: string; turn?: number; timestamp?: number; toolCalls?: Array<{ name: string; result?: string }> }>
     ): Promise<string> {
         await this.initialize();
 
@@ -434,6 +438,42 @@ export class DynamicContextManager {
         }
 
         return results;
+    }
+
+    /**
+     * Run jq on a context file
+     * Tries to use system jq, falls back to basic JSON parsing if unavailable
+     */
+    async jq(filePath: string, filter: string): Promise<string> {
+        const resolvedPath = await this.resolvePath(filePath);
+
+        // Try system jq first
+        try {
+            const { stdout } = await execAsync(`jq "${filter.replace(/"/g, '\\"')}" "${resolvedPath}"`);
+            return stdout;
+        } catch (error: any) {
+            // If jq command not found or invalid filter, fall back to simple JS
+            // Only support basic property access fallback: .foo.bar or .[].foo
+            if (error.code === 127 || error.message.includes('not found') || error.message.includes('not recognized')) { // 127 is command not found
+                try {
+                    const content = await fs.readFile(resolvedPath, 'utf-8');
+                    const data = JSON.parse(content);
+
+                    if (filter === '.') return JSON.stringify(data, null, 2);
+
+                    // Very basic fallback for .field access
+                    if (filter.match(/^\.[a-zA-Z0-9_]+$/)) {
+                        const field = filter.substring(1);
+                        return JSON.stringify(data?.[field], null, 2);
+                    }
+
+                    return "Error: System 'jq' not found and filter too complex for fallback. Please install jq.";
+                } catch {
+                    return "Error: Failed to parse file as JSON for fallback.";
+                }
+            }
+            throw new Error(`jq failed: ${error.message}`);
+        }
     }
 
     /**
