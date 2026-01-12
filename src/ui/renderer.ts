@@ -157,6 +157,9 @@ export class TerminalRenderer {
             case 'sim_progress':
                 this.handleSimProgress(event.stage, event.percent, event.message);
                 break;
+            case 'prereq_install_stage':
+                this.handlePrereqStage(event.prerequisite, event.stage, event.status, event.message);
+                break;
             case 'waveform_loaded':
                 this.handleWaveformLoaded(event.path, event.signalCount, event.timeRange);
                 break;
@@ -412,6 +415,35 @@ export class TerminalRenderer {
         const prefix = status === 'started' ? '>' : status === 'completed' ? '+' : '-';
         const color = status === 'failed' ? chalk.red : status === 'completed' ? chalk.blue : chalk.cyan;
         console.log(color(`${prefix} ${stage}${message ? ': ' + message : ''}`));
+    }
+
+    private handlePrereqStage(prereq: string, stage: string, status: string, message?: string): void {
+        // Map prerequisite names to display names
+        const prereqNames: Record<string, string> = {
+            git: 'Git',
+            cmake: 'CMake',
+            compiler: 'C++ Compiler'
+        };
+        const displayName = prereqNames[prereq] || prereq;
+
+        if (stage === 'checking') {
+            if (status === 'started') {
+                // Show inline status for checking
+                this.writeStatus(`Checking ${displayName}...`);
+            } else if (status === 'completed') {
+                this.clearStatus();
+                console.log(chalk.blue(`+ ${displayName}`) + (message ? chalk.gray(` (${message})`) : ''));
+            } else if (status === 'failed') {
+                this.clearStatus();
+                console.log(chalk.red(`- ${displayName}`) + (message ? chalk.gray(` (${message})`) : ''));
+            }
+        } else {
+            // For other stages (detecting, installing, verifying, manual)
+            const prefix = status === 'started' ? '>' : status === 'completed' ? '+' : '-';
+            const color = status === 'failed' ? chalk.red : status === 'completed' ? chalk.blue : chalk.cyan;
+            this.clearStatus();
+            console.log(color(`${prefix} ${displayName}: ${stage}`) + (message ? chalk.gray(` ${message}`) : ''));
+        }
     }
 
     private handleSimProgress(stage: string, percent: number, message: string): void {
