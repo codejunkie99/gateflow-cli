@@ -190,16 +190,9 @@ export class KnowledgeStore {
             } catch (error) {
                 // Bug 1.3 fix: Distinguish between error types
                 const errCode = (error as NodeJS.ErrnoException).code;
-                const errorType = error instanceof SyntaxError ? 'SyntaxError' : error instanceof Error ? error.constructor.name : 'Unknown';
-                // #region agent log
-                fetch('http://127.0.0.1:7243/ingest/b79cbb75-ec46-40ff-a534-714382803731',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'KnowledgeStore.ts:190',message:'Bug1.3: Load error caught',data:{errCode,errorType,errorMessage:error instanceof Error ? error.message : String(error),path:this.knowledgePath},timestamp:Date.now(),sessionId:'debug-session',runId:'verify-1.3',hypothesisId:'1.3'})}).catch(()=>{});
-                // #endregion
 
                 // Case 1: File doesn't exist - this is fine on first run
                 if (errCode === 'ENOENT') {
-                    // #region agent log
-                    fetch('http://127.0.0.1:7243/ingest/b79cbb75-ec46-40ff-a534-714382803731',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'KnowledgeStore.ts:195',message:'Bug1.3: ENOENT - File not found, creating default',data:{errCode,handledAs:'first-run',action:'create-default'},timestamp:Date.now(),sessionId:'debug-session',runId:'verify-1.3',hypothesisId:'1.3'})}).catch(()=>{});
-                    // #endregion
                     this.index = this.createDefaultIndex();
                     this.clearAllIndices();
                     return this.index;
@@ -207,9 +200,6 @@ export class KnowledgeStore {
 
                 // Case 2: Permission denied - user needs to fix this
                 if (errCode === 'EACCES' || errCode === 'EPERM') {
-                    // #region agent log
-                    fetch('http://127.0.0.1:7243/ingest/b79cbb75-ec46-40ff-a534-714382803731',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'KnowledgeStore.ts:202',message:'Bug1.3: Permission denied, throwing error',data:{errCode,handledAs:'permission-error',action:'throw'},timestamp:Date.now(),sessionId:'debug-session',runId:'verify-1.3',hypothesisId:'1.3'})}).catch(()=>{});
-                    // #endregion
                     console.error(
                         `KnowledgeStore: Permission denied reading ${this.knowledgePath}\n` +
                         `Please check file permissions.`
@@ -219,9 +209,6 @@ export class KnowledgeStore {
 
                 // Case 3: I/O error - disk problem
                 if (errCode === 'EIO' || errCode === 'EROFS') {
-                    // #region agent log
-                    fetch('http://127.0.0.1:7243/ingest/b79cbb75-ec46-40ff-a534-714382803731',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'KnowledgeStore.ts:211',message:'Bug1.3: I/O error, throwing error',data:{errCode,handledAs:'io-error',action:'throw'},timestamp:Date.now(),sessionId:'debug-session',runId:'verify-1.3',hypothesisId:'1.3'})}).catch(()=>{});
-                    // #endregion
                     console.error(
                         `KnowledgeStore: I/O error reading ${this.knowledgePath}\n` +
                         `Please check disk health.`
@@ -230,9 +217,6 @@ export class KnowledgeStore {
                 }
 
                 // Case 4: JSON parse error or schema error - file is corrupted
-                // #region agent log
-                fetch('http://127.0.0.1:7243/ingest/b79cbb75-ec46-40ff-a534-714382803731',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'KnowledgeStore.ts:219',message:'Bug1.3: Corruption detected, backing up and creating fresh',data:{errCode,errorType,handledAs:'corruption',action:'backup-and-reset'},timestamp:Date.now(),sessionId:'debug-session',runId:'verify-1.3',hypothesisId:'1.3'})}).catch(()=>{});
-                // #endregion
                 console.warn(
                     `KnowledgeStore: File corrupted or invalid at ${this.knowledgePath}\n` +
                     `Error: ${error instanceof Error ? error.message : 'Unknown error'}\n` +
@@ -407,10 +391,6 @@ export class KnowledgeStore {
         }
 
         // Bug 1.2 fix: Recalculate avgDocLength after removal
-        // #region agent log
-        const avgBefore = this.avgDocLength;
-        const removedDocLength = this.docLengths.get(item.id) || tokens.length;
-        // #endregion
         const n = this.docLengths.size;
         if (n > 0) {
             let totalLength = 0;
@@ -418,14 +398,8 @@ export class KnowledgeStore {
                 totalLength += len;
             }
             this.avgDocLength = totalLength / n;
-            // #region agent log
-            fetch('http://127.0.0.1:7243/ingest/b79cbb75-ec46-40ff-a534-714382803731',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'KnowledgeStore.ts:393',message:'Bug1.2: Recalculated avgDocLength after removal',data:{itemId:item.id,avgBefore,avgAfter:this.avgDocLength,removedDocLength,remainingItems:n,totalLength,calculated:totalLength/n,wasRecalculated:true},timestamp:Date.now(),sessionId:'debug-session',runId:'verify-1.2',hypothesisId:'1.2'})}).catch(()=>{});
-            // #endregion
         } else {
             this.avgDocLength = 0;
-            // #region agent log
-            fetch('http://127.0.0.1:7243/ingest/b79cbb75-ec46-40ff-a534-714382803731',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'KnowledgeStore.ts:402',message:'Bug1.2: Set avgDocLength to 0 (no items remaining)',data:{itemId:item.id,avgBefore,avgAfter:0,remainingItems:0,wasRecalculated:true},timestamp:Date.now(),sessionId:'debug-session',runId:'verify-1.2',hypothesisId:'1.2'})}).catch(()=>{});
-            // #endregion
         }
     }
 
@@ -455,21 +429,8 @@ export class KnowledgeStore {
                                    !this.arraysEqual(existing.tags, item.tags) ||
                                    !this.arraysEqual(existing.keywords, item.keywords);
 
-            // #region agent log
-            fetch('http://127.0.0.1:7243/ingest/b79cbb75-ec46-40ff-a534-714382803731',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'KnowledgeStore.ts:426',message:'Bug1.1: Checking content change',data:{itemId:existing.id,contentChanged,contentDiff:existing.content !== item.content,tagsDiff:!this.arraysEqual(existing.tags, item.tags),keywordsDiff:!this.arraysEqual(existing.keywords, item.keywords)},timestamp:Date.now(),sessionId:'debug-session',runId:'verify-1.1',hypothesisId:'1.1'})}).catch(()=>{});
-            // #endregion
-
             if (contentChanged) {
-                // #region agent log
-                const oldTokens = this.tokenize(existing);
-                const oldKeyword1InIndex = this.invertedIndex.get('keyword1')?.has(existing.id);
-                fetch('http://127.0.0.1:7243/ingest/b79cbb75-ec46-40ff-a534-714382803731',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'KnowledgeStore.ts:432',message:'Bug1.1: Removing from indices before update',data:{itemId:existing.id,oldContentLength:existing.content.length,oldTagsCount:existing.tags.length,oldKeywordsCount:existing.keywords.length,oldTokens:oldTokens.slice(0,10),keyword1InIndexBefore:oldKeyword1InIndex},timestamp:Date.now(),sessionId:'debug-session',runId:'verify-1.1',hypothesisId:'1.1'})}).catch(()=>{});
-                // #endregion
                 this.removeFromIndices(existing);
-                // #region agent log
-                const keyword1InIndexAfterRemove = this.invertedIndex.get('keyword1')?.has(existing.id);
-                fetch('http://127.0.0.1:7243/ingest/b79cbb75-ec46-40ff-a534-714382803731',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'KnowledgeStore.ts:434',message:'Bug1.1: After removeFromIndices',data:{itemId:existing.id,keyword1InIndexAfterRemove},timestamp:Date.now(),sessionId:'debug-session',runId:'verify-1.1',hypothesisId:'1.1'})}).catch(()=>{});
-                // #endregion
             }
 
             existing.content = item.content;
@@ -487,20 +448,7 @@ export class KnowledgeStore {
             existing.updated = now;
 
             if (contentChanged) {
-                // #region agent log
-                const newTokens = this.tokenize(existing);
-                fetch('http://127.0.0.1:7243/ingest/b79cbb75-ec46-40ff-a534-714382803731',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'KnowledgeStore.ts:442',message:'Bug1.1: Adding back to indices after update',data:{itemId:existing.id,newContentLength:existing.content.length,newTagsCount:existing.tags.length,newKeywordsCount:existing.keywords.length,newTokens:newTokens.slice(0,10),indicesRebuilt:true},timestamp:Date.now(),sessionId:'debug-session',runId:'verify-1.1',hypothesisId:'1.1'})}).catch(()=>{});
-                // #endregion
                 this.addToIndices(existing);
-                // #region agent log
-                const keyword1InIndexAfterAdd = this.invertedIndex.get('keyword1')?.has(existing.id);
-                const keyword2InIndexAfterAdd = this.invertedIndex.get('keyword2')?.has(existing.id);
-                fetch('http://127.0.0.1:7243/ingest/b79cbb75-ec46-40ff-a534-714382803731',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'KnowledgeStore.ts:450',message:'Bug1.1: After addToIndices',data:{itemId:existing.id,keyword1InIndexAfterAdd,keyword2InIndexAfterAdd},timestamp:Date.now(),sessionId:'debug-session',runId:'verify-1.1',hypothesisId:'1.1'})}).catch(()=>{});
-                // #endregion
-            } else {
-                // #region agent log
-                fetch('http://127.0.0.1:7243/ingest/b79cbb75-ec46-40ff-a534-714382803731',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'KnowledgeStore.ts:444',message:'Bug1.1: No content change, indices not rebuilt',data:{itemId:existing.id,indicesRebuilt:false},timestamp:Date.now(),sessionId:'debug-session',runId:'verify-1.1',hypothesisId:'1.1'})}).catch(()=>{});
-                // #endregion
             }
 
             this.dirty = true;
@@ -1432,19 +1380,10 @@ export class KnowledgeStore {
                     cacheAge < 1000;  // 1 second cache
 
                 if (cacheHit && this.lockCheckCache) {
-                    // #region agent log
-                    fetch('http://127.0.0.1:7243/ingest/b79cbb75-ec46-40ff-a534-714382803731',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'KnowledgeStore.ts:1374',message:'Bug1.4: Lock check cache HIT',data:{pid:lock.pid,cacheAge,isAlive:this.lockCheckCache.isAlive,usedCache:true},timestamp:Date.now(),sessionId:'debug-session',runId:'verify-1.4',hypothesisId:'1.4'})}).catch(()=>{});
-                    // #endregion
                     return !this.lockCheckCache.isAlive;
                 }
 
                 // Cache miss or expired - do the slow check
-                // #region agent log
-                const cacheMissReason = !this.lockCheckCache ? 'no-cache' : 
-                                       this.lockCheckCache.pid !== lock.pid ? 'pid-mismatch' : 
-                                       'cache-expired';
-                fetch('http://127.0.0.1:7243/ingest/b79cbb75-ec46-40ff-a534-714382803731',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'KnowledgeStore.ts:1377',message:'Bug1.4: Lock check cache MISS, doing slow check',data:{pid:lock.pid,cacheAge,cacheMissReason,usedCache:false},timestamp:Date.now(),sessionId:'debug-session',runId:'verify-1.4',hypothesisId:'1.4'})}).catch(()=>{});
-                // #endregion
                 const { spawnSync } = await import('child_process');
                 const result = spawnSync('tasklist', ['/FI', `PID eq ${lock.pid}`, '/NH'], {
                     encoding: 'utf-8',
@@ -1458,9 +1397,6 @@ export class KnowledgeStore {
                     isAlive,
                     time: Date.now()
                 };
-                // #region agent log
-                fetch('http://127.0.0.1:7243/ingest/b79cbb75-ec46-40ff-a534-714382803731',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'KnowledgeStore.ts:1390',message:'Bug1.4: Cached lock check result',data:{pid:lock.pid,isAlive,cacheTime:this.lockCheckCache.time},timestamp:Date.now(),sessionId:'debug-session',runId:'verify-1.4',hypothesisId:'1.4'})}).catch(()=>{});
-                // #endregion
 
                 return !isAlive;
             } else {
