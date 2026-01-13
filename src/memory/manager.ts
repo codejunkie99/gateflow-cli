@@ -297,25 +297,31 @@ export class MemoryManager {
             // Mark timeout as cleared immediately to prevent flush() from interfering
             this.saveTimeout = null;
             
-            // Check if flush() is already saving or if we're no longer dirty
-            // Use ioMutex to ensure atomic check-and-save
+            // Check flags atomically, then release mutex before calling save()
+            // (save() acquires its own mutex, so we can't hold it here - that would deadlock)
+            let shouldSave = false;
             await this.ioMutex.withLock(async () => {
                 // Double-check: dirty flag might have been cleared by flush()
                 // or another save, and saveInProgress prevents concurrent saves
-                if (!this.dirty || this.saveInProgress) {
-                    return;
+                if (this.dirty && !this.saveInProgress) {
+                    this.saveInProgress = true;
+                    shouldSave = true;
                 }
-                
-                this.saveInProgress = true;
+            });
+            
+            if (shouldSave) {
                 try {
                     await this.save();
                 } catch (error) {
                     // Log but don't throw - this is a background save
                     console.error('Auto-save failed:', error);
                 } finally {
-                    this.saveInProgress = false;
+                    // Release flag after save completes (save() handles its own mutex)
+                    await this.ioMutex.withLock(async () => {
+                        this.saveInProgress = false;
+                    });
                 }
-            });
+            }
         }, this.SAVE_DEBOUNCE_MS);
     }
 
@@ -341,7 +347,16 @@ export class MemoryManager {
     private async getStaleInfo(): Promise<{ isStale: boolean; content: string }> {
         try {
             const content = await fs.readFile(this.lockPath, 'utf-8');
-            const lock = JSON.parse(content);
+            
+            // Try to parse - if it fails, we still preserve content for TOCTOU check
+            let lock: { pid: number; time: number };
+            try {
+                lock = JSON.parse(content);
+            } catch (parseError) {
+                // Corrupted/partial JSON - can't determine staleness, but preserve content
+                // for TOCTOU verification (caller can check if file changed)
+                return { isStale: false, content };
+            }
 
             // Consider stale if > 5 minutes old
             if (Date.now() - lock.time > 5 * 60 * 1000) {
@@ -377,8 +392,8 @@ export class MemoryManager {
             if (error.code === 'ENOENT') {
                 return { isStale: true, content: '' };
             }
-            // For parse errors, permission issues, etc., be conservative
-            // to avoid exacerbating race conditions
+            // For permission issues, etc., be conservative
+            // Return empty content since we couldn't read it for TOCTOU check
             return { isStale: false, content: '' };
         }
     }
