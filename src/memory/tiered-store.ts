@@ -99,8 +99,8 @@ export class TieredKnowledgeStore {
         items: KnowledgeItem[],
         lookupFn: (id: string) => KnowledgeItem | undefined
     ): void {
-        if (!lookupFn) {
-            throw new Error('lookupFn is required for tiered store operation');
+        if (typeof lookupFn !== 'function') {
+            throw new Error('lookupFn must be a function for tiered store operation');
         }
         this.itemLookup = lookupFn;
         this.hotItems.clear();
@@ -173,10 +173,15 @@ export class TieredKnowledgeStore {
         // Note: We already verified item is not in hotItems, so promotion is needed
         if (meta.accessCount >= this.config.warmThreshold) {
             this.promoteToHot(id, item);
-            // Sync metadata tier in case it was stale
-            meta.tier = 'hot';
-            // Return from hot tier to ensure consistency
-            return this.hotItems.get(id) ?? item;
+            // Verify promotion succeeded - promoteToHot() may trigger demoteColdest()
+            // which could immediately demote this item if it has low relevance score
+            if (this.hotItems.has(id)) {
+                meta.tier = 'hot';
+                return this.hotItems.get(id)!;
+            }
+            // Promotion failed (immediately demoted), stay in warm tier
+            meta.tier = 'warm';
+            return item;
         } else if (meta.tier === 'cold') {
             // Promote cold to warm
             meta.tier = 'warm';
@@ -247,7 +252,8 @@ export class TieredKnowledgeStore {
             switch (meta.tier) {
                 case 'hot':
                     hotCount++;
-                    memoryUsage += meta.estimatedSize;
+                    // Hot tier: full item + metadata overhead
+                    memoryUsage += meta.estimatedSize + 100;
                     break;
                 case 'warm':
                     warmCount++;
@@ -302,16 +308,18 @@ export class TieredKnowledgeStore {
         const now = Date.now();
         const coldAgeMs = this.config.coldAgeDays * 24 * 60 * 60 * 1000;
 
-        // Score all items
+        // Score all items consistently using lookupFn for fair comparison
         const scored: Array<{ id: string; score: number; meta: ItemMetadata }> = [];
 
         for (const [id, meta] of this.metadata) {
-            const item = this.hotItems.get(id);
+            // Use lookupFn for all items to ensure consistent scoring
+            // (hot items from hotItems map, others loaded on demand)
+            const item = this.hotItems.get(id) ?? this.itemLookup?.(id);
             // Use Math.max(0, ...) to handle clock skew where lastAccessed could be in the future
             const daysSinceAccess = Math.max(0, (now - meta.lastAccessed) / (24 * 60 * 60 * 1000));
             const score = item
-                ? this.calculateRelevanceScore(item, now)
-                : meta.accessCount * 10 - daysSinceAccess;
+                ? this.calculateRelevanceScore(item, now) + meta.accessCount * 5
+                : meta.accessCount * 10 - daysSinceAccess;  // Fallback if lookup fails
             scored.push({ id, score, meta });
         }
 
@@ -401,6 +409,8 @@ export class TieredKnowledgeStore {
         const meta = this.metadata.get(id);
         if (meta) {
             meta.tier = 'hot';
+            // Recalculate size in case item content changed since initial load
+            meta.estimatedSize = this.estimateSize(item);
         }
 
         // May need to demote something
@@ -430,7 +440,9 @@ export class TieredKnowledgeStore {
             this.hotItems.delete(lowestId);
             const meta = this.metadata.get(lowestId);
             if (meta) {
-                meta.tier = 'warm';
+                // Classify based on age: recent items go to warm, old items go to cold
+                const coldAgeMs = this.config.coldAgeDays * 24 * 60 * 60 * 1000;
+                meta.tier = (now - meta.lastAccessed < coldAgeMs) ? 'warm' : 'cold';
             }
         }
     }

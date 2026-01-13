@@ -1340,10 +1340,33 @@ export class KnowledgeStore {
                 return true;
             } catch (e: unknown) {
                 if ((e as NodeJS.ErrnoException).code === 'EEXIST') {
-                    if (await this.isLockStale()) {
-                        try { await fs.unlink(this.lockPath); } catch { /* ignore */ }
-                        continue;
+                    // Lock exists - check if stale and get lock info for verification
+                    const staleInfo = await this.getStaleInfo();
+                    if (staleInfo.isStale) {
+                        // TOCTOU-safe: verify lock content hasn't changed before deleting
+                        try {
+                            // Re-read lock to verify it's the same one we checked
+                            const currentContent = await fs.readFile(this.lockPath, 'utf-8');
+                            if (currentContent === staleInfo.content) {
+                                // Same lock - safe to delete and acquire
+                                await fs.unlink(this.lockPath);
+                                await fs.writeFile(
+                                    this.lockPath,
+                                    JSON.stringify({ pid: process.pid, time: Date.now() }),
+                                    { flag: 'wx' }
+                                );
+                                this.lockAcquired = true;
+                                return true;
+                            }
+                            // Lock changed - another process replaced it, retry
+                        } catch (innerError: any) {
+                            // Another process got it first - continue retrying
+                            if (innerError.code !== 'EEXIST' && innerError.code !== 'ENOENT') {
+                                throw innerError;
+                            }
+                        }
                     }
+                    // Wait and retry
                     await new Promise(r => setTimeout(r, 100));
                 } else {
                     throw e;
@@ -1361,14 +1384,28 @@ export class KnowledgeStore {
         }
     }
 
-    private async isLockStale(): Promise<boolean> {
+    /**
+     * Get stale lock info for TOCTOU-safe deletion.
+     * Returns both staleness status AND original content for verification.
+     * This allows the caller to verify the lock hasn't changed before deleting.
+     */
+    private async getStaleInfo(): Promise<{ isStale: boolean; content: string }> {
         try {
             const content = await fs.readFile(this.lockPath, 'utf-8');
-            const lock = JSON.parse(content);
+            
+            // Try to parse - if it fails, we still preserve content for TOCTOU check
+            let lock: { pid: number; time: number };
+            try {
+                lock = JSON.parse(content);
+            } catch (parseError) {
+                // Corrupted/partial JSON - can't determine staleness, but preserve content
+                // for TOCTOU verification (caller can check if file changed)
+                return { isStale: false, content };
+            }
 
             // Time-based check (5 minutes)
             if (Date.now() - lock.time > 5 * 60 * 1000) {
-                return true;
+                return { isStale: true, content };
             }
 
             // Bug 1.4 fix: Cache Windows lock check result
@@ -1380,7 +1417,8 @@ export class KnowledgeStore {
                     cacheAge < 1000;  // 1 second cache
 
                 if (cacheHit && this.lockCheckCache) {
-                    return !this.lockCheckCache.isAlive;
+                    const isStale = !this.lockCheckCache.isAlive;
+                    return { isStale, content };
                 }
 
                 // Cache miss or expired - do the slow check
@@ -1398,18 +1436,24 @@ export class KnowledgeStore {
                     time: Date.now()
                 };
 
-                return !isAlive;
+                return { isStale: !isAlive, content };
             } else {
                 // Unix: Fast signal check, no caching needed
                 try {
                     process.kill(lock.pid, 0);
-                    return false;
+                    return { isStale: false, content }; // Process exists
                 } catch {
-                    return true;
+                    return { isStale: true, content }; // Process doesn't exist
                 }
             }
-        } catch {
-            return true;
+        } catch (error: any) {
+            // Only consider stale if file doesn't exist (already deleted)
+            if (error.code === 'ENOENT') {
+                return { isStale: true, content: '' };
+            }
+            // For permission issues, etc., be conservative
+            // Return empty content since we couldn't read it for TOCTOU check
+            return { isStale: false, content: '' };
         }
     }
 
@@ -1467,3 +1511,4 @@ export function createKnowledgeStore(
 export function setGlobalKnowledgeStore(store: KnowledgeStore): void {
     globalStore = store;
 }
+
