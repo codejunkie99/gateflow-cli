@@ -32,7 +32,8 @@ export type StatusPhase =
     | 'setup'
     | 'downloading'
     | 'extracting'
-    | 'executing';
+    | 'executing'
+    | 'memory';
 
 export interface StatusEvent {
     type: 'status';
