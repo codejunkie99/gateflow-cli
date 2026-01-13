@@ -149,7 +149,13 @@ export async function setupContext(options: GlobalOptions): Promise<CommandConte
 
     // Unified memory service for persistent context, knowledge, and token budgeting
     const memoryService = createMemoryService(projectRoot, bus, {
-        contextTokenBudget: 2000  // Token budget for AI context injection
+        contextTokenBudget: 2000,  // Token budget for AI context injection
+        tiering: {
+            hotSize: 100,          // Keep 100 frequently-accessed items in memory
+            warmThreshold: 3,      // Promote to hot after 3 accesses
+            coldAgeDays: 30,       // Demote to cold after 30 days unused
+            enabled: true
+        }
     });
     await memoryService.initialize();
 
