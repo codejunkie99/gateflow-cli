@@ -250,6 +250,11 @@ export function truncateToFit(
     budget: number,
     config: Partial<TokenConfig> = {}
 ): string {
+    // Validate budget
+    if (budget <= 0) {
+        return '';
+    }
+
     if (fitsInBudget(text, budget, config)) {
         return text;
     }
@@ -261,7 +266,13 @@ export function truncateToFit(
     const suffixTokens = estimateTokens(suffix, config).tokens;
     const effectiveBudget = budget - suffixTokens;
 
-    while (high - low > 10) {
+    // Handle edge case where suffix alone exceeds budget
+    if (effectiveBudget <= 0) {
+        return suffix;
+    }
+
+    // Binary search with 1-character precision for accurate budget enforcement
+    while (high - low > 1) {
         const mid = Math.floor((low + high) / 2);
         const testText = text.slice(0, mid);
         if (estimateTokens(testText, config).tokens <= effectiveBudget) {
@@ -271,13 +282,19 @@ export function truncateToFit(
         }
     }
 
-    // Find a clean break point (newline or space)
+    // Find a clean break point (newline or space) searching backward
     let breakPoint = low;
     for (let i = low; i > Math.max(0, low - 100); i--) {
         if (text[i] === '\n' || text[i] === ' ') {
             breakPoint = i;
             break;
         }
+    }
+
+    // Final validation: ensure break point still fits within budget
+    // (searching backward should always be safe, but validate for robustness)
+    if (estimateTokens(text.slice(0, breakPoint), config).tokens > effectiveBudget) {
+        breakPoint = low;
     }
 
     return text.slice(0, breakPoint) + suffix;
