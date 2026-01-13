@@ -99,6 +99,9 @@ export class TieredKnowledgeStore {
         items: KnowledgeItem[],
         lookupFn: (id: string) => KnowledgeItem | undefined
     ): void {
+        if (!lookupFn) {
+            throw new Error('lookupFn is required for tiered store operation');
+        }
         this.itemLookup = lookupFn;
         this.hotItems.clear();
         this.metadata.clear();
@@ -167,8 +170,13 @@ export class TieredKnowledgeStore {
         if (!item) return undefined;
 
         // Promote based on access pattern
+        // Note: We already verified item is not in hotItems, so promotion is needed
         if (meta.accessCount >= this.config.warmThreshold) {
             this.promoteToHot(id, item);
+            // Sync metadata tier in case it was stale
+            meta.tier = 'hot';
+            // Return from hot tier to ensure consistency
+            return this.hotItems.get(id) ?? item;
         } else if (meta.tier === 'cold') {
             // Promote cold to warm
             meta.tier = 'warm';
@@ -183,9 +191,9 @@ export class TieredKnowledgeStore {
      * @param item Item to add
      */
     addItem(item: KnowledgeItem): void {
-        // New items always start hot
+        // New items always start hot with current timestamp for session tracking
         this.hotItems.set(item.id, item);
-        this.metadata.set(item.id, this.createMetadata(item, 'hot'));
+        this.metadata.set(item.id, this.createMetadata(item, 'hot', true));
 
         // Check if we need to demote
         if (this.hotItems.size > this.config.hotSize) {
@@ -204,15 +212,24 @@ export class TieredKnowledgeStore {
     }
 
     /**
-     * Mark an item as accessed
+     * Mark an item as accessed (and promote if threshold reached)
      *
      * @param id Item ID
      */
     markAccessed(id: string): void {
         const meta = this.metadata.get(id);
-        if (meta) {
-            meta.accessCount++;
-            meta.lastAccessed = Date.now();
+        if (!meta) return;
+
+        meta.accessCount++;
+        meta.lastAccessed = Date.now();
+
+        // Promote if threshold reached and not already hot
+        if (meta.accessCount >= this.config.warmThreshold && !this.hotItems.has(id)) {
+            const item = this.itemLookup?.(id);
+            if (item) {
+                this.promoteToHot(id, item);
+                meta.tier = 'hot';
+            }
         }
     }
 
@@ -290,9 +307,11 @@ export class TieredKnowledgeStore {
 
         for (const [id, meta] of this.metadata) {
             const item = this.hotItems.get(id);
+            // Use Math.max(0, ...) to handle clock skew where lastAccessed could be in the future
+            const daysSinceAccess = Math.max(0, (now - meta.lastAccessed) / (24 * 60 * 60 * 1000));
             const score = item
                 ? this.calculateRelevanceScore(item, now)
-                : meta.accessCount * 10 - ((now - meta.lastAccessed) / (24 * 60 * 60 * 1000));
+                : meta.accessCount * 10 - daysSinceAccess;
             scored.push({ id, score, meta });
         }
 
@@ -332,11 +351,18 @@ export class TieredKnowledgeStore {
     // Private Methods
     // ========================================================================
 
-    private createMetadata(item: KnowledgeItem, tier: 'hot' | 'warm' | 'cold'): ItemMetadata {
+    private createMetadata(
+        item: KnowledgeItem,
+        tier: 'hot' | 'warm' | 'cold',
+        useCurrentTime = false
+    ): ItemMetadata {
         return {
             id: item.id,
+            // Session-specific access count, starts at 0
             accessCount: 0,
-            lastAccessed: item.lastAccessed,
+            // Use item's historical lastAccessed for initialize() to preserve tier classification,
+            // but use current time for addItem() to track session access patterns
+            lastAccessed: useCurrentTime ? Date.now() : item.lastAccessed,
             tier,
             estimatedSize: this.estimateSize(item)
         };
@@ -358,7 +384,8 @@ export class TieredKnowledgeStore {
         score += Math.min(item.useCount * 5, 50);
 
         // Recency contributes (decay over time)
-        const daysSinceAccess = (now - item.lastAccessed) / (24 * 60 * 60 * 1000);
+        // Use Math.max(0, ...) to handle clock skew where lastAccessed could be in the future
+        const daysSinceAccess = Math.max(0, (now - item.lastAccessed) / (24 * 60 * 60 * 1000));
         score -= Math.min(daysSinceAccess, 30);
 
         // User-provided items get bonus
