@@ -7,6 +7,7 @@ import type { EventBus } from '../events/index.js';
 import type { Verilator, LintError, LintResult } from './verilator.js';
 import type { GateFlowAgent } from '../agent/core.js';
 import type { FileTools } from '../fileops/file.js';
+import type { KnowledgeStore } from '../memory/KnowledgeStore.js';
 import { getSystemPrompt } from '../agent/prompts.js';
 
 // ============================================================================
@@ -447,6 +448,268 @@ Please try a DIFFERENT approach than previous attempts.`;
             uniqueErrors: this.attemptMemory.size,
             successRate: total > 0 ? successful / total : 0
         };
+    }
+
+    // ========================================================================
+    // Knowledge Store Persistence
+    // ========================================================================
+
+    /**
+     * Persist fix attempt patterns to the knowledge store
+     *
+     * This should be called after a fix loop session completes.
+     * Patterns that have been seen multiple times are persisted for
+     * future reference and thrashing detection across sessions.
+     *
+     * @param knowledgeStore - KnowledgeStore instance to persist to
+     * @returns Number of patterns persisted
+     */
+    async persistAttemptMemory(knowledgeStore: KnowledgeStore): Promise<number> {
+        let persisted = 0;
+
+        for (const [signature, attempts] of this.attemptMemory) {
+            // Only persist patterns seen multiple times (more likely to be real patterns)
+            if (attempts.length < 2) {
+                continue;
+            }
+
+            // Calculate success metrics
+            const successful = attempts.filter(a => a.success);
+            const total = attempts.length;
+            const successRate = successful.length / total;
+
+            // Determine confidence based on success rate and sample size
+            const confidence = this.calculatePatternConfidence(successRate, total);
+
+            // Skip low-confidence patterns
+            if (confidence < 0.3) {
+                continue;
+            }
+
+            // Build knowledge item
+            const item = {
+                type: 'lint_fix' as const,
+                title: `Fix pattern: ${this.truncateSignature(signature)}`,
+                content: this.formatAttemptContent(signature, attempts, successful),
+                tags: this.buildPatternTags(signature, successRate),
+                keywords: this.extractKeywordsFromSignature(signature),
+                scope: {
+                    global: false,
+                    projectIds: [knowledgeStore.getProjectId()]
+                },
+                source: {
+                    method: 'tool_result' as const,
+                    tool: 'fix-loop'
+                },
+                confidence
+            };
+
+            try {
+                knowledgeStore.addKnowledge(item);
+                persisted++;
+            } catch (error) {
+                // Log but continue with other patterns
+                console.warn(
+                    `[FixLoop] Failed to persist pattern:`,
+                    error instanceof Error ? error.message : error
+                );
+            }
+        }
+
+        return persisted;
+    }
+
+    /**
+     * Load relevant historical patterns from knowledge store
+     *
+     * This pre-populates attemptMemory with patterns from previous
+     * sessions that may be relevant to the current file.
+     *
+     * @param knowledgeStore - KnowledgeStore to load from
+     * @param filePath - File being fixed (for relevance filtering)
+     */
+    async loadHistoricalPatterns(
+        knowledgeStore: KnowledgeStore,
+        filePath: string
+    ): Promise<number> {
+        const results = knowledgeStore.search({
+            types: ['lint_fix'],
+            filePath,
+            maxResults: 20,
+            minConfidence: 0.3
+        });
+
+        let loaded = 0;
+
+        for (const result of results) {
+            // Extract signature from title
+            const signatureMatch = result.item.title.match(/Fix pattern: (.+)/);
+            if (!signatureMatch) continue;
+
+            const signature = signatureMatch[1];
+
+            // Create a synthetic attempt from the stored pattern
+            // This is used for thrashing detection
+            if (!this.attemptMemory.has(signature)) {
+                this.attemptMemory.set(signature, [{
+                    errorSignature: signature,
+                    fix: 'historical',  // Marker for historical pattern
+                    success: result.item.tags.includes('high-success'),
+                    timestamp: result.item.lastAccessed
+                }]);
+                loaded++;
+            }
+        }
+
+        return loaded;
+    }
+
+    // ========================================================================
+    // Persistence Helper Methods
+    // ========================================================================
+
+    /**
+     * Calculate confidence score for a fix pattern
+     */
+    private calculatePatternConfidence(successRate: number, sampleSize: number): number {
+        // Base confidence from success rate
+        let confidence = successRate;
+
+        // Bonus for larger sample sizes (more reliable)
+        if (sampleSize >= 5) {
+            confidence += 0.1;
+        } else if (sampleSize >= 3) {
+            confidence += 0.05;
+        }
+
+        // Penalty for very low success rates
+        if (successRate < 0.2) {
+            confidence *= 0.5;  // Still useful to know what doesn't work
+        }
+
+        // Clamp to valid range
+        return Math.max(0, Math.min(1, confidence));
+    }
+
+    /**
+     * Truncate error signature for display
+     */
+    private truncateSignature(signature: string): string {
+        const maxLength = 60;
+        if (signature.length <= maxLength) {
+            return signature;
+        }
+        return signature.slice(0, maxLength - 3) + '...';
+    }
+
+    /**
+     * Format attempt history as human-readable content
+     */
+    private formatAttemptContent(
+        signature: string,
+        allAttempts: FixAttempt[],
+        successfulAttempts: FixAttempt[]
+    ): string {
+        const lines: string[] = [];
+
+        // Error description
+        lines.push(`Error: ${signature}`);
+        lines.push('');
+
+        // Success info
+        if (successfulAttempts.length > 0) {
+            lines.push(`Successful fix (${successfulAttempts.length}/${allAttempts.length} attempts):`);
+            lines.push('```');
+            // Show the most recent successful fix
+            const latestSuccess = successfulAttempts[successfulAttempts.length - 1];
+            lines.push(this.truncateFix(latestSuccess.fix));
+            lines.push('```');
+        } else {
+            lines.push(`No successful fix found after ${allAttempts.length} attempts.`);
+            lines.push('');
+            lines.push('Last attempted fix:');
+            lines.push('```');
+            const lastAttempt = allAttempts[allAttempts.length - 1];
+            lines.push(this.truncateFix(lastAttempt.fix));
+            lines.push('```');
+        }
+
+        // Attempt timeline (summarized)
+        lines.push('');
+        lines.push(`Attempt history: ${allAttempts.length} total, ${successfulAttempts.length} successful`);
+
+        return lines.join('\n');
+    }
+
+    /**
+     * Truncate fix description if too long
+     */
+    private truncateFix(fix: string): string {
+        const maxLength = 500;
+        if (fix.length <= maxLength) {
+            return fix;
+        }
+        return fix.slice(0, maxLength - 50) + '\n... (truncated, ' + (fix.length - maxLength + 50) + ' more chars)';
+    }
+
+    /**
+     * Build tags for the pattern based on characteristics
+     */
+    private buildPatternTags(signature: string, successRate: number): string[] {
+        const tags = ['lint', 'fix-pattern', 'namespace:logs'];
+
+        // Tag by success status
+        if (successRate >= 0.8) {
+            tags.push('high-success');
+        } else if (successRate >= 0.5) {
+            tags.push('medium-success');
+        } else if (successRate > 0) {
+            tags.push('low-success');
+        } else {
+            tags.push('no-success');
+        }
+
+        // Tag by error type (from signature)
+        const sig = signature.toLowerCase();
+        if (sig.includes('unused')) tags.push('unused');
+        if (sig.includes('undriven')) tags.push('undriven');
+        if (sig.includes('undeclared')) tags.push('undeclared');
+        if (sig.includes('width')) tags.push('width-mismatch');
+        if (sig.includes('type')) tags.push('type-error');
+        if (sig.includes('syntax')) tags.push('syntax-error');
+
+        return tags;
+    }
+
+    /**
+     * Extract search keywords from error signature
+     */
+    private extractKeywordsFromSignature(signature: string): string[] {
+        const keywords: string[] = [];
+
+        // HDL-related terms
+        const hdlTerms = signature.match(
+            /\b(module|interface|signal|wire|reg|logic|port|assign|always|process|clk|reset|rst)\b/gi
+        );
+        if (hdlTerms) {
+            keywords.push(...hdlTerms.map(t => t.toLowerCase()));
+        }
+
+        // Error type terms
+        const errorTerms = signature.match(
+            /\b(unused|undriven|undeclared|missing|syntax|type|width|mismatch)\b/gi
+        );
+        if (errorTerms) {
+            keywords.push(...errorTerms.map(t => t.toLowerCase()));
+        }
+
+        // Error code if present
+        const codeMatch = signature.match(/^([A-Z0-9_]+):/);
+        if (codeMatch) {
+            keywords.push(codeMatch[1].toLowerCase());
+        }
+
+        return [...new Set(keywords)];
     }
 }
 
