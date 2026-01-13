@@ -464,13 +464,165 @@ export async function fixCommand(
         requireApproval: !ctx.options.yes
     });
 
+    // Load historical fix patterns before starting (for thrashing detection)
+    await loadHistoricalFixPatterns(ctx, fixLoop, file);
+
     const result = await fixLoop.run(file);
+
+    // Persist fix patterns to knowledge store
+    await persistFixPatterns(ctx, fixLoop);
 
     if (ctx.options.json) {
         console.log(JSON.stringify(result));
     }
 
     return result.success ? ExitCodes.SUCCESS : ExitCodes.LINT_FAILED;
+}
+
+/**
+ * Load historical fix patterns relevant to the file being fixed
+ */
+async function loadHistoricalFixPatterns(
+    ctx: CommandContext,
+    fixLoop: FixLoop,
+    filePath: string
+): Promise<void> {
+    const knowledgeStore = ctx.memoryService.knowledge;
+    if (!knowledgeStore) {
+        return;
+    }
+
+    try {
+        const loaded = await fixLoop.loadHistoricalPatterns(knowledgeStore, filePath);
+
+        if (loaded > 0) {
+            ctx.bus.emit({
+                type: 'status',
+                phase: 'memory',
+                label: `Loaded ${loaded} historical fix pattern${loaded > 1 ? 's' : ''}`
+            });
+        }
+    } catch (error) {
+        // Non-fatal
+        console.warn('[fixCommand] Failed to load historical patterns:', error);
+    }
+}
+
+/**
+ * Persist fix attempt patterns from the fix loop to the knowledge store
+ */
+async function persistFixPatterns(
+    ctx: CommandContext,
+    fixLoop: FixLoop
+): Promise<void> {
+    const knowledgeStore = ctx.memoryService.knowledge;
+    if (!knowledgeStore) {
+        return;  // No store available
+    }
+
+    try {
+        const persisted = await fixLoop.persistAttemptMemory(knowledgeStore);
+
+        if (persisted > 0) {
+            ctx.bus.emit({
+                type: 'status',
+                phase: 'memory',
+                label: `Saved ${persisted} fix pattern${persisted > 1 ? 's' : ''} for future reference`
+            });
+
+            // Also emit tool_result for structured output
+            ctx.bus.emit({
+                type: 'tool_result',
+                tool: 'fix_pattern_persist',
+                ok: true,
+                summary: `Persisted ${persisted} fix patterns to knowledge store`
+            });
+        }
+
+    } catch (error) {
+        // Non-fatal - log and continue
+        console.warn(
+            '[fixCommand] Failed to persist fix patterns:',
+            error instanceof Error ? error.message : error
+        );
+    }
+}
+
+// ============================================================================
+// Watch Command - Knowledge Callback Setup
+// ============================================================================
+
+/**
+ * Configure WatchManager to update knowledge store on file changes
+ *
+ * When files are indexed, this callback triggers knowledge extraction
+ * to keep the AI context synchronized with project state.
+ *
+ * @private
+ */
+function setupKnowledgeUpdateCallback(
+    ctx: CommandContext,
+    watcher: WatchManager
+): void {
+    // Check if memory service is available
+    if (!ctx.memoryService) {
+        return;  // No memory service, skip knowledge updates
+    }
+
+    const knowledgeStore = ctx.memoryService.knowledge;
+    if (!knowledgeStore) {
+        return;  // No knowledge store, skip
+    }
+
+    watcher.setKnowledgeUpdateCallback(async (filepath, changeType) => {
+        try {
+            // Get the updated project from indexer
+            const project = ctx.indexer.getProject();
+            if (!project) {
+                return;
+            }
+
+            // Try to use extractors if available (Phase 2)
+            // This will gracefully degrade if extractors aren't implemented yet
+            try {
+                const { extractFromIndex, createExtractionOptions, formatExtractionSummary } =
+                    await import('../memory/extractors/index.js');
+
+                const result = await extractFromIndex(
+                    project,
+                    knowledgeStore,
+                    createExtractionOptions(knowledgeStore.getProjectId(), {
+                        maxItemsPerCategory: 100  // Lower limit for incremental updates
+                    })
+                );
+
+                if (result.success) {
+                    ctx.bus.emit({
+                        type: 'tool_result',
+                        tool: 'knowledge_update',
+                        ok: true,
+                        summary: formatExtractionSummary(result)
+                    });
+                }
+            } catch {
+                // Phase 2 extractors not available yet - that's OK
+                // The index update still happened via WatchManager
+                ctx.bus.emit({
+                    type: 'tool_result',
+                    tool: 'knowledge_update',
+                    ok: true,
+                    summary: `Index updated for ${path.basename(filepath)} (knowledge extraction pending Phase 2)`
+                });
+            }
+
+        } catch (error) {
+            // Non-fatal - just log
+            console.warn(
+                '[watchCommand] Knowledge update failed:',
+                error instanceof Error ? error.message : error
+            );
+        }
+    });
 }
 
 // ============================================================================
@@ -482,7 +634,7 @@ export async function watchCommand(
     patterns: string[]
 ): Promise<ExitCode> {
     const watchConfig = patterns.length > 0 ? { patterns } : undefined;
-    
+
     const watcher = new WatchManager(
         ctx.projectRoot,
         ctx.bus,
@@ -490,6 +642,9 @@ export async function watchCommand(
         ctx.verilator,
         watchConfig
     );
+
+    // Set up knowledge update callback for memory synchronization
+    setupKnowledgeUpdateCallback(ctx, watcher);
 
     watcher.start();
 

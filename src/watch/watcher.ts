@@ -30,6 +30,14 @@ export interface WatchConfig {
 
 export type WatchAction = 'lint' | 'index' | 'compile';
 
+/**
+ * Callback invoked after index is updated for knowledge store synchronization
+ */
+export type OnKnowledgeUpdate = (
+    filepath: string,
+    changeType: 'add' | 'change' | 'unlink'
+) => Promise<void>;
+
 export interface WatchState {
     watching: boolean;
     patterns: string[];
@@ -52,6 +60,12 @@ export class WatchManager {
     private pendingChanges: Map<string, { type: 'add' | 'change' | 'unlink'; time: number }> = new Map();
     private debounceTimer: NodeJS.Timeout | null = null;
     private processing: boolean = false;
+
+    /**
+     * Optional callback for knowledge store updates
+     * @private
+     */
+    private onKnowledgeUpdate?: OnKnowledgeUpdate;
 
     constructor(
         private rootPath: string,
@@ -166,6 +180,39 @@ export class WatchManager {
     }
 
     // ========================================================================
+    // Knowledge Callback
+    // ========================================================================
+
+    /**
+     * Register a callback to be invoked after index updates
+     *
+     * This allows the MemoryService to re-extract knowledge when
+     * files change, keeping the knowledge store in sync with the
+     * indexed project state.
+     *
+     * @param callback - Function called with (filepath, changeType)
+     *
+     * @example
+     * ```typescript
+     * watcher.setKnowledgeUpdateCallback(async (filepath, changeType) => {
+     *     if (changeType !== 'unlink') {
+     *         await memoryService.refreshKnowledgeFor(filepath);
+     *     }
+     * });
+     * ```
+     */
+    setKnowledgeUpdateCallback(callback: OnKnowledgeUpdate): void {
+        this.onKnowledgeUpdate = callback;
+    }
+
+    /**
+     * Remove the knowledge update callback
+     */
+    clearKnowledgeUpdateCallback(): void {
+        this.onKnowledgeUpdate = undefined;
+    }
+
+    // ========================================================================
     // Change Handling
     // ========================================================================
 
@@ -265,7 +312,27 @@ export class WatchManager {
         switch (action) {
             case 'index':
                 for (const [filepath, change] of files) {
+                    // Update index
                     await this.indexer.updateFile(filepath, change.type);
+
+                    // Trigger knowledge update callback (skip for deletions)
+                    if (this.onKnowledgeUpdate && change.type !== 'unlink') {
+                        this.bus.emit({
+                            type: 'status',
+                            phase: 'memory',
+                            label: `Updating knowledge for ${path.basename(filepath)}`
+                        });
+
+                        try {
+                            await this.onKnowledgeUpdate(filepath, change.type);
+                        } catch (error) {
+                            // Non-fatal - log and continue
+                            console.warn(
+                                `[WatchManager] Knowledge update callback failed for ${filepath}:`,
+                                error instanceof Error ? error.message : error
+                            );
+                        }
+                    }
                 }
                 break;
 

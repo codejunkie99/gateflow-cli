@@ -26,6 +26,13 @@ import type {
     ParameterInfo,
 } from './index.js';
 import { ProjectIndexCache, getProjectIndexCache } from './cache/index.js';
+import {
+    extractFromIndex,
+    createExtractionOptions,
+    formatExtractionSummary,
+    type ExtractionResult
+} from '../memory/extractors/index.js';
+import { getKnowledgeStore } from '../memory/KnowledgeStore.js';
 
 // ============================================================================
 // Adapter Class
@@ -175,6 +182,9 @@ export class SVIndexerAdapter {
                 duration: Date.now() - startTime
             });
 
+            // Extract knowledge from indexed project
+            await this.extractKnowledge();
+
         } catch (error) {
             this.bus.emit({
                 type: 'tool_result',
@@ -226,6 +236,9 @@ export class SVIndexerAdapter {
 
                 // Update project cache with new state
                 await this.projectCache.set(this.rootPath, this.filePaths, this.project);
+
+                // Re-extract knowledge after file update
+                await this.extractKnowledge();
 
                 this.bus.emit({
                     type: 'index_update',
@@ -486,6 +499,65 @@ export class SVIndexerAdapter {
     // ========================================================================
     // Private Helpers
     // ========================================================================
+
+    /**
+     * Extract knowledge from the current project into the knowledge store.
+     * This is called after indexing completes to populate the knowledge store
+     * with structural information about the project.
+     */
+    private async extractKnowledge(): Promise<void> {
+        // Get global knowledge store
+        const knowledgeStore = getKnowledgeStore();
+
+        if (!knowledgeStore || !this.project) {
+            return;  // No store available or no project to extract from
+        }
+
+        try {
+            // Create extraction options
+            const options = createExtractionOptions(
+                knowledgeStore.getProjectId(),
+                {
+                    maxItemsPerCategory: 300,  // Reasonable limit for typical projects
+                }
+            );
+
+            // Perform extraction
+            const result = await extractFromIndex(
+                this.project,
+                knowledgeStore,
+                options
+            );
+
+            // Emit result event
+            this.bus.emit({
+                type: 'tool_result',
+                tool: 'knowledge_extraction',
+                ok: result.success,
+                summary: formatExtractionSummary(result)
+            });
+
+            // Log detailed stats in debug mode
+            if (process.env.DEBUG) {
+                console.log('[SVIndexerAdapter] Knowledge extraction:', result);
+            }
+
+        } catch (error) {
+            // Non-fatal - log and continue
+            console.warn(
+                '[SVIndexerAdapter] Knowledge extraction failed:',
+                error instanceof Error ? error.message : error
+            );
+
+            this.bus.emit({
+                type: 'error',
+                message: `Knowledge extraction failed: ${
+                    error instanceof Error ? error.message : 'Unknown error'
+                }`,
+                recoverable: true
+            });
+        }
+    }
 
     /**
      * Convert ResolvedProject to legacy ProjectIndex format.
