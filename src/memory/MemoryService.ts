@@ -16,6 +16,7 @@ import type { EventBus } from '../events/index.js';
 import { AsyncMutex } from '../concurrency/index.js';
 import { MemoryManager, type ProjectMemory, type MemoryConfig } from './manager.js';
 import { KnowledgeStore, type KnowledgeStoreConfig, type KnowledgeQuery } from './KnowledgeStore.js';
+import { TieredKnowledgeStore, type TieredStoreConfig, createTieredStore } from './tiered-store.js';
 import { estimateTokens } from './utils.js';
 
 // ============================================================================
@@ -29,6 +30,8 @@ export interface MemoryServiceConfig {
     knowledge?: Partial<KnowledgeStoreConfig>;
     /** Total token budget for context injection (default: 2000) */
     contextTokenBudget?: number;
+    /** Tiered storage configuration (optional - enables memory optimization) */
+    tiering?: Partial<TieredStoreConfig>;
 }
 
 export interface ContextInjection {
@@ -47,6 +50,7 @@ export interface ContextInjection {
 export class MemoryService {
     private memoryManager: MemoryManager;
     private knowledgeStore: KnowledgeStore;
+    private tieredStore?: TieredKnowledgeStore;
     private initialized = false;
     private initMutex = new AsyncMutex();
     private contextTokenBudget: number;
@@ -59,6 +63,11 @@ export class MemoryService {
         this.memoryManager = new MemoryManager(projectRoot, bus, config?.memory);
         this.knowledgeStore = new KnowledgeStore(projectRoot, bus, config?.knowledge);
         this.contextTokenBudget = config?.contextTokenBudget ?? 2000;
+
+        // Create tiered storage if configured
+        if (config?.tiering) {
+            this.tieredStore = createTieredStore(config.tiering);
+        }
     }
 
     /**
@@ -73,6 +82,14 @@ export class MemoryService {
                 this.memoryManager.load(),
                 this.knowledgeStore.load()
             ]);
+
+            // Wire tiered storage to knowledge store after loading
+            if (this.tieredStore) {
+                this.tieredStore.initialize(
+                    this.knowledgeStore.getItems(),
+                    (id) => this.knowledgeStore.getItemById(id)
+                );
+            }
 
             this.initialized = true;
         });
