@@ -82,6 +82,7 @@ export class MemoryManager {
     private ioMutex = new AsyncMutex();
     private dirty: boolean = false;
     private saveTimeout: ReturnType<typeof setTimeout> | null = null;
+    private saveInProgress: boolean = false;  // Prevents concurrent saves from flush() and callback
     private readonly SAVE_DEBOUNCE_MS = 5000;
 
     constructor(
@@ -197,12 +198,22 @@ export class MemoryManager {
     // ========================================================================
 
     /**
-     * Acquire lock for exclusive access
+     * Acquire lock for exclusive access (internal use only)
+     *
+     * Uses atomic delete-and-acquire pattern to minimize race window when
+     * handling stale locks. After detecting a stale lock, we immediately
+     * attempt to acquire rather than looping back, reducing the window
+     * where another process could interfere.
+     *
+     * Note: This is a best-effort lock for coordination, not a guarantee.
+     * For critical sections, the AsyncMutex provides intra-process safety.
      */
-    async acquireLock(): Promise<boolean> {
+    private async acquireLock(): Promise<boolean> {
         const startTime = Date.now();
+        // Add buffer for isLockStale() which can take up to 2s on Windows
+        const effectiveTimeout = this.config.lockTimeout + 3000;
 
-        while (Date.now() - startTime < this.config.lockTimeout) {
+        while (Date.now() - startTime < effectiveTimeout) {
             try {
                 // Try to create lock file (fails if exists)
                 await fs.writeFile(
@@ -214,10 +225,31 @@ export class MemoryManager {
                 return true;
             } catch (error: any) {
                 if (error.code === 'EEXIST') {
-                    // Lock exists - check if stale
-                    if (await this.isLockStale()) {
-                        await fs.unlink(this.lockPath);
-                        continue;
+                    // Lock exists - check if stale and get lock info for verification
+                    const staleInfo = await this.getStaleInfo();
+                    if (staleInfo.isStale) {
+                        // TOCTOU-safe: verify lock content hasn't changed before deleting
+                        try {
+                            // Re-read lock to verify it's the same one we checked
+                            const currentContent = await fs.readFile(this.lockPath, 'utf-8');
+                            if (currentContent === staleInfo.content) {
+                                // Same lock - safe to delete and acquire
+                                await fs.unlink(this.lockPath);
+                                await fs.writeFile(
+                                    this.lockPath,
+                                    JSON.stringify({ pid: process.pid, time: Date.now() }),
+                                    { flag: 'wx' }
+                                );
+                                this.lockAcquired = true;
+                                return true;
+                            }
+                            // Lock changed - another process replaced it, retry
+                        } catch (innerError: any) {
+                            // Another process got it first - continue retrying
+                            if (innerError.code !== 'EEXIST' && innerError.code !== 'ENOENT') {
+                                throw innerError;
+                            }
+                        }
                     }
                     // Wait and retry
                     await new Promise(r => setTimeout(r, 100));
@@ -231,9 +263,9 @@ export class MemoryManager {
     }
 
     /**
-     * Release lock
+     * Release lock (internal use only)
      */
-    async releaseLock(): Promise<void> {
+    private async releaseLock(): Promise<void> {
         if (this.lockAcquired) {
             try {
                 await fs.unlink(this.lockPath);
@@ -246,21 +278,44 @@ export class MemoryManager {
 
     /**
      * Schedule a debounced save operation
-     * Prevents excessive writes when multiple mutations happen in quick succession
+     * Prevents excessive writes when multiple mutations happen in quick succession.
+     * Resets the timer on each call to ensure save happens after the LAST mutation.
+     * 
+     * DATA DELETION RISKS MITIGATED:
+     * - Uses saveInProgress flag to prevent concurrent saves with flush()
+     * - Checks dirty flag inside ioMutex to avoid TOCTOU issues
+     * - Cancels timeout atomically to prevent callback from running after flush()
      */
     private scheduleSave(): void {
-        if (this.saveTimeout) return;  // Already scheduled
+        // Clear existing timeout and reset - ensures save happens after last mutation
+        if (this.saveTimeout) {
+            clearTimeout(this.saveTimeout);
+            this.saveTimeout = null;
+        }
 
         this.saveTimeout = setTimeout(async () => {
+            // Mark timeout as cleared immediately to prevent flush() from interfering
             this.saveTimeout = null;
-            if (this.dirty) {
+            
+            // Check if flush() is already saving or if we're no longer dirty
+            // Use ioMutex to ensure atomic check-and-save
+            await this.ioMutex.withLock(async () => {
+                // Double-check: dirty flag might have been cleared by flush()
+                // or another save, and saveInProgress prevents concurrent saves
+                if (!this.dirty || this.saveInProgress) {
+                    return;
+                }
+                
+                this.saveInProgress = true;
                 try {
                     await this.save();
                 } catch (error) {
                     // Log but don't throw - this is a background save
                     console.error('Auto-save failed:', error);
+                } finally {
+                    this.saveInProgress = false;
                 }
-            }
+            });
         }, this.SAVE_DEBOUNCE_MS);
     }
 
@@ -279,16 +334,18 @@ export class MemoryManager {
     }
 
     /**
-     * Check if lock is stale (process died)
+     * Get stale lock info for TOCTOU-safe deletion.
+     * Returns both staleness status AND original content for verification.
+     * This allows the caller to verify the lock hasn't changed before deleting.
      */
-    private async isLockStale(): Promise<boolean> {
+    private async getStaleInfo(): Promise<{ isStale: boolean; content: string }> {
         try {
             const content = await fs.readFile(this.lockPath, 'utf-8');
             const lock = JSON.parse(content);
 
             // Consider stale if > 5 minutes old
             if (Date.now() - lock.time > 5 * 60 * 1000) {
-                return true;
+                return { isStale: true, content };
             }
 
             if (process.platform === 'win32') {
@@ -300,22 +357,29 @@ export class MemoryManager {
                         timeout: 2000
                     });
                     // If PID not found, tasklist returns "INFO: No tasks..."
-                    return !result.stdout.includes(lock.pid.toString());
+                    const isStale = !result.stdout.includes(lock.pid.toString());
+                    return { isStale, content };
                 } catch {
                     // If tasklist fails, fall back to time-based only
-                    return false;
+                    return { isStale: false, content };
                 }
             } else {
                 // Unix: Use signal 0 test
                 try {
                     process.kill(lock.pid, 0);
-                    return false; // Process exists
+                    return { isStale: false, content }; // Process exists
                 } catch {
-                    return true; // Process doesn't exist
+                    return { isStale: true, content }; // Process doesn't exist
                 }
             }
-        } catch {
-            return true;
+        } catch (error: any) {
+            // Only consider stale if file doesn't exist (already deleted)
+            if (error.code === 'ENOENT') {
+                return { isStale: true, content: '' };
+            }
+            // For parse errors, permission issues, etc., be conservative
+            // to avoid exacerbating race conditions
+            return { isStale: false, content: '' };
         }
     }
 
@@ -326,11 +390,16 @@ export class MemoryManager {
     /**
      * Sanitize a string for safe use in filenames
      * - Replaces path separators and invalid characters
+     * - Handles Windows reserved names (CON, PRN, AUX, NUL, COM1-9, LPT1-9)
+     * - Handles edge cases (empty, all dots)
      * - Limits length
      * - Cross-platform safe (Windows + Unix)
      */
     private sanitizeForFilename(input: string, maxLength = 100): string {
-        return input
+        // Windows reserved device names (case-insensitive)
+        const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i;
+
+        let result = input
             // Replace path separators
             .replace(/[/\\]/g, '_')
             // Remove or replace invalid chars (Windows: < > : " | ? *)
@@ -343,6 +412,13 @@ export class MemoryManager {
             .replace(/^_+|_+$/g, '')
             // Limit length
             .slice(0, maxLength);
+
+        // Handle edge cases: empty, all dots, or Windows reserved names
+        if (result === '' || /^\.+$/.test(result) || WINDOWS_RESERVED.test(result)) {
+            result = `_${result || 'unnamed'}_`;
+        }
+
+        return result;
     }
 
     // ========================================================================
@@ -560,6 +636,11 @@ export class MemoryManager {
         messages: Array<{ role: string; content: string }>,
         summary: string
     ): Promise<ChatHistoryFile> {
+        // Validate sessionId to prevent malformed filenames
+        if (!sessionId || sessionId.trim().length === 0) {
+            throw new Error('sessionId cannot be empty');
+        }
+
         const archiveDir = this.getArchiveDir();
         await fs.mkdir(archiveDir, { recursive: true });
 
@@ -571,20 +652,23 @@ export class MemoryManager {
 
         // Calculate turn numbers based on user message count (not message index)
         // This correctly handles tool/system messages without breaking turn tracking
-        let turnCounter = 0;
+        // Turn 0 = first exchange (user + assistant), Turn 1 = second exchange, etc.
+        let currentTurn = -1;  // Start at -1, increment to 0 on first user message
         const archiveData = {
             sessionId,
             timestamp,
             summary,
             messageCount: messages.length,
             messages: messages.map((m, i) => {
-                // Increment turn on each user message (turn = completed exchanges)
+                // Increment turn when we see a user message (marks start of new exchange)
                 if (m.role === 'user') {
-                    turnCounter++;
+                    currentTurn++;
                 }
+                // All messages in the same exchange share the same turn number
+                // (user message and its assistant response are both turn N)
                 return {
                     index: i,
-                    turn: turnCounter - 1, // 0-indexed: turn 0 starts at first user message
+                    turn: Math.max(0, currentTurn),  // Clamp to 0 if conversation starts with non-user messages
                     role: m.role,
                     content: m.content
                 };
