@@ -50,13 +50,15 @@ export class FixLoop {
     private config: FixLoopConfig;
     private attemptMemory: Map<string, FixAttempt[]> = new Map();
     private currentSession: FixAttempt[] = [];
+    private knowledgeStore?: KnowledgeStore;
 
     constructor(
         private bus: EventBus,
         private verilator: Verilator,
         private agent: GateFlowAgent,
         private fileTools: FileTools,
-        config?: Partial<FixLoopConfig>
+        config?: Partial<FixLoopConfig>,
+        knowledgeStore?: KnowledgeStore
     ) {
         this.config = {
             maxAttempts: config?.maxAttempts ?? 5,
@@ -64,6 +66,28 @@ export class FixLoop {
             autoFixThreshold: config?.autoFixThreshold ?? 0.8,
             requireApproval: config?.requireApproval ?? false
         };
+        this.knowledgeStore = knowledgeStore;
+    }
+
+    /**
+     * Initialize FixLoop by loading historical patterns
+     * Call this before running fix loops for better thrashing detection
+     */
+    async init(filePath: string): Promise<void> {
+        if (this.knowledgeStore) {
+            try {
+                const loaded = await this.loadHistoricalPatterns(this.knowledgeStore, filePath);
+                if (loaded > 0) {
+                    this.bus.emit({
+                        type: 'status',
+                        phase: 'memory',
+                        label: `Loaded ${loaded} historical fix pattern${loaded > 1 ? 's' : ''}`
+                    });
+                }
+            } catch (error) {
+                console.warn('[FixLoop] Failed to load historical patterns:', error);
+            }
+        }
     }
 
     // ========================================================================
@@ -209,6 +233,22 @@ export class FixLoop {
             summary: this.summarizeResult(result),
             duration: result.duration
         });
+
+        // Auto-persist patterns to KnowledgeStore
+        if (this.knowledgeStore) {
+            try {
+                const persisted = await this.persistAttemptMemory(this.knowledgeStore);
+                if (persisted > 0) {
+                    this.bus.emit({
+                        type: 'status',
+                        phase: 'memory',
+                        label: `Saved ${persisted} fix pattern${persisted > 1 ? 's' : ''}`
+                    });
+                }
+            } catch (error) {
+                console.warn('[FixLoop] Failed to persist patterns:', error);
+            }
+        }
 
         return result;
     }

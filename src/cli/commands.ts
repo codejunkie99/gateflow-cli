@@ -460,92 +460,27 @@ export async function fixCommand(
 ): Promise<ExitCode> {
     const toolContext = buildToolContext(ctx);
     const agent = new GateFlowAgent(ctx.bus, toolContext);
-    const fixLoop = new FixLoop(ctx.bus, ctx.verilator, agent, ctx.tools.file, {
-        requireApproval: !ctx.options.yes
-    });
 
-    // Load historical fix patterns before starting (for thrashing detection)
-    await loadHistoricalFixPatterns(ctx, fixLoop, file);
+    // Pass KnowledgeStore for auto-load/persist of fix patterns
+    const fixLoop = new FixLoop(
+        ctx.bus,
+        ctx.verilator,
+        agent,
+        ctx.tools.file,
+        { requireApproval: !ctx.options.yes },
+        ctx.memoryService.knowledge
+    );
+
+    // Initialize with historical patterns (auto-persist happens in run())
+    await fixLoop.init(file);
 
     const result = await fixLoop.run(file);
-
-    // Persist fix patterns to knowledge store
-    await persistFixPatterns(ctx, fixLoop);
 
     if (ctx.options.json) {
         console.log(JSON.stringify(result));
     }
 
     return result.success ? ExitCodes.SUCCESS : ExitCodes.LINT_FAILED;
-}
-
-/**
- * Load historical fix patterns relevant to the file being fixed
- */
-async function loadHistoricalFixPatterns(
-    ctx: CommandContext,
-    fixLoop: FixLoop,
-    filePath: string
-): Promise<void> {
-    const knowledgeStore = ctx.memoryService.knowledge;
-    if (!knowledgeStore) {
-        return;
-    }
-
-    try {
-        const loaded = await fixLoop.loadHistoricalPatterns(knowledgeStore, filePath);
-
-        if (loaded > 0) {
-            ctx.bus.emit({
-                type: 'status',
-                phase: 'memory',
-                label: `Loaded ${loaded} historical fix pattern${loaded > 1 ? 's' : ''}`
-            });
-        }
-    } catch (error) {
-        // Non-fatal
-        console.warn('[fixCommand] Failed to load historical patterns:', error);
-    }
-}
-
-/**
- * Persist fix attempt patterns from the fix loop to the knowledge store
- */
-async function persistFixPatterns(
-    ctx: CommandContext,
-    fixLoop: FixLoop
-): Promise<void> {
-    const knowledgeStore = ctx.memoryService.knowledge;
-    if (!knowledgeStore) {
-        return;  // No store available
-    }
-
-    try {
-        const persisted = await fixLoop.persistAttemptMemory(knowledgeStore);
-
-        if (persisted > 0) {
-            ctx.bus.emit({
-                type: 'status',
-                phase: 'memory',
-                label: `Saved ${persisted} fix pattern${persisted > 1 ? 's' : ''} for future reference`
-            });
-
-            // Also emit tool_result for structured output
-            ctx.bus.emit({
-                type: 'tool_result',
-                tool: 'fix_pattern_persist',
-                ok: true,
-                summary: `Persisted ${persisted} fix patterns to knowledge store`
-            });
-        }
-
-    } catch (error) {
-        // Non-fatal - log and continue
-        console.warn(
-            '[fixCommand] Failed to persist fix patterns:',
-            error instanceof Error ? error.message : error
-        );
-    }
 }
 
 // ============================================================================
