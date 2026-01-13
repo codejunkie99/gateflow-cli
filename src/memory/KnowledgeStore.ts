@@ -81,6 +81,14 @@ export interface KnowledgeQuery {
     moduleName?: string;
     maxResults?: number;
     minConfidence?: number;
+
+    /**
+     * If true, include items with scope mismatches but apply score penalty.
+     * This allows broader searches while still preferring exact matches.
+     *
+     * Default: false (strict scope matching)
+     */
+    relaxedScope?: boolean;
 }
 
 export interface KnowledgeStoreConfig {
@@ -139,6 +147,13 @@ export class KnowledgeStore {
     private termDocFreq = new Map<string, number>(); // term -> doc count
     private avgDocLength = 0;
 
+    // Windows lock check cache (Bug 1.4 fix)
+    private lockCheckCache?: {
+        pid: number;
+        isAlive: boolean;
+        time: number;
+    };
+
     private readonly SAVE_DEBOUNCE_MS = 5000;
     private readonly LOCK_TIMEOUT_MS = 5000;
 
@@ -172,7 +187,55 @@ export class KnowledgeStore {
                 this.pruneStaleItems();
                 this.rebuildAllIndices();
                 return this.index;
-            } catch {
+            } catch (error) {
+                // Bug 1.3 fix: Distinguish between error types
+                const errCode = (error as NodeJS.ErrnoException).code;
+
+                // Case 1: File doesn't exist - this is fine on first run
+                if (errCode === 'ENOENT') {
+                    this.index = this.createDefaultIndex();
+                    this.clearAllIndices();
+                    return this.index;
+                }
+
+                // Case 2: Permission denied - user needs to fix this
+                if (errCode === 'EACCES' || errCode === 'EPERM') {
+                    console.error(
+                        `KnowledgeStore: Permission denied reading ${this.knowledgePath}\n` +
+                        `Please check file permissions.`
+                    );
+                    throw error;
+                }
+
+                // Case 3: I/O error - disk problem
+                if (errCode === 'EIO' || errCode === 'EROFS') {
+                    console.error(
+                        `KnowledgeStore: I/O error reading ${this.knowledgePath}\n` +
+                        `Please check disk health.`
+                    );
+                    throw error;
+                }
+
+                // Case 4: JSON parse error or schema error - file is corrupted
+                console.warn(
+                    `KnowledgeStore: File corrupted or invalid at ${this.knowledgePath}\n` +
+                    `Error: ${error instanceof Error ? error.message : 'Unknown error'}\n` +
+                    `Creating backup and starting fresh.`
+                );
+
+                // Attempt to backup the corrupted file
+                try {
+                    const backupPath = `${this.knowledgePath}.corrupted.${Date.now()}`;
+                    await fs.rename(this.knowledgePath, backupPath);
+                    console.warn(`KnowledgeStore: Corrupted file backed up to ${backupPath}`);
+                } catch (backupError) {
+                    console.warn(
+                        `KnowledgeStore: Could not create backup: ` +
+                        `${backupError instanceof Error ? backupError.message : 'Unknown error'}`
+                    );
+                }
+
+                // Start fresh
                 this.index = this.createDefaultIndex();
                 this.clearAllIndices();
                 return this.index;
@@ -326,6 +389,18 @@ export class KnowledgeStore {
                 }
             }
         }
+
+        // Bug 1.2 fix: Recalculate avgDocLength after removal
+        const n = this.docLengths.size;
+        if (n > 0) {
+            let totalLength = 0;
+            for (const len of this.docLengths.values()) {
+                totalLength += len;
+            }
+            this.avgDocLength = totalLength / n;
+        } else {
+            this.avgDocLength = 0;
+        }
     }
 
     private tokenize(item: KnowledgeItem): string[] {
@@ -349,14 +424,26 @@ export class KnowledgeStore {
         // Check for duplicate
         const existing = this.itemByFingerprint.get(fingerprint);
         if (existing) {
+            // Bug 1.1 fix: Check if content changed and rebuild indices
+            const contentChanged = existing.content !== item.content ||
+                                   !this.arraysEqual(existing.tags, item.tags) ||
+                                   !this.arraysEqual(existing.keywords, item.keywords);
+
+            if (contentChanged) {
+                this.removeFromIndices(existing);
+            }
+
             existing.content = item.content;
             existing.confidence = Math.max(existing.confidence, item.confidence);
             existing.tags = [...new Set([...existing.tags, ...item.tags])];
             existing.keywords = [...new Set([...existing.keywords, ...item.keywords])];
             existing.updated = now;
+
+            if (contentChanged) {
+                this.addToIndices(existing);
+            }
+
             this.dirty = true;
-            // Note: Should rebuild indices if content changed significantly
-            // For now, skip as tags/keywords mostly additive
             return existing;
         }
 
@@ -459,16 +546,31 @@ export class KnowledgeStore {
         if (query.minConfidence !== undefined) {
             candidates = candidates.filter(i => i.confidence >= query.minConfidence!);
         }
-        candidates = candidates.filter(i => this.matchesScope(i.scope, query));
 
-        // Score
-        const results: KnowledgeSearchResult[] = candidates.map(item => ({
-            item,
-            relevance: queryTerms.length > 0
+        // Score with scope multiplier
+        const results: KnowledgeSearchResult[] = [];
+
+        for (const item of candidates) {
+            // Use score-based scope matching
+            const scopeScore = this.matchesScopeWithScore(item.scope, query);
+            if (scopeScore === 0) {
+                continue;  // Completely excluded (strict mode or project mismatch)
+            }
+
+            // Calculate base score
+            const baseScore = queryTerms.length > 0
                 ? this.scoreBM25(item, queryTerms)
-                : this.scoreBasic(item),
-            matchReason: this.getMatchReason(item, query)
-        }));
+                : this.scoreBasic(item);
+
+            // Apply scope multiplier
+            const finalScore = baseScore * scopeScore;
+
+            results.push({
+                item,
+                relevance: finalScore,
+                matchReason: this.getMatchReason(item, query, scopeScore)
+            });
+        }
 
         results.sort((a, b) => b.relevance - a.relevance);
         return results.slice(0, query.maxResults ?? 10);
@@ -524,7 +626,8 @@ export class KnowledgeStore {
             filePath,
             moduleName,
             maxResults: 20,
-            minConfidence: 0.5
+            minConfidence: 0.5,
+            relaxedScope: true  // Allow broader context retrieval with penalties
         });
 
         if (results.length === 0) return '';
@@ -548,36 +651,79 @@ export class KnowledgeStore {
     // Scope Matching
     // ========================================================================
 
-    private matchesScope(scope: KnowledgeScope, query: KnowledgeQuery): boolean {
-        if (scope.global) return true;
-
-        if (scope.projectIds && !scope.projectIds.includes(this.projectId)) {
-            return false;
+    /**
+     * Check if item scope matches query, returning a score multiplier.
+     *
+     * @param scope - Item's scope constraints
+     * @param query - Query parameters
+     * @returns Score multiplier: 1.0 for full match, 0.0-0.9 for partial, 0 for no match
+     */
+    private matchesScopeWithScore(scope: KnowledgeScope, query: KnowledgeQuery): number {
+        // Global scope always matches fully
+        if (scope.global) {
+            return 1.0;
         }
 
-        // Fail-closed: scoped items require matching context
-        if (scope.modules?.length) {
-            if (!query.moduleName || !scope.modules.includes(query.moduleName)) {
-                return false;
+        // Project scope check - always strict (no relaxation for wrong project)
+        if (scope.projectIds?.length && !scope.projectIds.includes(this.projectId)) {
+            return 0;  // Different project, exclude completely
+        }
+
+        let scoreMultiplier = 1.0;
+
+        // File pattern check
+        if (scope.filePatterns?.length) {
+            if (!query.filePath) {
+                // No file context provided
+                if (query.relaxedScope) {
+                    scoreMultiplier *= 0.5;  // 50% penalty
+                } else {
+                    return 0;  // Strict mode: exclude
+                }
+            } else {
+                // Check if file matches any pattern
+                const normalizedPath = query.filePath.replace(/\\/g, '/');
+                const matches = scope.filePatterns.some(p =>
+                    picomatch.isMatch(normalizedPath, p.replace(/\\/g, '/'), {
+                        dot: true,
+                        nocase: process.platform === 'win32'
+                    })
+                );
+
+                if (!matches) {
+                    if (query.relaxedScope) {
+                        scoreMultiplier *= 0.3;  // 70% penalty for wrong file
+                    } else {
+                        return 0;
+                    }
+                }
             }
         }
 
-        if (scope.filePatterns?.length) {
-            if (!query.filePath) return false;
-            const normalizedPath = query.filePath.replace(/\\/g, '/');
-            const matches = scope.filePatterns.some(p =>
-                picomatch.isMatch(normalizedPath, p.replace(/\\/g, '/'), {
-                    dot: true,
-                    nocase: process.platform === 'win32'
-                })
-            );
-            if (!matches) return false;
+        // Module scope check
+        if (scope.modules?.length) {
+            if (!query.moduleName) {
+                // No module context provided
+                if (query.relaxedScope) {
+                    scoreMultiplier *= 0.5;  // 50% penalty
+                } else {
+                    return 0;  // Strict mode: exclude
+                }
+            } else if (!scope.modules.includes(query.moduleName)) {
+                // Wrong module
+                if (query.relaxedScope) {
+                    scoreMultiplier *= 0.3;  // 70% penalty
+                } else {
+                    return 0;
+                }
+            }
+            // Exact module match: no penalty (multiplier stays at current value)
         }
 
-        return true;
+        return scoreMultiplier;
     }
 
-    private getMatchReason(item: KnowledgeItem, query: KnowledgeQuery): string {
+    private getMatchReason(item: KnowledgeItem, query: KnowledgeQuery, scopeScore = 1.0): string {
         const reasons: string[] = [];
 
         if (query.query) {
@@ -595,6 +741,12 @@ export class KnowledgeStore {
 
         if (query.moduleName && item.scope.modules?.includes(query.moduleName)) {
             reasons.push(`Module: ${query.moduleName}`);
+        }
+
+        // Add scope penalty indication
+        if (scopeScore < 1.0 && scopeScore > 0) {
+            const penaltyPercent = Math.round((1 - scopeScore) * 100);
+            reasons.push(`Scope penalty: -${penaltyPercent}%`);
         }
 
         return reasons.join('; ') || 'General relevance';
@@ -1110,6 +1262,13 @@ export class KnowledgeStore {
     // Helpers
     // ========================================================================
 
+    private arraysEqual(a: string[], b: string[]): boolean {
+        if (a.length !== b.length) return false;
+        const sorted1 = [...a].sort();
+        const sorted2 = [...b].sort();
+        return sorted1.every((v, i) => v === sorted2[i]);
+    }
+
     private computeFingerprint(type: KnowledgeType, title: string, scope: KnowledgeScope): string {
         const normalizedTitle = title.toLowerCase().replace(/\s+/g, ' ').replace(/[^\w\s]/g, '').trim();
         const scopeParts: string[] = [];
@@ -1190,6 +1349,7 @@ export class KnowledgeStore {
         if (this.lockAcquired) {
             try { await fs.unlink(this.lockPath); } catch { /* ignore */ }
             this.lockAcquired = false;
+            this.lockCheckCache = undefined;  // Bug 1.4 fix: Clear cache on lock release
         }
     }
 
@@ -1197,18 +1357,47 @@ export class KnowledgeStore {
         try {
             const content = await fs.readFile(this.lockPath, 'utf-8');
             const lock = JSON.parse(content);
-            if (Date.now() - lock.time > 5 * 60 * 1000) return true;
 
+            // Time-based check (5 minutes)
+            if (Date.now() - lock.time > 5 * 60 * 1000) {
+                return true;
+            }
+
+            // Bug 1.4 fix: Cache Windows lock check result
             if (process.platform === 'win32') {
+                // Check if we have a recent cache for this PID
+                if (
+                    this.lockCheckCache &&
+                    this.lockCheckCache.pid === lock.pid &&
+                    Date.now() - this.lockCheckCache.time < 1000  // 1 second cache
+                ) {
+                    return !this.lockCheckCache.isAlive;
+                }
+
+                // Cache miss or expired - do the slow check
                 const { spawnSync } = await import('child_process');
                 const result = spawnSync('tasklist', ['/FI', `PID eq ${lock.pid}`, '/NH'], {
                     encoding: 'utf-8',
                     timeout: 2000
                 });
-                return !result.stdout.includes(lock.pid.toString());
+                const isAlive = result.stdout.includes(lock.pid.toString());
+
+                // Cache the result
+                this.lockCheckCache = {
+                    pid: lock.pid,
+                    isAlive,
+                    time: Date.now()
+                };
+
+                return !isAlive;
             } else {
-                try { process.kill(lock.pid, 0); return false; }
-                catch { return true; }
+                // Unix: Fast signal check, no caching needed
+                try {
+                    process.kill(lock.pid, 0);
+                    return false;
+                } catch {
+                    return true;
+                }
             }
         } catch {
             return true;
