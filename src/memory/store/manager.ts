@@ -261,24 +261,21 @@ export class MemoryManager {
         this.saveTimeout = setTimeout(async () => {
             this.saveTimeout = null;
 
-            let shouldSave = false;
-            await this.ioMutex.withLock(async () => {
-                if (this.dirty && !this.saveInProgress) {
-                    this.saveInProgress = true;
-                    shouldSave = true;
-                }
-            });
+            // Check flags without holding lock during save() call to avoid deadlock
+            // save() acquires ioMutex internally, so we must not hold it here
+            if (!this.dirty || this.saveInProgress) {
+                return;
+            }
 
-            if (shouldSave) {
-                try {
-                    await this.save();
-                } catch (error) {
-                    console.error('Auto-save failed:', error);
-                } finally {
-                    await this.ioMutex.withLock(async () => {
-                        this.saveInProgress = false;
-                    });
-                }
+            // Set flag before releasing control flow
+            this.saveInProgress = true;
+
+            try {
+                await this.save();
+            } catch (error) {
+                console.error('Auto-save failed:', error);
+            } finally {
+                this.saveInProgress = false;
             }
         }, this.SAVE_DEBOUNCE_MS);
     }
