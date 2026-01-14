@@ -102,3 +102,4 @@ temp_verible_output.json
 # Test files and directories
 test/
 scripts/test-*.ts
+ralph-claude-code/
