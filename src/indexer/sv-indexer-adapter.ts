@@ -32,7 +32,7 @@ import {
     formatExtractionSummary,
     type ExtractionResult
 } from '../memory/extractors/index.js';
-import { getKnowledgeStore } from '../memory/KnowledgeStore.js';
+import { getKnowledgeStore } from '../memory/ParentKnowledgeStore.js';
 
 // ============================================================================
 // Adapter Class
