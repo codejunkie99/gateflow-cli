@@ -127,7 +127,7 @@ function formatPortSummary(ports: Declaration[]): string {
     if (ports.length === 0) return '';
 
     const portStrings = ports.map(p => {
-        const data = p.data as {
+        const data = (p.data ?? {}) as {
             direction?: string;
             portType?: string;
             width?: string;
@@ -157,7 +157,7 @@ function formatParamSummary(params: Declaration[]): string {
     if (params.length === 0) return '';
 
     const paramStrings = params.map(p => {
-        const data = p.data as {
+        const data = (p.data ?? {}) as {
             paramType?: string;
             defaultValue?: string;
         };

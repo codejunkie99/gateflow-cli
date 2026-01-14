@@ -136,6 +136,8 @@ export async function extractModulesOnly(
 /**
  * Validate extraction options
  */
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 function validateOptions(options: ExtractionOptions): void {
     if (!options.projectId) {
         throw new Error('ExtractionOptions.projectId is required');
@@ -153,7 +155,7 @@ function validateOptions(options: ExtractionOptions): void {
     }
 
     // Validate sessionId format (UUID)
-    if (!/^[a-f0-9-]{36}$/i.test(options.sessionId)) {
+    if (!UUID_REGEX.test(options.sessionId)) {
         throw new Error(
             `Invalid sessionId format: ${options.sessionId}. ` +
             `Expected UUID format.`
