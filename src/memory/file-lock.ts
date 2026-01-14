@@ -136,6 +136,11 @@ export class FileLockManager {
                 return { isStale: false, content };
             }
 
+            // Self-heal: if lock belongs to this process but we don't hold it, treat as stale
+            if (lock.pid === process.pid && !this.lockAcquired) {
+                return { isStale: true, content };
+            }
+
             // Consider stale if too old
             if (Date.now() - lock.time > STALE_LOCK_THRESHOLD_MS) {
                 return { isStale: true, content };

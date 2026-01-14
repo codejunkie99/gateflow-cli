@@ -5,7 +5,7 @@
  */
 
 import { generateObject } from 'ai';
-import { anthropic } from '@ai-sdk/anthropic';
+import { createAnthropicClient } from '../anthropic-client.js';
 import type { ExecutionPlan } from '../../types/agent-shared.js';
 import { ExecutionPlanSchema } from '../../types/agent-shared.js';
 
@@ -20,7 +20,7 @@ export async function createPlan(
 ): Promise<ExecutionPlan> {
     // FIX A: Explicitly list valid agents in prompt to avoid 'planning' being assigned
     const { object: plan } = await generateObject({
-        model: anthropic(modelName) as any,
+        model: createAnthropicClient(modelName) as any,
         schema: ExecutionPlanSchema,
         prompt: `Analyze this request and create an execution plan:
 

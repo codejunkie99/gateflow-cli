@@ -224,6 +224,11 @@ export class MemoryManager {
                 return { isStale: false, content };
             }
 
+            // Self-heal: if lock belongs to this process but we don't hold it, treat as stale
+            if (lock.pid === process.pid && !this.lockAcquired) {
+                return { isStale: true, content };
+            }
+
             if (Date.now() - lock.time > 5 * 60 * 1000) {
                 return { isStale: true, content };
             }
