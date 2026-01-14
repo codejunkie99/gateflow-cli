@@ -9,8 +9,8 @@
  */
 
 import { streamText, generateObject, stepCountIs, type StepResult, type Tool, type ModelMessage } from 'ai';
-import { anthropic } from '@ai-sdk/anthropic';
 import { z } from 'zod';
+import { createAnthropicClient } from './anthropic-client.js';
 import type { EventBus } from '../events/index.js';
 import type { ToolContext } from './tools.js';
 import { createToolExecutors, getToolSpecs as getToolDefinitions, TOOL_APPROVAL_CONFIG } from './tools.js';
@@ -376,7 +376,7 @@ export class GateFlowAgent {
 
             // AI SDK 6: Use generateObject for complexity detection
             const { object: complexity } = await generateObject({
-                model: anthropic(this.config.model) as any,
+                model: createAnthropicClient(this.config.model) as any,
                 schema: ComplexityDetectionSchema,
                 prompt: `Does this request need multi-agent coordination?
 
