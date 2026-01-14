@@ -69,11 +69,21 @@ export async function extractFromIndex(
             // Clamp to actual extracted (in case of maxItemsPerCategory)
             const totalDesignUnits = moduleKindCount + interfaceKindCount + packageKindCount;
             if (totalDesignUnits > 0 && moduleCount < totalDesignUnits) {
-                // Proportionally reduce counts
+                // Proportionally distribute counts, ensuring they sum to moduleCount
                 const ratio = moduleCount / totalDesignUnits;
-                counts.modules = Math.floor(moduleKindCount * ratio);
-                counts.interfaces = Math.floor(interfaceKindCount * ratio);
-                counts.packages = Math.floor(packageKindCount * ratio);
+                counts.modules = Math.round(moduleKindCount * ratio);
+                counts.interfaces = Math.round(interfaceKindCount * ratio);
+                // Assign remainder to packages to ensure exact sum
+                counts.packages = moduleCount - counts.modules - counts.interfaces;
+                // Clamp to non-negative in edge cases
+                if (counts.packages < 0) {
+                    counts.packages = 0;
+                    counts.interfaces = moduleCount - counts.modules;
+                    if (counts.interfaces < 0) {
+                        counts.interfaces = 0;
+                        counts.modules = moduleCount;
+                    }
+                }
             } else {
                 counts.modules = moduleKindCount;
                 counts.interfaces = interfaceKindCount;

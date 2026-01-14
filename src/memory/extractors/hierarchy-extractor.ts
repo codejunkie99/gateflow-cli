@@ -74,6 +74,13 @@ export function extractHierarchy(
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// Constants
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Maximum recursion depth to prevent stack overflow */
+const MAX_HIERARCHY_DEPTH = 100;
+
+// ═══════════════════════════════════════════════════════════════════════════
 // Helper Functions
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -95,6 +102,14 @@ function flattenHierarchy(roots: HierarchyNode[]): FlatNode[] {
         parentModule?: string,
         parentInstance?: string
     ): void {
+        // Guard against stack overflow from deeply nested or cyclic hierarchies
+        if (depth > MAX_HIERARCHY_DEPTH) {
+            console.warn(
+                `[hierarchy-extractor] Max depth ${MAX_HIERARCHY_DEPTH} exceeded at ${node.moduleName}, truncating`
+            );
+            return;
+        }
+
         result.push({
             ...node,
             depth,
@@ -153,15 +168,16 @@ function extractProjectOverview(
 function countNodes(roots: HierarchyNode[]): number {
     let count = 0;
 
-    function walk(node: HierarchyNode): void {
+    function walk(node: HierarchyNode, depth: number): void {
+        if (depth > MAX_HIERARCHY_DEPTH) return;
         count++;
         for (const child of node.children) {
-            walk(child);
+            walk(child, depth + 1);
         }
     }
 
     for (const root of roots) {
-        walk(root);
+        walk(root, 0);
     }
 
     return count;
@@ -174,6 +190,7 @@ function getMaxDepth(roots: HierarchyNode[]): number {
     let maxDepth = 0;
 
     function walk(node: HierarchyNode, depth: number): void {
+        if (depth > MAX_HIERARCHY_DEPTH) return;
         maxDepth = Math.max(maxDepth, depth);
         for (const child of node.children) {
             walk(child, depth + 1);
