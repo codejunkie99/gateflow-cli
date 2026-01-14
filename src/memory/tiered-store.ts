@@ -12,7 +12,7 @@
  * - No separate files needed for warm/cold items
  */
 
-import type { KnowledgeItem } from './KnowledgeStore.js';
+import type { KnowledgeItem } from './knowledge-types.js';
 
 // ============================================================================
 // Types
