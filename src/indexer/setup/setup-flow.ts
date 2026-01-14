@@ -14,7 +14,7 @@ interface Message {
   role: 'user' | 'assistant' | 'system';
   content: string;
 }
-import { anthropic } from '@ai-sdk/anthropic';
+import { createAnthropicClient } from '../../agent/anthropic-client.js';
 import type { EventBus } from '../../events/index.js';
 import type { PolicyEngine } from '../../approval/index.js';
 import type { ToolName } from '../../approval/types.js';
@@ -127,7 +127,7 @@ export async function runToolSetupFlow(
     for (let turn = 0; turn < maxTurns; turn++) {
       // Run agent turn
       const result = await streamText({
-        model: anthropic(model) as any,
+        model: createAnthropicClient(model) as any,
         system: TOOL_SETUP_SYSTEM_PROMPT,
         messages,
         tools,

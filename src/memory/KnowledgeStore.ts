@@ -14,115 +14,20 @@
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as crypto from 'crypto';
-import * as os from 'os';
-import picomatch from 'picomatch';
 import type { EventBus } from '../events/index.js';
 import { AsyncMutex } from '../concurrency/index.js';
 import { estimateTokens } from './utils.js';
-
-// ============================================================================
-// Types
-// ============================================================================
-
-export interface KnowledgeItem {
-    id: string;
-    fingerprint: string;
-    type: KnowledgeType;
-    title: string;
-    content: string;
-    tags: string[];
-    keywords: string[];
-    scope: KnowledgeScope;
-    source: KnowledgeSource;
-    confidence: number;
-    useCount: number;
-    lastAccessed: number;
-    created: number;
-    updated: number;
-}
-
-export type KnowledgeType =
-    | 'code_pattern'
-    | 'lint_fix'
-    | 'test_pattern'
-    | 'module_info'
-    | 'dependency'
-    | 'style_preference'
-    | 'workflow'
-    | 'debug_solution'
-    | 'tool_usage'
-    | 'project_context';
-
-export interface KnowledgeScope {
-    global: boolean;
-    projectIds?: string[];
-    filePatterns?: string[];
-    modules?: string[];
-}
-
-export interface KnowledgeSource {
-    method: 'extracted' | 'inferred' | 'user_provided' | 'tool_result';
-    sessionId?: string;
-    filePath?: string;
-    tool?: string;
-}
-
-export interface KnowledgeSearchResult {
-    item: KnowledgeItem;
-    relevance: number;
-    matchReason: string;
-}
-
-export interface KnowledgeQuery {
-    query?: string;
-    types?: KnowledgeType[];
-    tags?: string[];
-    filePath?: string;
-    moduleName?: string;
-    maxResults?: number;
-    minConfidence?: number;
-
-    /**
-     * If true, include items with scope mismatches but apply score penalty.
-     * This allows broader searches while still preferring exact matches.
-     *
-     * Default: false (strict scope matching)
-     */
-    relaxedScope?: boolean;
-}
-
-export interface KnowledgeStoreConfig {
-    knowledgeDir: string;
-    maxItems: number;
-    minExtractionConfidence: number;
-    maxUnusedAge: number;
-}
-
-export interface KnowledgeIndex {
-    version: number;
-    projectId: string;
-    items: KnowledgeItem[];
-    stats: {
-        totalItems: number;
-        byType: Record<KnowledgeType, number>;
-        lastUpdated: number;
-    };
-}
-
-// ============================================================================
-// Constants
-// ============================================================================
-
-export const DEFAULT_KNOWLEDGE_STORE_CONFIG: KnowledgeStoreConfig = {
-    knowledgeDir: path.join(os.homedir(), '.gateflow'),
-    maxItems: 500,
-    minExtractionConfidence: 0.6,
-    maxUnusedAge: 30 * 24 * 60 * 60 * 1000
-};
-
-// BM25 parameters
-const BM25_K1 = 1.2;
-const BM25_B = 0.75;
+import { KnowledgeIndexManager } from './knowledge-index.js';
+import {
+    DEFAULT_KNOWLEDGE_STORE_CONFIG,
+    type KnowledgeIndex,
+    type KnowledgeItem,
+    type KnowledgeQuery,
+    type KnowledgeScope,
+    type KnowledgeSearchResult,
+    type KnowledgeStoreConfig,
+    type KnowledgeType
+} from './knowledge-types.js';
 
 // ============================================================================
 // KnowledgeStore
@@ -135,17 +40,11 @@ export class KnowledgeStore {
     private knowledgePath: string;
     private lockPath: string;
     private dirty = false;
+    private revision = 0;
     private ioMutex = new AsyncMutex();
     private lockAcquired = false;
     private saveTimeout: ReturnType<typeof setTimeout> | null = null;
-
-    // In-memory indices (rebuilt on load)
-    private itemById = new Map<string, KnowledgeItem>();
-    private itemByFingerprint = new Map<string, KnowledgeItem>();
-    private invertedIndex = new Map<string, Set<string>>(); // term -> item IDs
-    private docLengths = new Map<string, number>(); // item ID -> word count
-    private termDocFreq = new Map<string, number>(); // term -> doc count
-    private avgDocLength = 0;
+    private indexManager: KnowledgeIndexManager;
 
     // Windows lock check cache (Bug 1.4 fix)
     private lockCheckCache?: {
@@ -171,6 +70,7 @@ export class KnowledgeStore {
         this.config = { ...DEFAULT_KNOWLEDGE_STORE_CONFIG, ...config };
         this.knowledgePath = path.join(this.config.knowledgeDir, `${this.projectId}-knowledge.json`);
         this.lockPath = path.join(this.config.knowledgeDir, `${this.projectId}-knowledge.lock`);
+        this.indexManager = new KnowledgeIndexManager(this.projectId);
     }
 
     // ========================================================================
@@ -185,7 +85,7 @@ export class KnowledgeStore {
                 const content = await fs.readFile(this.knowledgePath, 'utf-8');
                 this.index = this.migrate(JSON.parse(content) as KnowledgeIndex);
                 this.pruneStaleItems();
-                this.rebuildAllIndices();
+                this.indexManager.rebuild(this.index.items);
                 return this.index;
             } catch (error) {
                 // Bug 1.3 fix: Distinguish between error types
@@ -194,7 +94,7 @@ export class KnowledgeStore {
                 // Case 1: File doesn't exist - this is fine on first run
                 if (errCode === 'ENOENT') {
                     this.index = this.createDefaultIndex();
-                    this.clearAllIndices();
+                    this.indexManager.clear();
                     return this.index;
                 }
 
@@ -237,7 +137,7 @@ export class KnowledgeStore {
 
                 // Start fresh
                 this.index = this.createDefaultIndex();
-                this.clearAllIndices();
+                this.indexManager.clear();
                 return this.index;
             }
         });
@@ -247,6 +147,7 @@ export class KnowledgeStore {
         return this.ioMutex.withLock(async () => {
             if (!this.index || !this.dirty) return;
 
+            const saveRevision = this.revision;
             const acquired = await this.acquireLock();
             if (!acquired) {
                 throw new Error(`Failed to acquire lock: ${this.lockPath}`);
@@ -255,9 +156,12 @@ export class KnowledgeStore {
             try {
                 this.updateStats();
                 const tempPath = `${this.knowledgePath}.${Date.now()}.tmp`;
-                await fs.writeFile(tempPath, JSON.stringify(this.index, null, 2), 'utf-8');
+                const payload = JSON.stringify(this.index, null, 2);
+                await fs.writeFile(tempPath, payload, 'utf-8');
                 await fs.rename(tempPath, this.knowledgePath);
-                this.dirty = false;
+                if (this.revision === saveRevision) {
+                    this.dirty = false;
+                }
             } finally {
                 await this.releaseLock();
             }
@@ -282,136 +186,6 @@ export class KnowledgeStore {
     }
 
     // ========================================================================
-    // Index Management
-    // ========================================================================
-
-    private clearAllIndices(): void {
-        this.itemById.clear();
-        this.itemByFingerprint.clear();
-        this.invertedIndex.clear();
-        this.docLengths.clear();
-        this.termDocFreq.clear();
-        this.avgDocLength = 0;
-    }
-
-    private rebuildAllIndices(): void {
-        this.clearAllIndices();
-        if (!this.index) return;
-
-        let totalLength = 0;
-
-        for (const item of this.index.items) {
-            // ID and fingerprint indices
-            this.itemById.set(item.id, item);
-            if (item.fingerprint) {
-                this.itemByFingerprint.set(item.fingerprint, item);
-            }
-
-            // Tokenize and build inverted index
-            const tokens = this.tokenize(item);
-            this.docLengths.set(item.id, tokens.length);
-            totalLength += tokens.length;
-
-            const seenTerms = new Set<string>();
-            for (const term of tokens) {
-                // Add to inverted index
-                let postings = this.invertedIndex.get(term);
-                if (!postings) {
-                    postings = new Set();
-                    this.invertedIndex.set(term, postings);
-                }
-                postings.add(item.id);
-
-                // Track document frequency (count each term once per doc)
-                if (!seenTerms.has(term)) {
-                    seenTerms.add(term);
-                    this.termDocFreq.set(term, (this.termDocFreq.get(term) || 0) + 1);
-                }
-            }
-        }
-
-        this.avgDocLength = this.index.items.length > 0
-            ? totalLength / this.index.items.length
-            : 0;
-    }
-
-    private addToIndices(item: KnowledgeItem): void {
-        this.itemById.set(item.id, item);
-        this.itemByFingerprint.set(item.fingerprint, item);
-
-        const tokens = this.tokenize(item);
-        this.docLengths.set(item.id, tokens.length);
-
-        // Update avg doc length
-        const n = this.index!.items.length;
-        this.avgDocLength = ((this.avgDocLength * (n - 1)) + tokens.length) / n;
-
-        const seenTerms = new Set<string>();
-        for (const term of tokens) {
-            let postings = this.invertedIndex.get(term);
-            if (!postings) {
-                postings = new Set();
-                this.invertedIndex.set(term, postings);
-            }
-            postings.add(item.id);
-
-            if (!seenTerms.has(term)) {
-                seenTerms.add(term);
-                this.termDocFreq.set(term, (this.termDocFreq.get(term) || 0) + 1);
-            }
-        }
-    }
-
-    private removeFromIndices(item: KnowledgeItem): void {
-        this.itemById.delete(item.id);
-        this.itemByFingerprint.delete(item.fingerprint);
-
-        const tokens = this.tokenize(item);
-        this.docLengths.delete(item.id);
-
-        const seenTerms = new Set<string>();
-        for (const term of tokens) {
-            const postings = this.invertedIndex.get(term);
-            if (postings) {
-                postings.delete(item.id);
-                if (postings.size === 0) {
-                    this.invertedIndex.delete(term);
-                }
-            }
-
-            if (!seenTerms.has(term)) {
-                seenTerms.add(term);
-                const count = this.termDocFreq.get(term) || 0;
-                if (count <= 1) {
-                    this.termDocFreq.delete(term);
-                } else {
-                    this.termDocFreq.set(term, count - 1);
-                }
-            }
-        }
-
-        // Bug 1.2 fix: Recalculate avgDocLength after removal
-        const n = this.docLengths.size;
-        if (n > 0) {
-            let totalLength = 0;
-            for (const len of this.docLengths.values()) {
-                totalLength += len;
-            }
-            this.avgDocLength = totalLength / n;
-        } else {
-            this.avgDocLength = 0;
-        }
-    }
-
-    private tokenize(item: KnowledgeItem): string[] {
-        const text = `${item.title} ${item.content} ${item.tags.join(' ')} ${item.keywords.join(' ')}`;
-        return text
-            .toLowerCase()
-            .split(/\W+/)
-            .filter(t => t.length > 2);
-    }
-
-    // ========================================================================
     // Knowledge CRUD
     // ========================================================================
 
@@ -422,7 +196,7 @@ export class KnowledgeStore {
         const fingerprint = this.computeFingerprint(item.type, item.title, item.scope);
 
         // Check for duplicate
-        const existing = this.itemByFingerprint.get(fingerprint);
+        const existing = this.indexManager.getByFingerprint(fingerprint);
         if (existing) {
             // Bug 1.1 fix: Check if content changed and rebuild indices
             const contentChanged = existing.content !== item.content ||
@@ -430,7 +204,7 @@ export class KnowledgeStore {
                                    !this.arraysEqual(existing.keywords, item.keywords);
 
             if (contentChanged) {
-                this.removeFromIndices(existing);
+                this.indexManager.remove(existing);
             }
 
             existing.content = item.content;
@@ -448,10 +222,10 @@ export class KnowledgeStore {
             existing.updated = now;
 
             if (contentChanged) {
-                this.addToIndices(existing);
+                this.indexManager.add(existing, this.index.items.length);
             }
 
-            this.dirty = true;
+            this.markDirty();
             return existing;
         }
 
@@ -471,8 +245,8 @@ export class KnowledgeStore {
         };
 
         this.index.items.push(knowledge);
-        this.addToIndices(knowledge);
-        this.dirty = true;
+        this.indexManager.add(knowledge, this.index.items.length);
+        this.markDirty();
 
         return knowledge;
     }
@@ -480,30 +254,38 @@ export class KnowledgeStore {
     removeKnowledge(id: string): boolean {
         if (!this.index) return false;
 
-        const item = this.itemById.get(id);
+        const item = this.indexManager.getById(id);
         if (!item) return false;
 
         const idx = this.index.items.indexOf(item);
         if (idx === -1) return false;
 
-        this.removeFromIndices(item);
+        this.indexManager.remove(item);
         this.index.items.splice(idx, 1);
-        this.dirty = true;
+        this.markDirty();
         return true;
     }
 
     markUsed(id: string): void {
-        const item = this.itemById.get(id);
+        const item = this.indexManager.getById(id);
         if (item) {
             item.useCount++;
             item.lastAccessed = Date.now();
-            this.dirty = true;
-            this.scheduleSave();
+            this.markDirty();
         }
     }
 
+    private markDirty(): void {
+        this.dirty = true;
+        this.revision += 1;
+        this.scheduleSave();
+    }
+
     private scheduleSave(): void {
-        if (this.saveTimeout) return;
+        if (this.saveTimeout) {
+            clearTimeout(this.saveTimeout);
+            this.saveTimeout = null;
+        }
         this.saveTimeout = setTimeout(async () => {
             this.saveTimeout = null;
             if (this.dirty) {
@@ -522,105 +304,7 @@ export class KnowledgeStore {
 
     search(query: KnowledgeQuery): KnowledgeSearchResult[] {
         if (!this.index || this.index.items.length === 0) return [];
-
-        // Get candidates via inverted index
-        let candidates: KnowledgeItem[];
-        const queryTerms = query.query ? this.tokenizeQuery(query.query) : [];
-
-        if (queryTerms.length > 0) {
-            const candidateIds = new Set<string>();
-            for (const term of queryTerms) {
-                const postings = this.invertedIndex.get(term);
-                if (postings) {
-                    for (const id of postings) candidateIds.add(id);
-                }
-            }
-            candidates = [];
-            for (const id of candidateIds) {
-                const item = this.itemById.get(id);
-                if (item) candidates.push(item);
-            }
-        } else {
-            candidates = [...this.index.items];
-        }
-
-        // Apply filters
-        if (query.types?.length) {
-            candidates = candidates.filter(i => query.types!.includes(i.type));
-        }
-        if (query.tags?.length) {
-            candidates = candidates.filter(i => query.tags!.some(t => i.tags.includes(t)));
-        }
-        if (query.minConfidence !== undefined) {
-            candidates = candidates.filter(i => i.confidence >= query.minConfidence!);
-        }
-
-        // Score with scope multiplier
-        const results: KnowledgeSearchResult[] = [];
-
-        for (const item of candidates) {
-            // Use score-based scope matching
-            const scopeScore = this.matchesScopeWithScore(item.scope, query);
-            if (scopeScore === 0) {
-                continue;  // Completely excluded (strict mode or project mismatch)
-            }
-
-            // Calculate base score
-            const baseScore = queryTerms.length > 0
-                ? this.scoreBM25(item, queryTerms)
-                : this.scoreBasic(item);
-
-            // Apply scope multiplier
-            const finalScore = baseScore * scopeScore;
-
-            results.push({
-                item,
-                relevance: finalScore,
-                matchReason: this.getMatchReason(item, query, scopeScore)
-            });
-        }
-
-        results.sort((a, b) => b.relevance - a.relevance);
-        return results.slice(0, query.maxResults ?? 10);
-    }
-
-    private tokenizeQuery(text: string): string[] {
-        return text.toLowerCase().split(/\W+/).filter(t => t.length > 2);
-    }
-
-    private scoreBM25(item: KnowledgeItem, queryTerms: string[]): number {
-        const docLen = this.docLengths.get(item.id) || 1;
-        const N = this.index!.items.length;
-        const itemTokens = this.tokenize(item);
-
-        // Build term frequency map for this item
-        const tf = new Map<string, number>();
-        for (const t of itemTokens) {
-            tf.set(t, (tf.get(t) || 0) + 1);
-        }
-
-        let score = 0;
-        for (const term of queryTerms) {
-            const termFreq = tf.get(term) || 0;
-            if (termFreq === 0) continue;
-
-            const docFreq = this.termDocFreq.get(term) || 0;
-            const idf = Math.log(1 + (N - docFreq + 0.5) / (docFreq + 0.5));
-
-            const num = idf * termFreq * (BM25_K1 + 1);
-            const denom = termFreq + BM25_K1 * (1 - BM25_B + BM25_B * (docLen / (this.avgDocLength || 1)));
-            score += num / denom;
-        }
-
-        // Normalize to 0-1 range and blend with confidence
-        const normalized = Math.min(score / 10, 1);
-        return normalized * 0.7 + item.confidence * 0.3;
-    }
-
-    private scoreBasic(item: KnowledgeItem): number {
-        const daysSinceAccess = (Date.now() - item.lastAccessed) / (24 * 60 * 60 * 1000);
-        const recency = Math.max(0, 0.2 - daysSinceAccess * 0.01);
-        return item.confidence * 0.6 + recency + Math.min(item.useCount * 0.02, 0.2);
+        return this.indexManager.search(this.index.items, query);
     }
 
     getContextKnowledge(
@@ -656,111 +340,6 @@ export class KnowledgeStore {
     }
 
     // ========================================================================
-    // Scope Matching
-    // ========================================================================
-
-    /**
-     * Check if item scope matches query, returning a score multiplier.
-     *
-     * @param scope - Item's scope constraints
-     * @param query - Query parameters
-     * @returns Score multiplier: 1.0 for full match, 0.0-0.9 for partial, 0 for no match
-     */
-    private matchesScopeWithScore(scope: KnowledgeScope, query: KnowledgeQuery): number {
-        // Global scope always matches fully
-        if (scope.global) {
-            return 1.0;
-        }
-
-        // Project scope check - always strict (no relaxation for wrong project)
-        if (scope.projectIds?.length && !scope.projectIds.includes(this.projectId)) {
-            return 0;  // Different project, exclude completely
-        }
-
-        let scoreMultiplier = 1.0;
-
-        // File pattern check
-        if (scope.filePatterns?.length) {
-            if (!query.filePath) {
-                // No file context provided
-                if (query.relaxedScope) {
-                    scoreMultiplier *= 0.5;  // 50% penalty
-                } else {
-                    return 0;  // Strict mode: exclude
-                }
-            } else {
-                // Check if file matches any pattern
-                const normalizedPath = query.filePath.replace(/\\/g, '/');
-                const matches = scope.filePatterns.some(p =>
-                    picomatch.isMatch(normalizedPath, p.replace(/\\/g, '/'), {
-                        dot: true,
-                        nocase: process.platform === 'win32'
-                    })
-                );
-
-                if (!matches) {
-                    if (query.relaxedScope) {
-                        scoreMultiplier *= 0.3;  // 70% penalty for wrong file
-                    } else {
-                        return 0;
-                    }
-                }
-            }
-        }
-
-        // Module scope check
-        if (scope.modules?.length) {
-            if (!query.moduleName) {
-                // No module context provided
-                if (query.relaxedScope) {
-                    scoreMultiplier *= 0.5;  // 50% penalty
-                } else {
-                    return 0;  // Strict mode: exclude
-                }
-            } else if (!scope.modules.includes(query.moduleName)) {
-                // Wrong module
-                if (query.relaxedScope) {
-                    scoreMultiplier *= 0.3;  // 70% penalty
-                } else {
-                    return 0;
-                }
-            }
-            // Exact module match: no penalty (multiplier stays at current value)
-        }
-
-        return scoreMultiplier;
-    }
-
-    private getMatchReason(item: KnowledgeItem, query: KnowledgeQuery, scopeScore = 1.0): string {
-        const reasons: string[] = [];
-
-        if (query.query) {
-            const terms = this.tokenizeQuery(query.query);
-            const matched = terms.filter(t =>
-                item.keywords.some(k => k.toLowerCase().includes(t)) ||
-                item.tags.some(tag => tag.toLowerCase().includes(t))
-            );
-            if (matched.length) reasons.push(`Keywords: ${matched.join(', ')}`);
-        }
-
-        if (query.tags?.some(t => item.tags.includes(t))) {
-            reasons.push(`Tags: ${query.tags.filter(t => item.tags.includes(t)).join(', ')}`);
-        }
-
-        if (query.moduleName && item.scope.modules?.includes(query.moduleName)) {
-            reasons.push(`Module: ${query.moduleName}`);
-        }
-
-        // Add scope penalty indication
-        if (scopeScore < 1.0 && scopeScore > 0) {
-            const penaltyPercent = Math.round((1 - scopeScore) * 100);
-            reasons.push(`Scope penalty: -${penaltyPercent}%`);
-        }
-
-        return reasons.join('; ') || 'General relevance';
-    }
-
-    // ========================================================================
     // Pruning
     // ========================================================================
 
@@ -777,7 +356,7 @@ export class KnowledgeStore {
         });
 
         if (this.index.items.length < before) {
-            this.dirty = true;
+            this.markDirty();
         }
     }
 
@@ -795,12 +374,12 @@ export class KnowledgeStore {
         const toRemove = new Set(scored.slice(0, removeCount).map(s => s.item.id));
 
         for (const id of toRemove) {
-            const item = this.itemById.get(id);
-            if (item) this.removeFromIndices(item);
+            const item = this.indexManager.getById(id);
+            if (item) this.indexManager.remove(item);
         }
 
         this.index.items = this.index.items.filter(i => !toRemove.has(i.id));
-        this.dirty = true;
+        this.markDirty();
     }
 
     private pruneScore(item: KnowledgeItem, now: number): number {
@@ -1403,6 +982,11 @@ export class KnowledgeStore {
                 return { isStale: false, content };
             }
 
+            // Self-heal: if lock belongs to this process but we don't hold it, treat as stale
+            if (lock.pid === process.pid && !this.lockAcquired) {
+                return { isStale: true, content };
+            }
+
             // Time-based check (5 minutes)
             if (Date.now() - lock.time > 5 * 60 * 1000) {
                 return { isStale: true, content };
@@ -1486,7 +1070,7 @@ export class KnowledgeStore {
      * Get a knowledge item by ID (for TieredKnowledgeStore lazy loading)
      */
     getItemById(id: string): KnowledgeItem | undefined {
-        return this.itemById.get(id);
+        return this.indexManager.getById(id);
     }
 }
 
@@ -1511,4 +1095,16 @@ export function createKnowledgeStore(
 export function setGlobalKnowledgeStore(store: KnowledgeStore): void {
     globalStore = store;
 }
+
+// Re-export types/constants for compatibility
+export type {
+    KnowledgeIndex,
+    KnowledgeItem,
+    KnowledgeQuery,
+    KnowledgeScope,
+    KnowledgeSearchResult,
+    KnowledgeStoreConfig,
+    KnowledgeType
+} from './knowledge-types.js';
+export { DEFAULT_KNOWLEDGE_STORE_CONFIG } from './knowledge-types.js';
 

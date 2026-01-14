@@ -10,8 +10,8 @@
  */
 
 import { generateObject, streamText, stepCountIs } from 'ai';
-import { anthropic } from '@ai-sdk/anthropic';
 import { z } from 'zod';
+import { createAnthropicClient } from '../anthropic-client.js';
 import type { EventBus } from '../../events/index.js';
 import type { GateFlowAgent, ExecutionPlan, Task, AgentRouting, ComplexityDetection } from '../../types/agent-shared.js';
 import { AgentRoutingSchema, ComplexityDetectionSchema } from '../../types/agent-shared.js';
@@ -51,7 +51,7 @@ export class Orchestrator {
         // Step 1: AI-powered routing using generateObject
         // FIX A: Remove 'planning' from prompt - planning is handled by executeWithPlan(), not as a worker
         const { object: routing } = await generateObject({
-            model: anthropic(this.modelName) as any,
+            model: createAnthropicClient(this.modelName) as any,
             schema: AgentRoutingSchema,
             prompt: `Route this request to the best agent:
 
@@ -91,7 +91,7 @@ Select the most appropriate agent and describe the task.`
             let lastUsage: { inputTokens?: number; outputTokens?: number } | undefined;
 
             const result = await streamText({
-                model: anthropic(this.modelName) as any,
+                model: createAnthropicClient(this.modelName) as any,
                 system: worker.system,
                 prompt: routing.taskDescription,
                 tools: worker.tools,
@@ -307,7 +307,7 @@ Select the most appropriate agent and describe the task.`
      */
     private async executeTask(worker: GateFlowAgent, task: Task): Promise<string> {
         const result = await streamText({
-            model: anthropic(this.modelName) as any,
+            model: createAnthropicClient(this.modelName) as any,
             system: worker.system,
             prompt: task.description,
             tools: worker.tools,

@@ -9,7 +9,7 @@
  */
 
 import { stepCountIs, type Tool } from 'ai';
-import { anthropic } from '@ai-sdk/anthropic';
+import { createAnthropicClient } from './anthropic-client.js';
 import { getToolSpecs, createToolExecutors, TOOL_APPROVAL_CONFIG, type ToolContext, type ToolSpec } from './tools.js';
 import { getSystemPrompt, type PromptMode } from './prompts.js';
 import type { CreateAgentOptions } from '../types/agent-types.js';
@@ -125,7 +125,7 @@ export function createAgentBundle(
     }
 
     return {
-        model: anthropic(model) as ReturnType<typeof anthropic>,
+        model: createAnthropicClient(model) as ReturnType<typeof createAnthropicClient>,
         instructions: getSystemPrompt(mode),
         tools,
         stopWhen: stepCountIs(maxSteps),
