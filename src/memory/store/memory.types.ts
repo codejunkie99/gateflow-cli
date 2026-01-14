@@ -73,9 +73,11 @@ export interface ChatHistoryFile {
 
 export interface RelevantMessage {
     turnNumber: number;
-    role: 'user' | 'assistant';
+    role: 'user' | 'assistant' | 'tool';
     content: string;
     relevance: number;
+    /** Tool name if role is 'tool' */
+    toolName?: string;
 }
 
 export interface ArchivedSession {
@@ -104,4 +106,6 @@ export interface SummarizationResult {
 export interface Message {
     role: string;
     content: string;
+    /** Tool calls made by assistant, with their results */
+    toolCalls?: Array<{ name: string; result?: string }>;
 }

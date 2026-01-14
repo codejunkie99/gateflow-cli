@@ -145,9 +145,9 @@ function formatContent(
     }
 
     // Add conditional compilation info if present
-    if (dep.guard) {
-        const guardStr = typeof dep.guard === 'string' ? dep.guard : dep.guard.condition;
-        lines.push(`Conditional: only when ${guardStr} is defined`);
+    const guardCondition = getGuardCondition(dep.guard);
+    if (guardCondition) {
+        lines.push(`Conditional: only when ${guardCondition} is defined`);
     }
 
     return lines.join('\n');
@@ -203,9 +203,9 @@ function buildKeywords(
     keywords.push(dep.reason);
 
     // Conditional guard keyword
-    if (dep.guard) {
-        const guardStr = typeof dep.guard === 'string' ? dep.guard : dep.guard.condition;
-        keywords.push(guardStr.toLowerCase());
+    const guardCondition = getGuardCondition(dep.guard);
+    if (guardCondition) {
+        keywords.push(guardCondition.toLowerCase());
     }
 
     return [...new Set(keywords)];
@@ -243,4 +243,16 @@ function shouldIncludeFiles(
     }
 
     return true;
+}
+
+/**
+ * Safely extract guard condition from potentially malformed dependency data.
+ */
+function getGuardCondition(guard: FileDependency['guard']): string | null {
+    if (!guard) return null;
+    if (typeof guard === 'string') return guard;
+    if (typeof guard === 'object' && typeof guard.condition === 'string') {
+        return guard.condition;
+    }
+    return null;
 }
