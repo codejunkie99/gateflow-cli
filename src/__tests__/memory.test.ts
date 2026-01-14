@@ -6,7 +6,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs/promises';
 import * as path from 'path';
 import * as os from 'os';
-import { MemoryManager } from '../memory/manager.js';
+import { MemoryManager } from '../memory/store/manager.js';
 import { KnowledgeStore, type KnowledgeItem } from '../memory/KnowledgeStore.js';
 import { EventBus } from '../events/bus.js';
 import {

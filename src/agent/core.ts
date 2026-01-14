@@ -14,7 +14,7 @@ import { z } from 'zod';
 import type { EventBus } from '../events/index.js';
 import type { ToolContext } from './tools.js';
 import { createToolExecutors, getToolSpecs as getToolDefinitions, TOOL_APPROVAL_CONFIG } from './tools.js';
-import type { MemoryManager } from '../memory/manager.js';
+import type { MemoryManager } from '../memory/store/manager.js';
 import type { MemoryService } from '../memory/MemoryService.js';
 import { getSystemPrompt, detectMode, type PromptMode, type DetectModeContext } from './prompts.js';
 import { ThinkingChain } from './reasoning/ThinkingChain.js';

@@ -14,7 +14,7 @@
 
 import type { EventBus } from '../events/index.js';
 import { AsyncMutex } from '../concurrency/index.js';
-import { MemoryManager, type ProjectMemory, type MemoryConfig } from './manager.js';
+import { MemoryManager, type ProjectMemory, type MemoryConfig } from './store/manager.js';
 import { KnowledgeStore, type KnowledgeStoreConfig, type KnowledgeQuery } from './KnowledgeStore.js';
 import { TieredKnowledgeStore, type TieredStoreConfig, createTieredStore } from './tiered-store.js';
 import { estimateTokens } from './utils.js';

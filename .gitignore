@@ -33,6 +33,7 @@ coverage/
 # IDE
 .vscode/
 .idea/
+.serena/
 *.swp
 *.swo
 *~
