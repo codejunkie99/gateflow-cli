@@ -42,8 +42,11 @@ const MAX_EXCERPT_LENGTH = 300;
 /** Context window size around match in excerpts */
 const EXCERPT_CONTEXT_WINDOW = 100;
 
-/** Valid message roles for RelevantMessage */
-const VALID_RELEVANT_ROLES = new Set(['user', 'assistant']);
+/** Maximum backtrack distance when snapping to word boundary */
+const EXCERPT_MAX_BACKTRACK = 20;
+
+/** Valid message roles for RelevantMessage (includes tool for searchable tool results) */
+const VALID_RELEVANT_ROLES = new Set(['user', 'assistant', 'tool']);
 
 // ============================================================================
 // Types
@@ -60,6 +63,8 @@ interface ArchiveSchema {
         turn: number;
         role: string;
         content: string;
+        /** Tool name if role is 'tool' */
+        toolName?: string;
     }>;
 }
 
@@ -114,23 +119,46 @@ export class ArchiveManager {
             const filePath = path.join(this.archiveDir, filename);
 
             // Calculate turn numbers based on user message count
+            // Also expand toolCalls into separate 'tool' role messages for searchability
             let currentTurn = -1;
+            const expandedMessages: ArchiveSchema['messages'] = [];
+
+            for (const m of messages) {
+                if (m.role === 'user') {
+                    currentTurn++;
+                }
+                const turn = Math.max(0, currentTurn);
+
+                // Add the main message
+                expandedMessages.push({
+                    index: expandedMessages.length,
+                    turn,
+                    role: m.role,
+                    content: m.content
+                });
+
+                // Expand tool calls into separate searchable messages
+                if (m.toolCalls && m.toolCalls.length > 0) {
+                    for (const tc of m.toolCalls) {
+                        if (tc.result && tc.result.trim().length > 0) {
+                            expandedMessages.push({
+                                index: expandedMessages.length,
+                                turn,
+                                role: 'tool',
+                                content: tc.result,
+                                toolName: tc.name
+                            });
+                        }
+                    }
+                }
+            }
+
             const archiveData: ArchiveSchema = {
                 sessionId,
                 timestamp,
                 summary,
                 messageCount: messages.length,
-                messages: messages.map((m, i) => {
-                    if (m.role === 'user') {
-                        currentTurn++;
-                    }
-                    return {
-                        index: i,
-                        turn: Math.max(0, currentTurn),
-                        role: m.role,
-                        content: m.content
-                    };
-                })
+                messages: expandedMessages
             };
 
             await fs.writeFile(filePath, JSON.stringify(archiveData, null, 2), 'utf-8');
@@ -297,12 +325,17 @@ Or read the file directly for full context:
 
                         const relevance = this.calculateRelevance(msg.content, query);
                         if (relevance > 0) {
-                            results.push({
+                            const result: RelevantMessage = {
                                 turnNumber: msg.turn,
-                                role: msg.role as 'user' | 'assistant',
+                                role: msg.role as 'user' | 'assistant' | 'tool',
                                 content: this.extractRelevantExcerpt(msg.content, query),
                                 relevance
-                            });
+                            };
+                            // Include tool name for tool messages
+                            if (msg.role === 'tool' && msg.toolName) {
+                                result.toolName = msg.toolName;
+                            }
+                            results.push(result);
                         }
                     }
                 } catch (error) {
@@ -614,8 +647,9 @@ Or read the file directly for full context:
         if (matchIndex === -1) {
             // No match - return beginning of content, snapped to word boundary
             let endPos = Math.min(content.length, MAX_EXCERPT_LENGTH);
-            // Snap to word boundary
-            while (endPos < content.length && content[endPos] !== ' ' && endPos > MAX_EXCERPT_LENGTH - 20) {
+            const minEndPos = Math.max(0, endPos - EXCERPT_MAX_BACKTRACK);
+            // Snap to word boundary (backtrack a limited distance)
+            while (endPos < content.length && content[endPos] !== ' ' && endPos > minEndPos) {
                 endPos--;
             }
             return content.slice(0, endPos) + (content.length > endPos ? '...' : '');

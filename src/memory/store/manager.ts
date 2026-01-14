@@ -35,8 +35,8 @@ export class MemoryManager {
     private lockAcquired: boolean = false;
     private ioMutex = new AsyncMutex();
     private dirty: boolean = false;
+    private revision: number = 0;
     private saveTimeout: ReturnType<typeof setTimeout> | null = null;
-    private saveInProgress: boolean = false;
     private readonly SAVE_DEBOUNCE_MS = 5000;
     private archiveManager: ArchiveManager;
 
@@ -84,7 +84,10 @@ export class MemoryManager {
                 this.memory.lastAccess = Date.now();
                 this.memory = this.migrate(this.memory);
                 return this.memory;
-            } catch (error) {
+            } catch (error: any) {
+                if (error?.code !== 'ENOENT') {
+                    console.warn('[MemoryManager] Failed to load memory, using defaults:', error);
+                }
                 this.memory = this.createDefaultMemory();
                 return this.memory;
             }
@@ -98,6 +101,7 @@ export class MemoryManager {
         return this.ioMutex.withLock(async () => {
             if (!this.memory || !this.dirty) return;
 
+            const saveRevision = this.revision;
             const acquired = await this.acquireLock();
             if (!acquired) {
                 throw new Error(`Failed to acquire memory lock: ${this.lockPath}`);
@@ -106,21 +110,24 @@ export class MemoryManager {
             try {
                 // Atomic write: write to temp, then rename
                 const tempPath = `${this.memoryPath}.${Date.now()}.tmp`;
+                const payload = JSON.stringify(this.memory, null, 2);
 
                 try {
                     await fs.writeFile(
                         tempPath,
-                        JSON.stringify(this.memory, null, 2),
+                        payload,
                         'utf-8'
                     );
 
                     await fs.rename(tempPath, this.memoryPath);
-                    this.dirty = false;
+                    if (this.revision === saveRevision) {
+                        this.dirty = false;
+                    }
 
                     this.bus.emit({
                         type: 'memory_saved',
                         path: this.memoryPath,
-                        size: JSON.stringify(this.memory).length
+                        size: Buffer.byteLength(payload, 'utf-8')
                     });
 
                 } catch (error) {
@@ -261,21 +268,15 @@ export class MemoryManager {
         this.saveTimeout = setTimeout(async () => {
             this.saveTimeout = null;
 
-            // Check flags without holding lock during save() call to avoid deadlock
             // save() acquires ioMutex internally, so we must not hold it here
-            if (!this.dirty || this.saveInProgress) {
+            if (!this.dirty) {
                 return;
             }
-
-            // Set flag before releasing control flow
-            this.saveInProgress = true;
 
             try {
                 await this.save();
             } catch (error) {
                 console.error('Auto-save failed:', error);
-            } finally {
-                this.saveInProgress = false;
             }
         }, this.SAVE_DEBOUNCE_MS);
     }
@@ -314,8 +315,7 @@ export class MemoryManager {
             this.memory.history = this.memory.history.slice(0, this.config.maxHistory);
         }
 
-        this.dirty = true;
-        this.scheduleSave();
+        this.markDirty();
     }
 
     /**
@@ -324,8 +324,7 @@ export class MemoryManager {
     updateContext(updates: Partial<ProjectMemory['context']>): void {
         if (!this.memory) return;
         this.memory.context = { ...this.memory.context, ...updates };
-        this.dirty = true;
-        this.scheduleSave();
+        this.markDirty();
     }
 
     /**
@@ -347,8 +346,7 @@ export class MemoryManager {
             this.memory.context.recentFiles = this.memory.context.recentFiles.slice(0, 20);
         }
 
-        this.dirty = true;
-        this.scheduleSave();
+        this.markDirty();
     }
 
     /**
@@ -357,8 +355,7 @@ export class MemoryManager {
     addModuleNote(moduleName: string, note: string): void {
         if (!this.memory) return;
         this.memory.context.moduleNotes[moduleName] = note;
-        this.dirty = true;
-        this.scheduleSave();
+        this.markDirty();
     }
 
     /**
@@ -374,8 +371,7 @@ export class MemoryManager {
     addApproval(approval: ApprovalGrant): void {
         if (!this.memory) return;
         this.memory.approvals.push(approval);
-        this.dirty = true;
-        this.scheduleSave();
+        this.markDirty();
     }
 
     /**
@@ -386,8 +382,7 @@ export class MemoryManager {
         this.memory.approvals = this.memory.approvals.filter(
             a => a.scope === 'project'
         );
-        this.dirty = true;
-        this.scheduleSave();
+        this.markDirty();
     }
 
     /**
@@ -488,6 +483,12 @@ export class MemoryManager {
     // ========================================================================
     // Helpers
     // ========================================================================
+
+    private markDirty(): void {
+        this.dirty = true;
+        this.revision += 1;
+        this.scheduleSave();
+    }
 
     private createDefaultMemory(): ProjectMemory {
         return {
