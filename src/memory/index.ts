@@ -4,7 +4,7 @@
  */
 
 export * from './store/manager.js';
-export * from './KnowledgeStore.js';
+export * from './ParentKnowledgeStore.js';
 export * from './MemoryService.js';
 export * from './utils.js';
 // token-estimator exports are re-exported via utils.js to avoid naming conflicts
