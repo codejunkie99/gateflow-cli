@@ -74,6 +74,8 @@ ${chalk.blue.bold(' ██║  ███╗███████║   ██║ 
 ${chalk.blue.bold(' ██║   ██║██╔══██║   ██║   ██╔══╝  ██╔══╝  ██║     ██║   ██║██║███╗██║')}
 ${chalk.blue.bold(' ╚██████╔╝██║  ██║   ██║   ███████╗██║     ███████╗╚██████╔╝╚███╔███╔╝')}
 ${chalk.blue.bold('  ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚══════╝╚═╝     ╚══════╝ ╚═════╝  ╚══╝╚══╝')}
+${chalk.cyan('                Founded & Built by Avidlive (Av1dlive) ')}
+${chalk.cyan('             Founding Contributor - Manas (Menace_thakur) ')}
 ${chalk.cyan('                AI-powered SystemVerilog Assistant')}
 `;
 
