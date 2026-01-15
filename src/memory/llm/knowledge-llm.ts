@@ -162,7 +162,7 @@ Return JSON with:
 - concepts: array of semantic concepts (optional)
 - moduleFilter: specific module name if mentioned (optional)`,
                 temperature: this.config.temperature,
-                maxTokens: this.config.maxTokens
+                maxOutputTokens: this.config.maxTokens
             });
 
             return {
@@ -219,7 +219,7 @@ Return JSON with "terms" including:
 - Naming variants (snake_case, camelCase)
 Return max 10 terms.`,
                 temperature: this.config.temperature,
-                maxTokens: this.config.maxTokens
+                maxOutputTokens: this.config.maxTokens
             });
 
             const cleaned = object.terms
@@ -256,7 +256,7 @@ Return JSON with:
             }),
             prompt,
             temperature: this.config.temperature,
-            maxTokens: this.config.maxTokens
+            maxOutputTokens: this.config.maxTokens
         });
 
         const tags = object.tags
