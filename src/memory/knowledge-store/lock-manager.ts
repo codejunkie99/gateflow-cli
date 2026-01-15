@@ -170,7 +170,10 @@ export class KnowledgeStoreLockManager {
                     encoding: 'utf-8',
                     timeout: 2000
                 });
-                const isAlive = result.stdout.includes(lock.pid.toString());
+                // Use word boundary matching to avoid false positives (e.g., "12" matching "123")
+                const pidStr = lock.pid.toString();
+                const pidRegex = new RegExp(`\\b${pidStr}\\b`);
+                const isAlive = pidRegex.test(result.stdout);
 
                 // Cache the result
                 this.lockCheckCache = {

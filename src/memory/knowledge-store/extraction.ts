@@ -172,9 +172,8 @@ export function extractFromLintSession(
         extracted.push(item);
     }
 
-    if (extracted.length > 0) {
-        deps.scheduleSave();
-    }
+    // Note: scheduleSave() is already called by addKnowledge() via markDirty(),
+    // so no need to call it again here
 
     return extracted;
 }
@@ -228,7 +227,7 @@ export function extractFromCodeGen(
         confidence: 0.7
     });
 
-    deps.scheduleSave();
+    // Note: scheduleSave() is already called by addKnowledge() via markDirty()
     return item;
 }
 
@@ -281,7 +280,7 @@ export function learnFromCorrection(
         confidence: 0.95 // High confidence for user corrections
     });
 
-    deps.scheduleSave();
+    // Note: scheduleSave() is already called by addKnowledge() via markDirty()
     return item;
 }
 

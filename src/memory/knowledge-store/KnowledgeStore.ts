@@ -215,11 +215,9 @@ export class KnowledgeStore {
         }
     }
 
-    destroy(): void {
-        if (this.saveTimeout) {
-            clearTimeout(this.saveTimeout);
-            this.saveTimeout = null;
-        }
+    async destroy(): Promise<void> {
+        // Flush any pending saves before destroying
+        await this.flush();
     }
 
     // ========================================================================
@@ -228,6 +226,14 @@ export class KnowledgeStore {
 
     addKnowledge(item: Omit<KnowledgeItem, 'id' | 'fingerprint' | 'created' | 'updated' | 'useCount' | 'lastAccessed'>): KnowledgeItem {
         if (!this.index) throw new Error('KnowledgeStore not loaded');
+
+        // Validate title and confidence
+        if (!item.title || item.title.trim().length === 0) {
+            throw new Error('Knowledge item must have a non-empty title');
+        }
+        if (item.confidence < 0 || item.confidence > 1) {
+            throw new Error(`Knowledge item confidence must be between 0 and 1, got ${item.confidence}`);
+        }
 
         this.validateScope(item.scope, item.source);
         const now = Date.now();
@@ -681,7 +687,7 @@ export class KnowledgeStore {
     private pruneStaleItems(): void {
         if (!this.index) return;
 
-        const { items, pruned } = pruneStaleItems(this.index.items, this.config.maxUnusedAge);
+        const { items, pruned } = pruneStaleItems(this.index.items, this.config.maxUnusedAge, this.indexManager);
         if (pruned) {
             this.index.items = items;
             this.markDirty();

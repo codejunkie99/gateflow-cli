@@ -36,19 +36,35 @@ import type { KnowledgeIndexManager } from '../knowledge-index.js';
  *
  * @param items - Current items array
  * @param maxUnusedAge - Maximum age in milliseconds
+ * @param indexManager - The search index manager (optional, for removing from index)
  * @returns New items array and whether any were pruned
  */
 export function pruneStaleItems(
     items: KnowledgeItem[],
-    maxUnusedAge: number
+    maxUnusedAge: number,
+    indexManager?: KnowledgeIndexManager
 ): { items: KnowledgeItem[]; pruned: boolean } {
     const now = Date.now();
     const before = items.length;
 
-    const prunedItems = items.filter(item => {
+    const prunedItems: KnowledgeItem[] = [];
+    const toRemove: KnowledgeItem[] = [];
+
+    for (const item of items) {
         const age = now - item.lastAccessed;
-        return age < maxUnusedAge || item.source.method === 'user_provided';
-    });
+        if (age < maxUnusedAge || item.source.method === 'user_provided') {
+            prunedItems.push(item);
+        } else {
+            toRemove.push(item);
+        }
+    }
+
+    // Remove pruned items from index manager if provided
+    if (indexManager && toRemove.length > 0) {
+        for (const item of toRemove) {
+            indexManager.remove(item);
+        }
+    }
 
     return { items: prunedItems, pruned: prunedItems.length < before };
 }
