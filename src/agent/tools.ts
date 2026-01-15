@@ -22,6 +22,7 @@ import type {
     SemanticSummarizer
 } from '../context/index.js';
 import type { MemoryManager, KnowledgeStore, MemoryService } from '../memory/index.js';
+import { LEARNED_TYPES } from '../memory/knowledge-service/index.js';
 import type { SkillRegistry } from '../skills/index.js';
 import type { MCPToolSync } from '../mcp/index.js';
 import type { InputManager } from '../ui/index.js';
@@ -285,10 +286,10 @@ export const selectChunksSchema = z.object({
 
 // Search Knowledge - Search learned patterns and knowledge
 export const searchKnowledgeSchema = z.object({
-    query: z.string().describe('What to search for in learned knowledge'),
+    query: z.string().describe('What to search for in learned or structural knowledge'),
     types: z.array(z.enum(['code_pattern', 'lint_fix', 'test_pattern', 'module_info', 'dependency',
         'style_preference', 'workflow', 'debug_solution', 'tool_usage', 'project_context']))
-        .optional().describe('Filter by knowledge type'),
+        .optional().describe('Filter by learned type or structural category'),
     maxResults: z.number().optional().default(10).describe('Maximum results (default: 10)'),
     structuralOnly: z.boolean().optional().default(false).describe('Only search structural knowledge from indexer'),
     learnedOnly: z.boolean().optional().default(false).describe('Only search learned knowledge from knowledge store')
@@ -2128,11 +2129,33 @@ export function createToolExecutors(ctx: ToolContext) {
                         ? ['learned']
                         : ['structural', 'learned'];
 
+                const requestedTypes = args.types ?? [];
+                const learnedTypes = requestedTypes.filter((t) =>
+                    LEARNED_TYPES.includes(t as typeof LEARNED_TYPES[number])
+                );
+                const structuralTypes = requestedTypes.filter(
+                    (t) => !LEARNED_TYPES.includes(t as typeof LEARNED_TYPES[number])
+                ) as Array<'module_info' | 'dependency' | 'project_context'>;
+
+                let effectiveSources = sources;
+                if (!args.structuralOnly && !args.learnedOnly && requestedTypes.length > 0) {
+                    if (learnedTypes.length === 0 && structuralTypes.length > 0) {
+                        effectiveSources = ['structural'];
+                    } else if (structuralTypes.length === 0 && learnedTypes.length > 0) {
+                        effectiveSources = ['learned'];
+                    }
+                }
+
                 const results = knowledgeService.search({
                     query: args.query,
-                    knowledgeTypes: args.types as any,
+                    knowledgeTypes: effectiveSources.includes('learned') && learnedTypes.length
+                        ? (learnedTypes as any)
+                        : undefined,
+                    structuralTypes: effectiveSources.includes('structural') && structuralTypes.length
+                        ? structuralTypes
+                        : undefined,
                     maxResults: args.maxResults ?? 10,
-                    sources,
+                    sources: effectiveSources,
                 });
 
                 if (results.length === 0) {
@@ -2140,17 +2163,20 @@ export function createToolExecutors(ctx: ToolContext) {
                         count: 0,
                         message: `No knowledge found matching: ${args.query}`,
                         note: 'Knowledge includes structural info from indexer and learned patterns from lint sessions, code generation, and user corrections.',
-                        sources,
+                        sources: effectiveSources,
                     };
                 }
 
                 return {
                     count: results.length,
                     query: args.query,
-                    sources,
+                    sources: effectiveSources,
                     results: results.map(r => ({
                         id: r.id,
-                        type: r.knowledgeItem?.type ?? r.source,
+                        type: r.knowledgeItem?.type ??
+                            (r.dependency ? 'dependency'
+                                : r.hierarchyNode ? 'project_context'
+                                    : r.declaration?.kind ?? r.source),
                         title: r.title,
                         content: r.content,
                         source: r.source,

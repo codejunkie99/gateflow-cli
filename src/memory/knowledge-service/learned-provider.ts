@@ -49,11 +49,12 @@ export class LearnedKnowledgeProvider {
    */
   search(query: UnifiedKnowledgeQuery): UnifiedKnowledgeResult[] {
     // Build knowledge query, filtering to learned types only
-    const knowledgeTypes = query.knowledgeTypes ?? (LEARNED_TYPES as KnowledgeType[]);
+    const knowledgeTypes: LearnedKnowledgeType[] =
+      query.knowledgeTypes ?? LEARNED_TYPES;
 
     // Ensure we only search learned types
-    const filteredTypes = knowledgeTypes.filter((t) =>
-      LEARNED_TYPES.includes(t as LearnedKnowledgeType)
+    const filteredTypes = knowledgeTypes.filter(
+      (t): t is KnowledgeType => LEARNED_TYPES.includes(t)
     );
 
     if (filteredTypes.length === 0) {
@@ -63,7 +64,7 @@ export class LearnedKnowledgeProvider {
 
     const results = this.knowledgeStore.search({
       query: query.query,
-      types: filteredTypes as KnowledgeType[],
+      types: filteredTypes,
       tags: query.tags,
       filePath: query.filePath,
       moduleName: query.moduleName,
@@ -91,7 +92,7 @@ export class LearnedKnowledgeProvider {
     >
   ): KnowledgeItem {
     // Validate that this is a learned type
-    if (!LEARNED_TYPES.includes(item.type as LearnedKnowledgeType)) {
+    if (!LEARNED_TYPES.includes(item.type)) {
       throw new Error(
         `Cannot add knowledge type '${item.type}' to KnowledgeStore. ` +
           `Valid learned types are: ${LEARNED_TYPES.join(', ')}`
@@ -106,6 +107,13 @@ export class LearnedKnowledgeProvider {
    */
   removeKnowledge(id: string): boolean {
     return this.knowledgeStore.removeKnowledge(id);
+  }
+
+  /**
+   * Mark a knowledge item as used.
+   */
+  markUsed(id: string): void {
+    this.knowledgeStore.markUsed(id);
   }
 
   /**
