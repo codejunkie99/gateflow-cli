@@ -30,6 +30,8 @@ import {
   createTieredStore,
 } from "./tiered-store.js";
 import { estimateTokens } from "./utils.js";
+import { KnowledgeService } from "./knowledge-service/index.js";
+import type { ResolvedProject } from "../indexer/types/index.js";
 
 // ============================================================================
 // Types
@@ -44,6 +46,8 @@ export interface MemoryServiceConfig {
   contextTokenBudget?: number;
   /** Tiered storage configuration (optional - enables memory optimization) */
   tiering?: Partial<TieredStoreConfig>;
+  /** Function to get the current project (for structural knowledge queries) */
+  projectGetter?: () => ResolvedProject | null;
 }
 
 export interface ContextInjection {
@@ -62,6 +66,7 @@ export interface ContextInjection {
 export class MemoryService {
   private memoryManager: MemoryManager;
   private knowledgeStore: KnowledgeStore;
+  private knowledgeService: KnowledgeService;
   private tieredStore?: TieredKnowledgeStore;
   private initialized = false;
   private initMutex = new AsyncMutex();
@@ -81,6 +86,11 @@ export class MemoryService {
       config?.knowledge,
     );
     this.contextTokenBudget = config?.contextTokenBudget ?? 2000;
+
+    // Create KnowledgeService for unified structural + learned knowledge queries
+    // Use provided projectGetter or default to null (no structural knowledge)
+    const projectGetter = config?.projectGetter ?? (() => null);
+    this.knowledgeService = new KnowledgeService(projectGetter, this.knowledgeStore);
 
     // Create tiered storage if configured
     if (config?.tiering) {
@@ -143,6 +153,8 @@ export class MemoryService {
   /**
    * Get context for AI injection with token budget enforcement
    *
+   * Uses KnowledgeService for combined structural + learned knowledge context.
+   *
    * @param query Optional query to filter knowledge by file/module/task
    * @returns Combined context from both stores within budget
    */
@@ -169,10 +181,13 @@ export class MemoryService {
       knowledgeBudget + (memoryBudget - actualMemoryTokens);
 
     const enrichedQuery = this.enrichQuery(query);
-    const knowledgeContext = this.knowledgeStore.getContextKnowledge(
+
+    // Use KnowledgeService for combined structural + learned knowledge context
+    // Method signature: getContextForAI(query?, filePath?, moduleName?, maxTokens?)
+    const knowledgeContext = this.knowledgeService.getContextForAI(
+      enrichedQuery?.query,
       enrichedQuery?.filePath,
       enrichedQuery?.moduleName,
-      enrichedQuery?.query,
       adjustedKnowledgeBudget,
     );
     const knowledgeTokens = estimateTokens(knowledgeContext);
@@ -287,6 +302,14 @@ export class MemoryService {
    */
   get tiering(): TieredKnowledgeStore | undefined {
     return this.tieredStore;
+  }
+
+  /**
+   * Get the KnowledgeService for unified structural + learned knowledge queries.
+   * Use this for tools that need combined search across both sources.
+   */
+  getKnowledgeService(): KnowledgeService {
+    return this.knowledgeService;
   }
 
   /**

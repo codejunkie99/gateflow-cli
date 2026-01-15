@@ -154,8 +154,10 @@ export async function setupContext(options: GlobalOptions): Promise<CommandConte
     const llmConfig = gateConfig.LLM ?? {};
 
     // Unified memory service for persistent context, knowledge, and token budgeting
+    // Pass projectGetter so KnowledgeService can query indexer directly for structural knowledge
     const memoryService = createMemoryService(projectRoot, bus, {
         contextTokenBudget: 2000,  // Token budget for AI context injection
+        projectGetter: () => indexer.getProject(),  // Enable KnowledgeService to query indexer
         tiering: {
             hotSize: 100,          // Keep 100 frequently-accessed items in memory
             warmThreshold: 3,      // Promote to hot after 3 accesses
@@ -511,10 +513,14 @@ export async function fixCommand(
 // ============================================================================
 
 /**
- * Configure WatchManager to update knowledge store on file changes
+ * Configure WatchManager to update active context on file changes
  *
- * When files are indexed, this callback triggers knowledge extraction
- * to keep the AI context synchronized with project state.
+ * When files are re-indexed, this callback updates the active context IDs
+ * so that KnowledgeService queries reflect the current project state.
+ *
+ * NOTE: We no longer call extractFromIndex for structural data here because
+ * KnowledgeService now queries the indexer directly for structural knowledge.
+ * The WatchManager already handles re-indexing files when they change.
  *
  * @private
  */
@@ -524,15 +530,10 @@ function setupKnowledgeUpdateCallback(
 ): void {
     // Check if memory service is available
     if (!ctx.memoryService) {
-        return;  // No memory service, skip knowledge updates
+        return;  // No memory service, skip context updates
     }
 
-    const knowledgeStore = ctx.memoryService.knowledge;
-    if (!knowledgeStore) {
-        return;  // No knowledge store, skip
-    }
-
-    watcher.setKnowledgeUpdateCallback(async (filepath, changeType) => {
+    watcher.setKnowledgeUpdateCallback(async (filepath, _changeType) => {
         try {
             // Get the updated project from indexer
             const project = ctx.indexer.getProject();
@@ -540,52 +541,28 @@ function setupKnowledgeUpdateCallback(
                 return;
             }
 
-            // Try to use extractors if available (Phase 2)
-            // This will gracefully degrade if extractors aren't implemented yet
-            try {
-                const { extractFromIndex, createExtractionOptions, formatExtractionSummary } =
-                    await import('../memory/extractors/index.js');
-
-                const result = await extractFromIndex(
-                    project,
-                    knowledgeStore,
-                    createExtractionOptions(knowledgeStore.getProjectId(), {
-                        maxItemsPerCategory: 100,  // Lower limit for incremental updates
-                        defineContextId: project.defineContextId,
-                        compileOrderId: project.compileOrderId
-                    })
+            // Update the active context IDs so KnowledgeService queries
+            // use the correct define context and compile order
+            if (project.defineContextId) {
+                ctx.memoryService.setActiveContext(
+                    project.defineContextId,
+                    project.compileOrderId
                 );
-
-                if (project.defineContextId) {
-                    ctx.memoryService.setActiveContext(
-                        project.defineContextId,
-                        project.compileOrderId
-                    );
-                }
-
-                if (result.success) {
-                    ctx.bus.emit({
-                        type: 'tool_result',
-                        tool: 'knowledge_update',
-                        ok: true,
-                        summary: formatExtractionSummary(result)
-                    });
-                }
-            } catch {
-                // Phase 2 extractors not available yet - that's OK
-                // The index update still happened via WatchManager
-                ctx.bus.emit({
-                    type: 'tool_result',
-                    tool: 'knowledge_update',
-                    ok: true,
-                    summary: `Index updated for ${path.basename(filepath)} (knowledge extraction pending Phase 2)`
-                });
             }
+
+            // Emit success event - structural knowledge is now queried live from indexer
+            // via KnowledgeService, so no extraction needed
+            ctx.bus.emit({
+                type: 'tool_result',
+                tool: 'knowledge_update',
+                ok: true,
+                summary: `Index updated for ${path.basename(filepath)}`
+            });
 
         } catch (error) {
             // Non-fatal - just log
             console.warn(
-                '[watchCommand] Knowledge update failed:',
+                '[watchCommand] Context update failed:',
                 error instanceof Error ? error.message : error
             );
         }

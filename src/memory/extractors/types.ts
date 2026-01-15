@@ -1,26 +1,20 @@
 /**
  * Types for knowledge extraction from indexer output
  * @module memory/extractors/types
+ *
+ * NOTE: Structural extraction has been removed. The ExtractedCount interface
+ * is now empty but kept for API compatibility.
  */
 
 /**
  * Statistics returned after extraction completes
+ *
+ * NOTE: Structural counts (modules, interfaces, packages, dependencies, hierarchy)
+ * have been removed since structural extraction is no longer supported.
+ * The KnowledgeStore now focuses on learned patterns only.
  */
 export interface ExtractedCount {
-    /** Number of module declarations extracted */
-    modules: number;
-
-    /** Number of interface declarations extracted */
-    interfaces: number;
-
-    /** Number of package declarations extracted */
-    packages: number;
-
-    /** Number of file dependency edges extracted */
-    dependencies: number;
-
-    /** Number of hierarchy nodes extracted */
-    hierarchy: number;
+    // Empty - structural extraction has been removed
 }
 
 /**
@@ -114,19 +108,19 @@ export interface ExtractionResult {
 
 /**
  * Knowledge item types that can be extracted from indexer
+ *
+ * @deprecated Structural extraction has been removed. This type is kept
+ * for backwards compatibility but should not be used.
  */
-export type ExtractableKnowledgeType =
-    | 'module_info'
-    | 'dependency'
-    | 'project_context';
+export type ExtractableKnowledgeType = never;
 
 /**
  * Declaration kinds that are extracted as module_info
+ *
+ * @deprecated Structural extraction has been removed. This type is kept
+ * for backwards compatibility but should not be used.
  */
-export type ExtractableDeclarationKind =
-    | 'module'
-    | 'interface'
-    | 'package';
+export type ExtractableDeclarationKind = never;
 
 /**
  * Validate extraction options at runtime

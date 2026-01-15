@@ -289,7 +289,9 @@ export const searchKnowledgeSchema = z.object({
     types: z.array(z.enum(['code_pattern', 'lint_fix', 'test_pattern', 'module_info', 'dependency',
         'style_preference', 'workflow', 'debug_solution', 'tool_usage', 'project_context']))
         .optional().describe('Filter by knowledge type'),
-    maxResults: z.number().optional().default(10).describe('Maximum results (default: 10)')
+    maxResults: z.number().optional().default(10).describe('Maximum results (default: 10)'),
+    structuralOnly: z.boolean().optional().default(false).describe('Only search structural knowledge from indexer'),
+    learnedOnly: z.boolean().optional().default(false).describe('Only search learned knowledge from knowledge store')
 });
 
 // Get Token Budget - Get current token budget status
@@ -2110,38 +2112,53 @@ export function createToolExecutors(ctx: ToolContext) {
             }
         },
 
-        // Search learned patterns and knowledge
+        // Search learned patterns and knowledge (unified via KnowledgeService)
         search_knowledge: async (args: z.infer<typeof searchKnowledgeSchema>) => {
-            if (!ctx.knowledgeStore) {
-                return { error: 'Knowledge store not configured' };
+            if (!ctx.memoryService) {
+                return { error: 'Memory service not configured' };
             }
 
             try {
-                const results = ctx.knowledgeStore.search({
+                const knowledgeService = ctx.memoryService.getKnowledgeService();
+
+                // Determine which sources to search based on flags
+                const sources: ('structural' | 'learned')[] = args.structuralOnly
+                    ? ['structural']
+                    : args.learnedOnly
+                        ? ['learned']
+                        : ['structural', 'learned'];
+
+                const results = knowledgeService.search({
                     query: args.query,
-                    types: args.types as any,
-                    maxResults: args.maxResults
+                    knowledgeTypes: args.types as any,
+                    maxResults: args.maxResults ?? 10,
+                    sources,
                 });
 
                 if (results.length === 0) {
                     return {
                         count: 0,
                         message: `No knowledge found matching: ${args.query}`,
-                        note: 'Knowledge is learned from lint sessions, code generation, and user corrections.'
+                        note: 'Knowledge includes structural info from indexer and learned patterns from lint sessions, code generation, and user corrections.',
+                        sources,
                     };
                 }
 
                 return {
                     count: results.length,
                     query: args.query,
+                    sources,
                     results: results.map(r => ({
-                        id: r.item.id,
-                        type: r.item.type,
-                        title: r.item.title,
-                        content: r.item.content,
-                        confidence: `${(r.item.confidence * 100).toFixed(0)}%`,
+                        id: r.id,
+                        type: r.knowledgeItem?.type ?? r.source,
+                        title: r.title,
+                        content: r.content,
+                        source: r.source,
+                        confidence: r.knowledgeItem
+                            ? `${(r.knowledgeItem.confidence * 100).toFixed(0)}%`
+                            : 'N/A',
                         relevance: `${(r.relevance * 100).toFixed(0)}%`,
-                        useCount: r.item.useCount,
+                        useCount: r.knowledgeItem?.useCount ?? 0,
                         matchReason: r.matchReason
                     }))
                 };

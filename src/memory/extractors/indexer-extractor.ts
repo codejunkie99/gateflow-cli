@@ -1,6 +1,10 @@
 /**
  * Main orchestrator for extracting knowledge from indexer output
  * @module memory/extractors/indexer-extractor
+ *
+ * NOTE: Structural extraction (modules, dependencies, hierarchy) has been removed.
+ * The KnowledgeStore now focuses on learned patterns only (code_pattern, lint_fix, etc.).
+ * This file is kept for API compatibility but performs minimal work.
  */
 
 import type { ResolvedProject } from "../../indexer/types/index.js";
@@ -10,101 +14,35 @@ import type {
   ExtractionOptions,
   ExtractionResult,
 } from "./types.js";
-import { extractModuleInfo } from "./module-extractor.js";
-import { extractDependencies } from "./dependency-extractor.js";
-import { extractHierarchy } from "./hierarchy-extractor.js";
 
 /**
- * Extract all knowledge from a resolved project
+ * Extract knowledge from a resolved project
  *
- * This is the main entry point for indexer→memory integration.
- * Call this after SVIndexer.indexProject() or SVIndexer.indexFiles()
- * completes successfully.
+ * NOTE: Structural extraction has been removed. This function now returns
+ * empty counts for backwards compatibility. The KnowledgeStore focuses
+ * on learned patterns (code_pattern, lint_fix, style_preference, etc.)
+ * rather than structural information from the indexer.
  *
- * @param project - Resolved project from indexer
- * @param store - KnowledgeStore instance to add items to
+ * @param project - Resolved project from indexer (unused)
+ * @param store - KnowledgeStore instance (unused)
  * @param options - Extraction configuration
- * @returns Result with counts and success status
- *
- * @example
- * ```typescript
- * const project = await indexer.indexProject(filelistPath);
- * const result = await extractFromIndex(project, knowledgeStore, {
- *     projectId: store.getProjectId(),
- *     sessionId: crypto.randomUUID()
- * });
- * console.log(`Extracted ${result.counts.modules} modules`);
- * ```
+ * @returns Result with empty counts and success status
  */
 export async function extractFromIndex(
-  project: ResolvedProject,
-  store: KnowledgeStore,
+  _project: ResolvedProject,
+  _store: KnowledgeStore,
   options: ExtractionOptions,
 ): Promise<ExtractionResult> {
   const startTime = Date.now();
 
-  const counts: ExtractedCount = {
-    modules: 0,
-    interfaces: 0,
-    packages: 0,
-    dependencies: 0,
-    hierarchy: 0,
-  };
+  const counts: ExtractedCount = {};
 
   try {
-    // Validate options
+    // Validate options for API compatibility
     validateOptions(options);
 
-    // Extract module information (modules, interfaces, packages)
-    if (options.extractModules !== false) {
-      const moduleCount = extractModuleInfo(project, store, options);
-
-      // Count by kind for detailed stats
-      let moduleKindCount = 0;
-      let interfaceKindCount = 0;
-      let packageKindCount = 0;
-
-      for (const decl of project.declarations) {
-        if (decl.kind === "module") moduleKindCount++;
-        else if (decl.kind === "interface") interfaceKindCount++;
-        else if (decl.kind === "package") packageKindCount++;
-      }
-
-      // Clamp to actual extracted (in case of maxItemsPerCategory)
-      const totalDesignUnits =
-        moduleKindCount + interfaceKindCount + packageKindCount;
-      if (totalDesignUnits > 0 && moduleCount < totalDesignUnits) {
-        // Proportionally distribute counts, ensuring they sum to moduleCount
-        const ratio = moduleCount / totalDesignUnits;
-        counts.modules = Math.round(moduleKindCount * ratio);
-        counts.interfaces = Math.round(interfaceKindCount * ratio);
-        // Assign remainder to packages to ensure exact sum
-        counts.packages = moduleCount - counts.modules - counts.interfaces;
-        // Clamp to non-negative in edge cases
-        if (counts.packages < 0) {
-          counts.packages = 0;
-          counts.interfaces = moduleCount - counts.modules;
-          if (counts.interfaces < 0) {
-            counts.interfaces = 0;
-            counts.modules = moduleCount;
-          }
-        }
-      } else {
-        counts.modules = moduleKindCount;
-        counts.interfaces = interfaceKindCount;
-        counts.packages = packageKindCount;
-      }
-    }
-
-    // Extract file dependencies
-    if (options.extractDependencies !== false) {
-      counts.dependencies = extractDependencies(project, store, options);
-    }
-
-    // Extract hierarchy
-    if (options.extractHierarchy !== false) {
-      counts.hierarchy = extractHierarchy(project, store, options);
-    }
+    // Structural extraction has been removed.
+    // Return success with empty counts.
 
     return {
       success: true,
@@ -123,18 +61,16 @@ export async function extractFromIndex(
 
 /**
  * Extract only module information (lighter weight)
+ *
+ * @deprecated Structural extraction has been removed. This function
+ * now just calls extractFromIndex for backwards compatibility.
  */
 export async function extractModulesOnly(
   project: ResolvedProject,
   store: KnowledgeStore,
   options: ExtractionOptions,
 ): Promise<ExtractionResult> {
-  return extractFromIndex(project, store, {
-    ...options,
-    extractModules: true,
-    extractDependencies: false,
-    extractHierarchy: false,
-  });
+  return extractFromIndex(project, store, options);
 }
 
 /**
@@ -189,30 +125,16 @@ export function createExtractionOptions(
 
 /**
  * Get extraction summary as human-readable string
+ *
+ * NOTE: Since structural extraction has been removed, this now returns
+ * a simple success message with no counts.
  */
 export function formatExtractionSummary(result: ExtractionResult): string {
   if (!result.success) {
     return `Extraction failed: ${result.error}`;
   }
 
-  const { counts, durationMs } = result;
-  const total =
-    counts.modules +
-    counts.interfaces +
-    counts.packages +
-    counts.dependencies +
-    counts.hierarchy;
-
-  const parts: string[] = [];
-
-  if (counts.modules > 0) parts.push(`${counts.modules} modules`);
-  if (counts.interfaces > 0) parts.push(`${counts.interfaces} interfaces`);
-  if (counts.packages > 0) parts.push(`${counts.packages} packages`);
-  if (counts.dependencies > 0)
-    parts.push(`${counts.dependencies} dependencies`);
-  if (counts.hierarchy > 0) parts.push(`${counts.hierarchy} hierarchy nodes`);
-
-  return `Extracted ${total} items (${parts.join(", ")}) in ${durationMs}ms`;
+  return `Extraction completed in ${result.durationMs}ms (structural extraction disabled)`;
 }
 
 // Re-export types for convenience
