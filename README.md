@@ -2,6 +2,9 @@
 
 # GateFlow CLI
 
+<img width="687" height="197" alt="image" src="https://github.com/user-attachments/assets/af8b2b84-7576-408a-904b-c15b2f04e691" />
+
+
 **AI-Powered SystemVerilog Development Environment**
 
 [![Node.js Version](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen)](https://nodejs.org/)
