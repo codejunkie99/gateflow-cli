@@ -8,6 +8,8 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.3-blue)](https://www.typescriptlang.org/)
 [![Powered by Claude](https://img.shields.io/badge/Powered%20by-Claude%20AI-orange)](https://www.anthropic.com/)
+[![GitHub commit activity](https://img.shields.io/github/commit-activity/m/codejunkie99/gateflow-cli)](https://github.com/codejunkie99/gateflow-cli/graphs/commit-activity)
+[![GitHub last commit](https://img.shields.io/github/last-commit/codejunkie99/gateflow-cli)](https://github.com/codejunkie99/gateflow-cli/commits/main)
 
 GateFlow CLI is a production-grade command-line interface that integrates AI-powered natural language processing into SystemVerilog development workflows. It enables developers to query codebases conversationally, automatically resolve lint errors, generate testbenches, and analyze waveforms directly from the terminal.
 
