@@ -53,11 +53,37 @@ export class KnowledgeService implements IKnowledgeService {
   search(query: UnifiedKnowledgeQuery): UnifiedKnowledgeResult[] {
     const sources = query.sources ?? ['structural', 'learned'];
     const results: UnifiedKnowledgeResult[] = [];
+    const structuralTypes = query.structuralTypes;
 
     // Search structural knowledge if requested
     if (sources.includes('structural')) {
-      const structuralResults = this.structuralProvider.searchDeclarations(query);
-      results.push(...structuralResults);
+      const includeDeclarations =
+        !structuralTypes ||
+        structuralTypes.length === 0 ||
+        structuralTypes.includes('module_info');
+
+      if (includeDeclarations) {
+        const structuralQuery = { ...query };
+        if (
+          structuralTypes?.includes('module_info') &&
+          (!structuralQuery.declarationKinds ||
+            structuralQuery.declarationKinds.length === 0)
+        ) {
+          structuralQuery.declarationKinds = ['module', 'interface', 'package'];
+        }
+        const structuralResults = this.structuralProvider.searchDeclarations(
+          structuralQuery
+        );
+        results.push(...structuralResults);
+      }
+
+      if (structuralTypes?.includes('dependency')) {
+        results.push(...this.structuralProvider.searchDependencies(query));
+      }
+
+      if (structuralTypes?.includes('project_context')) {
+        results.push(...this.structuralProvider.searchHierarchy(query));
+      }
     }
 
     // Search learned knowledge if requested
@@ -99,10 +125,18 @@ export class KnowledgeService implements IKnowledgeService {
     const parts: string[] = [];
     let currentTokens = 0;
 
+    const resolvedModuleName =
+      moduleName ?? this.resolveModuleNameFromQuery(query);
+    const learnedModuleName =
+      moduleName ??
+      (resolvedModuleName && query?.trim() === resolvedModuleName
+        ? resolvedModuleName
+        : undefined);
+
     // Add structural context if we have a module name
-    if (moduleName) {
+    if (resolvedModuleName) {
       const structuralContext = this.buildStructuralContext(
-        moduleName,
+        resolvedModuleName,
         maxTokens / 2
       );
       if (structuralContext) {
@@ -118,11 +152,19 @@ export class KnowledgeService implements IKnowledgeService {
     const learnedContext = this.buildLearnedContext(
       query,
       filePath,
-      moduleName,
+      learnedModuleName,
       maxTokens - currentTokens
     );
     if (learnedContext) {
       parts.push(learnedContext);
+    } else if (resolvedModuleName && parts.length > 0) {
+      const expandedStructural = this.buildStructuralContext(
+        resolvedModuleName,
+        maxTokens
+      );
+      if (expandedStructural) {
+        return expandedStructural;
+      }
     }
 
     return parts.join('\n\n');
@@ -139,9 +181,9 @@ export class KnowledgeService implements IKnowledgeService {
     let tokens = 0;
 
     // Module info
-    const module = this.structuralProvider.findModule(moduleName);
-    if (module) {
-      const header = `## Module: ${moduleName}\n`;
+    const container = this.structuralProvider.findContainer(moduleName);
+    if (container) {
+      const header = `## ${this.capitalize(container.kind)}: ${moduleName}\n`;
       parts.push(header);
       tokens += estimateTokens(header);
 
@@ -194,15 +236,19 @@ export class KnowledgeService implements IKnowledgeService {
       }
 
       // Instances inside module
-      const instances = this.structuralProvider.getInstancesInModule(moduleName);
-      if (instances.length > 0 && tokens < maxTokens) {
-        const instanceSection =
-          '### Instances\n' +
-          instances.map((i) => `- ${i.instanceName}: ${i.targetName}`).join('\n');
-        const instanceTokens = estimateTokens(instanceSection);
-        if (tokens + instanceTokens <= maxTokens) {
-          parts.push(instanceSection);
-          tokens += instanceTokens;
+      if (container.kind === 'module') {
+        const instances = this.structuralProvider.getInstancesInModule(moduleName);
+        if (instances.length > 0 && tokens < maxTokens) {
+          const instanceSection =
+            '### Instances\n' +
+            instances
+              .map((i) => `- ${i.instanceName}: ${i.targetName}`)
+              .join('\n');
+          const instanceTokens = estimateTokens(instanceSection);
+          if (tokens + instanceTokens <= maxTokens) {
+            parts.push(instanceSection);
+            tokens += instanceTokens;
+          }
         }
       }
     }
@@ -238,9 +284,41 @@ export class KnowledgeService implements IKnowledgeService {
       if (tokens + sectionTokens > maxTokens) break;
       parts.push(section);
       tokens += sectionTokens;
+      this.learnedProvider.markUsed(result.id);
     }
 
     return parts.join('\n');
+  }
+
+  /**
+   * Resolve a module/interface/package name from the query text.
+   */
+  private resolveModuleNameFromQuery(query?: string): string | undefined {
+    if (!query) return undefined;
+    const trimmed = query.trim();
+    if (!trimmed) return undefined;
+
+    const exact = this.structuralProvider.findContainer(trimmed);
+    if (exact) return exact.name;
+
+    const tokens = trimmed.match(/[A-Za-z_][A-Za-z0-9_]*/g) ?? [];
+    const unique = Array.from(new Set(tokens));
+    unique.sort((a, b) => b.length - a.length);
+
+    for (const token of unique) {
+      const match = this.structuralProvider.findContainer(token);
+      if (match) return match.name;
+    }
+
+    return undefined;
+  }
+
+  /**
+   * Capitalize the first letter of a string.
+   */
+  private capitalize(str: string): string {
+    if (!str) return str;
+    return str.charAt(0).toUpperCase() + str.slice(1);
   }
 
   // ========================================================================

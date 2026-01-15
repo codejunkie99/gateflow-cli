@@ -1,6 +1,6 @@
 // src/memory/knowledge-service/types.ts
 
-import type { Declaration, Reference, Instance, HierarchyNode, FileDependency, DeclarationKind } from '../../indexer/types/index.js';
+import type { Declaration, Instance, HierarchyNode, FileDependency, DeclarationKind } from '../../indexer/types/index.js';
 import type { KnowledgeItem, KnowledgeType } from '../knowledge-types.js';
 
 /**
@@ -35,6 +35,8 @@ export interface UnifiedKnowledgeQuery {
   declarationKinds?: DeclarationKind[];
   moduleName?: string;
   filePath?: string;
+  // Optional structural categories (module_info, dependency, project_context)
+  structuralTypes?: StructuralKnowledgeType[];
 
   // Learned knowledge filters
   knowledgeTypes?: LearnedKnowledgeType[];
@@ -61,7 +63,6 @@ export interface UnifiedKnowledgeResult {
 
   // Present when source === 'structural'
   declaration?: Declaration;
-  reference?: Reference;
   instance?: Instance;
   hierarchyNode?: HierarchyNode;
   dependency?: FileDependency;
