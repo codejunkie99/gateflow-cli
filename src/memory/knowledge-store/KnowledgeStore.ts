@@ -452,7 +452,7 @@ export class KnowledgeStore {
     filePath?: string,
     moduleName?: string,
     taskDescription?: string,
-    maxTokens = 2000,
+    maxTokens = 1000,
   ): string {
     const results = this.search({
       query: taskDescription,
