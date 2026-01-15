@@ -29,24 +29,24 @@
  * - 0.95: User corrections (explicit preference)
  */
 
-import type { KnowledgeItem, KnowledgeType } from '../knowledge-types.js';
+import type { KnowledgeItem, KnowledgeType } from "../knowledge-types.js";
 import {
-    analyzeDiff,
-    analyzeGeneratedCode,
-    detectCorrectionType,
-    extractKeywordsFromError,
-    inferFilePatterns,
-    normalizeErrorMessage,
-    toGlobPattern
-} from './analysis-utils.js';
+  analyzeDiff,
+  analyzeGeneratedCode,
+  detectCorrectionType,
+  extractKeywordsFromError,
+  inferFilePatterns,
+  normalizeErrorMessage,
+  toGlobPattern,
+} from "./analysis-utils.js";
 
 /**
  * Partial KnowledgeItem for addKnowledge() input.
  * Excludes fields that are auto-generated (id, fingerprint, timestamps).
  */
 export type KnowledgeAddInput = Omit<
-    KnowledgeItem,
-    'id' | 'fingerprint' | 'created' | 'updated' | 'useCount' | 'lastAccessed'
+  KnowledgeItem,
+  "id" | "fingerprint" | "created" | "updated" | "useCount" | "lastAccessed"
 >;
 
 /**
@@ -54,16 +54,16 @@ export type KnowledgeAddInput = Omit<
  * Avoids circular imports between extraction.ts and KnowledgeStore.
  */
 export interface ExtractionDependencies {
-    /** Project identifier for scoping */
-    projectId: string;
-    /** Optional context ID for scoping */
-    defineContextId?: string;
-    /** Optional compile order ID for MFCU tools */
-    compileOrderId?: string;
-    /** Bound method to add knowledge items */
-    addKnowledge: (item: KnowledgeAddInput) => KnowledgeItem;
-    /** Trigger debounced save */
-    scheduleSave: () => void;
+  /** Project identifier for scoping */
+  projectId: string;
+  /** Optional context ID for scoping */
+  defineContextId?: string;
+  /** Optional compile order ID for MFCU tools */
+  compileOrderId?: string;
+  /** Bound method to add knowledge items */
+  addKnowledge: (item: KnowledgeAddInput) => KnowledgeItem;
+  /** Trigger debounced save */
+  scheduleSave: () => void;
 }
 
 /**
@@ -80,102 +80,106 @@ export interface ExtractionDependencies {
  * @returns Array of created knowledge items
  */
 export function extractFromLintSession(
-    deps: ExtractionDependencies,
-    sessionId: string,
-    errors: Array<{ file: string; message: string; fix?: string }>,
-    fixes: Array<{ file: string; original: string; fixed: string }>
+  deps: ExtractionDependencies,
+  sessionId: string,
+  errors: Array<{ file: string; message: string; fix?: string }>,
+  fixes: Array<{ file: string; original: string; fixed: string }>,
 ): KnowledgeItem[] {
-    const extracted: KnowledgeItem[] = [];
+  const extracted: KnowledgeItem[] = [];
 
-    // Group errors by message pattern (ignore file-specific details)
-    const errorPatterns = new Map<string, { count: number; files: Set<string>; fix?: string }>();
+  // Group errors by message pattern (ignore file-specific details)
+  const errorPatterns = new Map<
+    string,
+    { count: number; files: Set<string>; fix?: string }
+  >();
 
-    for (const error of errors) {
-        // Normalize message: remove line numbers, file paths, and identifiers
-        const normalized = normalizeErrorMessage(error.message);
-        const existing = errorPatterns.get(normalized);
+  for (const error of errors) {
+    // Normalize message: remove line numbers, file paths, and identifiers
+    const normalized = normalizeErrorMessage(error.message);
+    const existing = errorPatterns.get(normalized);
 
-        if (existing) {
-            existing.count++;
-            existing.files.add(error.file);
-            if (error.fix && !existing.fix) {
-                existing.fix = error.fix;
-            }
-        } else {
-            errorPatterns.set(normalized, {
-                count: 1,
-                files: new Set([error.file]),
-                fix: error.fix
-            });
-        }
+    if (existing) {
+      existing.count++;
+      existing.files.add(error.file);
+      if (error.fix && !existing.fix) {
+        existing.fix = error.fix;
+      }
+    } else {
+      errorPatterns.set(normalized, {
+        count: 1,
+        files: new Set([error.file]),
+        fix: error.fix,
+      });
     }
+  }
 
-    // Extract patterns that appear multiple times
-    for (const [pattern, data] of errorPatterns) {
-        if (data.count < 2) continue;
+  // Extract patterns that appear multiple times
+  for (const [pattern, data] of errorPatterns) {
+    if (data.count < 2) continue;
 
-        // Calculate confidence based on frequency
-        const confidence = Math.min(0.5 + (data.count * 0.1), 0.9);
+    // Calculate confidence based on frequency
+    const confidence = Math.min(0.5 + data.count * 0.1, 0.9);
 
-        const item = deps.addKnowledge({
-            type: 'lint_fix',
-            title: `Lint pattern: ${pattern.slice(0, 50)}`,
-            content: data.fix
-                ? `Error: ${pattern}\n\nSuggested fix: ${data.fix}`
-                : `Common error: ${pattern}\n\nOccurrences: ${data.count}`,
-            tags: ['lint', 'error-pattern'],
-            keywords: extractKeywordsFromError(pattern),
-            scope: {
-                global: false,
-                projectIds: [deps.projectId],
-                filePatterns: inferFilePatterns(data.files),
-                defineContextId: deps.defineContextId,
-                compileOrderId: deps.compileOrderId
-            },
-            source: {
-                method: 'extracted',
-                sessionId,
-                tool: 'lint'
-            },
-            confidence
-        });
+    const item = deps.addKnowledge({
+      type: "lint_fix",
+      title: `Lint pattern: ${pattern.slice(0, 50)}`,
+      content: data.fix
+        ? `Error: ${pattern}\n\nSuggested fix: ${data.fix}`
+        : `Common error: ${pattern}\n\nOccurrences: ${data.count}`,
+      tags: ["lint", "error-pattern"],
+      keywords: extractKeywordsFromError(pattern),
+      scope: {
+        global: false,
+        projectIds: [deps.projectId],
+        filePatterns: inferFilePatterns(data.files),
+        defineContextId: deps.defineContextId,
+        compileOrderId: deps.compileOrderId,
+      },
+      source: {
+        method: "extracted",
+        sessionId,
+        tool: "lint",
+      },
+      confidence,
+    });
 
-        extracted.push(item);
-    }
+    extracted.push(item);
+  }
 
-    // Learn from fix pairs
-    for (const fix of fixes) {
-        const diffPattern = analyzeDiff(fix.original, fix.fixed);
-        if (!diffPattern) continue;
+  // Learn from fix pairs
+  for (const fix of fixes) {
+    const diffPattern = analyzeDiff(fix.original, fix.fixed);
+    if (!diffPattern) continue;
 
-        const item = deps.addKnowledge({
-            type: 'lint_fix',
-            title: `Fix pattern: ${diffPattern.description}`,
-            content: `Before:\n\`\`\`\n${fix.original.slice(0, 200)}\n\`\`\`\n\nAfter:\n\`\`\`\n${fix.fixed.slice(0, 200)}\n\`\`\``,
-            tags: ['lint', 'fix', ...diffPattern.tags],
-            keywords: diffPattern.keywords,
-            scope: {
-                global: false,
-                projectIds: [deps.projectId],
-                defineContextId: deps.defineContextId,
-                compileOrderId: deps.compileOrderId
-            },
-            source: {
-                method: 'extracted',
-                sessionId,
-                filePath: fix.file,
-                tool: 'lint'
-            },
-            confidence: 0.75
-        });
+    const item = deps.addKnowledge({
+      type: "lint_fix",
+      title: `Fix pattern: ${diffPattern.description}`,
+      content: `Before:\n\`\`\`\n${fix.original.slice(0, 200)}\n\`\`\`\n\nAfter:\n\`\`\`\n${fix.fixed.slice(0, 200)}\n\`\`\``,
+      tags: ["lint", "fix", ...diffPattern.tags],
+      keywords: diffPattern.keywords,
+      scope: {
+        global: false,
+        projectIds: [deps.projectId],
+        defineContextId: deps.defineContextId,
+        filePatterns: [toGlobPattern(fix.file)],
+        compileOrderId: deps.compileOrderId,
+      },
+      source: {
+        method: "extracted",
+        sessionId,
+        filePath: fix.file,
+        tool: "lint",
+      },
+      confidence: 0.75,
+    });
 
-        extracted.push(item);
-    }
+    extracted.push(item);
+  }
 
-    // Note: scheduleSave() is already called by addKnowledge() via markDirty(),
-    // so no need to call it again here
+  // Note: scheduleSave() is already called by addKnowledge() via markDirty(),
+  // so no need to call it again here
 
-    return extracted;
+  return extracted;
 }
 
 /**
@@ -193,42 +197,44 @@ export function extractFromLintSession(
  * @returns Created item or null if nothing interesting detected
  */
 export function extractFromCodeGen(
-    deps: ExtractionDependencies,
-    sessionId: string,
-    code: string,
-    metadata: {
-        moduleName?: string;
-        type: 'testbench' | 'module' | 'function' | 'fsm' | 'package';
-        description?: string;
-    }
+  deps: ExtractionDependencies,
+  sessionId: string,
+  code: string,
+  metadata: {
+    moduleName?: string;
+    type: "testbench" | "module" | "function" | "fsm" | "package";
+    description?: string;
+  },
 ): KnowledgeItem | null {
-    // Detect pattern type based on content
-    const patternInfo = analyzeGeneratedCode(code, metadata.type);
-    if (!patternInfo) return null;
+  // Detect pattern type based on content
+  const patternInfo = analyzeGeneratedCode(code, metadata.type);
+  if (!patternInfo) return null;
 
-    const item = deps.addKnowledge({
-        type: 'code_pattern',
-        title: `${metadata.type} pattern: ${patternInfo.name}`,
-        content: patternInfo.summary + (metadata.description ? `\n\n${metadata.description}` : ''),
-        tags: ['generated', metadata.type, ...patternInfo.tags],
-        keywords: patternInfo.keywords,
-        scope: {
-            global: false,
-            projectIds: [deps.projectId],
-            modules: metadata.moduleName ? [metadata.moduleName] : undefined,
-            defineContextId: deps.defineContextId,
-            compileOrderId: deps.compileOrderId
-        },
-        source: {
-            method: 'extracted',
-            sessionId,
-            tool: 'codegen'
-        },
-        confidence: 0.7
-    });
+  const item = deps.addKnowledge({
+    type: "code_pattern",
+    title: `${metadata.type} pattern: ${patternInfo.name}`,
+    content:
+      patternInfo.summary +
+      (metadata.description ? `\n\n${metadata.description}` : ""),
+    tags: ["generated", metadata.type, ...patternInfo.tags],
+    keywords: patternInfo.keywords,
+    scope: {
+      global: false,
+      projectIds: [deps.projectId],
+      modules: metadata.moduleName ? [metadata.moduleName] : undefined,
+      defineContextId: deps.defineContextId,
+      compileOrderId: deps.compileOrderId,
+    },
+    source: {
+      method: "extracted",
+      sessionId,
+      tool: "codegen",
+    },
+    confidence: 0.7,
+  });
 
-    // Note: scheduleSave() is already called by addKnowledge() via markDirty()
-    return item;
+  // Note: scheduleSave() is already called by addKnowledge() via markDirty()
+  return item;
 }
 
 /**
@@ -245,42 +251,53 @@ export function extractFromCodeGen(
  * @returns Created knowledge item
  */
 export function learnFromCorrection(
-    deps: ExtractionDependencies,
-    original: string,
-    corrected: string,
-    metadata: {
-        type?: KnowledgeType;
-        tags?: string[];
-        filePath?: string;
-        moduleName?: string;
-    }
+  deps: ExtractionDependencies,
+  original: string,
+  corrected: string,
+  metadata: {
+    type?: KnowledgeType;
+    tags?: string[];
+    filePath?: string;
+    moduleName?: string;
+  },
 ): KnowledgeItem {
-    // Analyze the correction to determine type
-    const correctionType = metadata.type ?? detectCorrectionType(original, corrected);
-    const diffAnalysis = analyzeDiff(original, corrected);
+  // Analyze the correction to determine type
+  const correctionType =
+    metadata.type ?? detectCorrectionType(original, corrected);
+  const diffAnalysis = analyzeDiff(original, corrected);
 
-    const item = deps.addKnowledge({
-        type: correctionType,
-        title: `User preference: ${diffAnalysis?.description ?? 'style correction'}`,
-        content: `Before:\n\`\`\`\n${original.slice(0, 300)}\n\`\`\`\n\nAfter:\n\`\`\`\n${corrected.slice(0, 300)}\n\`\`\``,
-        tags: ['user-correction', ...(metadata.tags ?? []), ...(diffAnalysis?.tags ?? [])],
-        keywords: diffAnalysis?.keywords ?? [],
-        scope: {
-            global: false,
-            projectIds: [deps.projectId],
-            modules: metadata.moduleName ? [metadata.moduleName] : undefined,
-            filePatterns: metadata.filePath ? [toGlobPattern(metadata.filePath)] : undefined,
-            defineContextId: deps.defineContextId,
-            compileOrderId: deps.compileOrderId
-        },
-        source: {
-            method: 'user_provided',
-            filePath: metadata.filePath
-        },
-        confidence: 0.95 // High confidence for user corrections
-    });
+  const item = deps.addKnowledge({
+    type: correctionType,
+    title: `User preference: ${diffAnalysis?.description ?? "style correction"}`,
+    content: `Before:\n\`\`\`\n${original.slice(0, 300)}\n\`\`\`\n\nAfter:\n\`\`\`\n${corrected.slice(0, 300)}\n\`\`\``,
+    tags: [
+      "user-correction",
+      ...(metadata.tags ?? []),
+      ...(diffAnalysis?.tags ?? []),
+    ],
+    keywords: diffAnalysis?.keywords ?? [],
+    scope: {
+      global: false,
+      projectIds: [deps.projectId],
+      modules: metadata.moduleName ? [metadata.moduleName] : undefined,
+      filePatterns: metadata.filePath
+        ? [toGlobPattern(metadata.filePath)]
+        : undefined,
+      defineContextId: deps.defineContextId,
+      compileOrderId: deps.compileOrderId,
+    },
+    source: {
+      method: "user_provided",
+      filePath: metadata.filePath,
+    },
+    confidence: 0.95, // High confidence for user corrections
+  });
 
-    // Note: scheduleSave() is already called by addKnowledge() via markDirty()
-    return item;
+  // Note: scheduleSave() is already called by addKnowledge() via markDirty()
+  return item;
 }
-
+// Future improvements:
+// - Implement a mechanism to track user preferences over time and adjust confidence levels accordingly.
+// - Integrate with version control systems to provide context for changes.
+// - Implement a mechanism to track user preferences over time and adjust confidence levels accordingly.
+// - Integrate with version control systems to provide context for changes.
