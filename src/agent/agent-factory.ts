@@ -36,7 +36,7 @@ export interface ApprovalAwareTool {
  */
 export interface AgentBundle {
     /** Model instance */
-    model: ReturnType<typeof anthropic>;
+    model: ReturnType<typeof createAnthropicClient>;
     /** System prompt */
     instructions: string;
     /** Tools with approval-aware execute functions */

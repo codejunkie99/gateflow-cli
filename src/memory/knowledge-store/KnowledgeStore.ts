@@ -45,6 +45,8 @@ import {
     type KnowledgeQuery,
     type KnowledgeSearchResult,
     type KnowledgeStoreConfig,
+    type KnowledgeScope,
+    type KnowledgeSource,
     type KnowledgeType
 } from '../knowledge-types.js';
 import { KnowledgeStoreLockManager } from './lock-manager.js';
@@ -62,6 +64,7 @@ import {
     type ExtractionDependencies
 } from './extraction.js';
 import { pruneLowestScoring, pruneStaleItems } from './pruning.js';
+import { KnowledgeLlmService } from '../llm/knowledge-llm.js';
 
 // ============================================================================
 // KnowledgeStore
@@ -79,6 +82,10 @@ export class KnowledgeStore {
     private saveTimeout: ReturnType<typeof setTimeout> | null = null;
     private indexManager: KnowledgeIndexManager;
     private lockManager: KnowledgeStoreLockManager;
+    private activeDefineContextId?: string;
+    private activeCompileOrderId?: string;
+    private contextAccess = new Map<string, { lastAccessed: number; accessCount: number }>();
+    private llmService: KnowledgeLlmService;
 
     private readonly SAVE_DEBOUNCE_MS = 5000;
     private readonly LOCK_TIMEOUT_MS = 5000;
@@ -99,6 +106,7 @@ export class KnowledgeStore {
         this.lockPath = path.join(this.config.knowledgeDir, `${this.projectId}-knowledge.lock`);
         this.indexManager = new KnowledgeIndexManager(this.projectId);
         this.lockManager = new KnowledgeStoreLockManager(this.lockPath, this.LOCK_TIMEOUT_MS);
+        this.llmService = new KnowledgeLlmService(this.config.llm, this.applyEnrichment.bind(this));
     }
 
     // ========================================================================
@@ -112,6 +120,7 @@ export class KnowledgeStore {
             try {
                 const content = await fs.readFile(this.knowledgePath, 'utf-8');
                 this.index = migrateIndex(JSON.parse(content) as KnowledgeIndex, this.projectId);
+                this.index.items = this.migrateLegacyItems(this.index.items);
                 this.pruneStaleItems();
                 this.indexManager.rebuild(this.index.items);
                 return this.index;
@@ -220,6 +229,7 @@ export class KnowledgeStore {
     addKnowledge(item: Omit<KnowledgeItem, 'id' | 'fingerprint' | 'created' | 'updated' | 'useCount' | 'lastAccessed'>): KnowledgeItem {
         if (!this.index) throw new Error('KnowledgeStore not loaded');
 
+        this.validateScope(item.scope, item.source);
         const now = Date.now();
         const fingerprint = computeFingerprint(item.type, item.title, item.scope);
 
@@ -231,10 +241,6 @@ export class KnowledgeStore {
                                    !arraysEqual(existing.tags, item.tags) ||
                                    !arraysEqual(existing.keywords, item.keywords);
 
-            if (contentChanged) {
-                this.indexManager.remove(existing);
-            }
-
             existing.content = item.content;
             existing.confidence = Math.max(existing.confidence, item.confidence);
             // Bug 1.1 fix: When content changes, replace tags/keywords instead of merging
@@ -242,6 +248,9 @@ export class KnowledgeStore {
             if (contentChanged) {
                 existing.tags = [...item.tags];
                 existing.keywords = [...item.keywords];
+                existing.aiTags = undefined;
+                existing.aiSummary = undefined;
+                existing.aiEnrichedAt = undefined;
             } else {
                 // Only merge when content hasn't changed (additive updates)
                 existing.tags = [...new Set([...existing.tags, ...item.tags])];
@@ -250,16 +259,17 @@ export class KnowledgeStore {
             existing.updated = now;
 
             if (contentChanged) {
-                this.indexManager.add(existing, this.index.items.length);
+                this.indexManager.update(existing);
             }
 
             this.markDirty();
+            this.maybeEnrich(existing);
             return existing;
         }
 
         // Enforce max items
         if (this.index.items.length >= this.config.maxItems) {
-            this.pruneLowestScoring();
+            this.enforceCapacity();
         }
 
         const knowledge: KnowledgeItem = {
@@ -273,8 +283,13 @@ export class KnowledgeStore {
         };
 
         this.index.items.push(knowledge);
-        this.indexManager.add(knowledge, this.index.items.length);
+        this.indexManager.add(knowledge);
         this.markDirty();
+
+        if (this.index.items.length > this.config.maxItems) {
+            this.enforceCapacity();
+        }
+        this.maybeEnrich(knowledge);
 
         return knowledge;
     }
@@ -299,6 +314,9 @@ export class KnowledgeStore {
         if (item) {
             item.useCount++;
             item.lastAccessed = Date.now();
+            if (item.scope.defineContextId) {
+                this.touchContext(item.scope.defineContextId);
+            }
             this.markDirty();
         }
     }
@@ -332,7 +350,63 @@ export class KnowledgeStore {
 
     search(query: KnowledgeQuery): KnowledgeSearchResult[] {
         if (!this.index || this.index.items.length === 0) return [];
-        return this.indexManager.search(this.index.items, query);
+        const effectiveQuery = this.enrichQuery(query);
+        const rawQuery = effectiveQuery.query?.trim();
+        let results: KnowledgeSearchResult[];
+
+        if (rawQuery && this.llmService.shouldExpand()) {
+            const terms = this.llmService.expandQuery(rawQuery);
+            const merged = new Map<string, KnowledgeSearchResult>();
+            const perTermLimit = Math.max(effectiveQuery.maxResults ?? 10, 10);
+
+            for (const term of terms) {
+                const termResults = this.indexManager.search(this.index.items, {
+                    ...effectiveQuery,
+                    query: term,
+                    maxResults: perTermLimit
+                });
+                for (const result of termResults) {
+                    const existing = merged.get(result.item.id);
+                    if (!existing || result.relevance > existing.relevance) {
+                        merged.set(result.item.id, result);
+                    }
+                }
+            }
+
+            results = Array.from(merged.values())
+                .sort((a, b) => b.relevance - a.relevance)
+                .slice(0, effectiveQuery.maxResults ?? 10);
+        } else {
+            results = this.indexManager.search(this.index.items, effectiveQuery);
+        }
+        if (effectiveQuery.defineContextId) {
+            this.touchContext(effectiveQuery.defineContextId);
+        }
+        return results;
+    }
+
+    /**
+     * Interpret a natural language query (LLM optional) and search knowledge.
+     * Falls back to raw query terms if LLM is unavailable.
+     */
+    async searchNaturalLanguage(naturalQuery: string): Promise<KnowledgeSearchResult[]> {
+        const interpreted = await this.llmService.interpretQuery(naturalQuery);
+        return this.search({
+            query: interpreted.query || naturalQuery,
+            tags: interpreted.tags,
+            moduleName: interpreted.moduleName
+        });
+    }
+
+    /**
+     * Set the active context to be used for default query scoping.
+     */
+    setActiveContext(defineContextId?: string, compileOrderId?: string): void {
+        this.activeDefineContextId = defineContextId;
+        this.activeCompileOrderId = compileOrderId;
+        if (defineContextId) {
+            this.touchContext(defineContextId);
+        }
     }
 
     getContextKnowledge(
@@ -365,6 +439,239 @@ export class KnowledgeStore {
         }
 
         return parts.join('\n');
+    }
+
+    // ========================================================================
+    // Context + Capacity Helpers
+    // ========================================================================
+
+    private enrichQuery(query: KnowledgeQuery): KnowledgeQuery {
+        if (!this.activeDefineContextId && !this.activeCompileOrderId) {
+            return query;
+        }
+        return {
+            ...query,
+            defineContextId: query.defineContextId ?? this.activeDefineContextId,
+            compileOrderId: query.compileOrderId ?? this.activeCompileOrderId
+        };
+    }
+
+    private maybeEnrich(item: KnowledgeItem): void {
+        if (!this.llmService.shouldEnrich()) return;
+        if (item.aiTags && item.aiTags.length > 0) return;
+        this.llmService.enqueueEnrichment(item);
+    }
+
+    private applyEnrichment(itemId: string, result: { aiTags?: string[]; aiSummary?: string }): void {
+        const item = this.indexManager.getById(itemId);
+        if (!item) return;
+
+        const nextTags = result.aiTags?.length ? result.aiTags : item.aiTags;
+        const nextSummary = result.aiSummary ?? item.aiSummary;
+
+        if (nextTags === item.aiTags && nextSummary === item.aiSummary) {
+            return;
+        }
+
+        item.aiTags = nextTags;
+        item.aiSummary = nextSummary;
+        item.aiEnrichedAt = Date.now();
+        item.updated = Date.now();
+
+        this.indexManager.update(item);
+        this.markDirty();
+    }
+
+    private touchContext(defineContextId: string): void {
+        const now = Date.now();
+        const existing = this.contextAccess.get(defineContextId);
+        if (existing) {
+            existing.lastAccessed = now;
+            existing.accessCount += 1;
+        } else {
+            this.contextAccess.set(defineContextId, { lastAccessed: now, accessCount: 1 });
+        }
+    }
+
+    private validateScope(scope: KnowledgeScope, source: KnowledgeSource): void {
+        if (!scope.global && source.method !== 'user_provided' && !scope.defineContextId) {
+            scope.defineContextId = this.activeDefineContextId ?? 'legacy';
+        }
+    }
+
+    private migrateLegacyItems(items: KnowledgeItem[]): KnowledgeItem[] {
+        return items.map(item => {
+            if (!item.scope?.defineContextId && item.source.method !== 'user_provided' && !item.scope?.global) {
+                const updated = {
+                    ...item,
+                    scope: {
+                        ...item.scope,
+                        defineContextId: 'legacy'
+                    },
+                    tags: [...(item.tags || []), 'legacy-context']
+                };
+                updated.fingerprint = computeFingerprint(updated.type, updated.title, updated.scope);
+                return updated;
+            }
+            return item;
+        });
+    }
+
+    private enforceCapacity(): void {
+        if (!this.index) return;
+
+        this.evictColdContexts();
+
+        const maxPerContext = Math.max(
+            1,
+            Math.floor(this.config.maxItems / this.config.maxActiveContexts)
+        );
+
+        for (const defineContextId of this.getActiveContextIds()) {
+            const contextItems = this.getItemsByContext(defineContextId);
+            if (contextItems.length > maxPerContext) {
+                this.pruneOldestInContext(defineContextId, contextItems, maxPerContext);
+            }
+        }
+
+        if (this.index.items.length > this.config.maxItems) {
+            this.pruneLowestScoring();
+        }
+    }
+
+    private getActiveContextIds(): string[] {
+        if (!this.index) return [];
+        const ids = new Set<string>();
+        for (const item of this.index.items) {
+            const id = item.scope.defineContextId;
+            if (id) ids.add(id);
+        }
+        return [...ids];
+    }
+
+    private getItemsByContext(defineContextId: string): KnowledgeItem[] {
+        if (!this.index) return [];
+        return this.index.items.filter(
+            item => item.scope.defineContextId === defineContextId
+        );
+    }
+
+    private pruneOldestInContext(
+        defineContextId: string,
+        contextItems: KnowledgeItem[],
+        maxCount: number
+    ): void {
+        if (!this.index) return;
+
+        const removable = contextItems.filter(item =>
+            !item.scope.global && item.source.method !== 'user_provided'
+        );
+        if (removable.length <= maxCount) return;
+
+        const sorted = [...removable].sort((a, b) => a.lastAccessed - b.lastAccessed);
+        const toRemove = new Set(
+            sorted.slice(0, Math.max(0, removable.length - maxCount)).map(item => item.id)
+        );
+
+        for (const id of toRemove) {
+            const item = this.indexManager.getById(id);
+            if (item) this.indexManager.remove(item);
+        }
+        this.index.items = this.index.items.filter(item => !toRemove.has(item.id));
+        if (toRemove.size > 0) {
+            this.markDirty();
+        }
+    }
+
+    private evictColdContexts(): void {
+        if (!this.index) return;
+
+        const contexts = this.getContextMetadata();
+        if (contexts.length <= this.config.maxActiveContexts) return;
+
+        const now = Date.now();
+        const candidates = contexts
+            .filter(ctx => ctx.id !== 'legacy' && ctx.id !== 'default')
+            .map(ctx => ({
+                ...ctx,
+                score: this.computeEvictionScore(ctx, now)
+            }))
+            .sort((a, b) => b.score - a.score);
+
+        let remaining = contexts.length;
+        for (const ctx of candidates) {
+            if (remaining <= this.config.maxActiveContexts) break;
+            if (ctx.itemCount >= this.config.minItemsToProtect) continue;
+            this.removeItemsByContext(ctx.id);
+            this.contextAccess.delete(ctx.id);
+            remaining -= 1;
+        }
+    }
+
+    private computeEvictionScore(
+        ctx: { lastAccessed: number; itemCount: number; accessCount: number },
+        now: number
+    ): number {
+        const age = now - ctx.lastAccessed;
+        const beyondTtl = Math.max(0, age - this.config.contextMaxAgeMs);
+        return (beyondTtl / this.config.contextMaxAgeMs) * 0.5
+            + (1 / (ctx.itemCount + 1)) * 0.3
+            + (ctx.accessCount === 0 ? 0.2 : 0);
+    }
+
+    private getContextMetadata(): Array<{
+        id: string;
+        lastAccessed: number;
+        accessCount: number;
+        itemCount: number;
+    }> {
+        if (!this.index) return [];
+
+        const counts = new Map<string, number>();
+        for (const item of this.index.items) {
+            const id = item.scope.defineContextId;
+            if (!id) continue;
+            counts.set(id, (counts.get(id) || 0) + 1);
+        }
+
+        const contexts: Array<{
+            id: string;
+            lastAccessed: number;
+            accessCount: number;
+            itemCount: number;
+        }> = [];
+
+        for (const [id, itemCount] of counts) {
+            const meta = this.contextAccess.get(id);
+            contexts.push({
+                id,
+                lastAccessed: meta?.lastAccessed ?? 0,
+                accessCount: meta?.accessCount ?? 0,
+                itemCount
+            });
+        }
+
+        return contexts;
+    }
+
+    private removeItemsByContext(defineContextId: string): void {
+        if (!this.index) return;
+
+        const toRemove = new Set<string>();
+        for (const item of this.index.items) {
+            if (item.scope.defineContextId !== defineContextId) continue;
+            if (item.scope.global || item.source.method === 'user_provided') continue;
+            toRemove.add(item.id);
+        }
+
+        for (const id of toRemove) {
+            const item = this.indexManager.getById(id);
+            if (item) this.indexManager.remove(item);
+        }
+        this.index.items = this.index.items.filter(item => !toRemove.has(item.id));
+        if (toRemove.size > 0) {
+            this.markDirty();
+        }
     }
 
     // ========================================================================
@@ -429,6 +736,8 @@ export class KnowledgeStore {
     private getExtractionDeps(): ExtractionDependencies {
         return {
             projectId: this.projectId,
+            defineContextId: this.activeDefineContextId,
+            compileOrderId: this.activeCompileOrderId,
             addKnowledge: this.addKnowledge.bind(this),
             scheduleSave: this.scheduleSave.bind(this)
         };

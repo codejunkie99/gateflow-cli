@@ -56,6 +56,8 @@ export function extractDependencies(
         scope: {
           global: false,
           projectIds: [options.projectId],
+          defineContextId: options.defineContextId,
+          compileOrderId: options.compileOrderId,
         },
         source: {
           method: "extracted",

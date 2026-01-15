@@ -290,6 +290,16 @@ export interface ResolvedProject {
    * This is a convenience flag - equivalent to checking `semantic !== undefined`.
    */
   hasSemanticAnalysis: boolean;
+
+  /**
+   * Hash of defines + include paths for the compilation context.
+   */
+  defineContextId?: string;
+
+  /**
+   * Hash of ordered file list (MFCU only).
+   */
+  compileOrderId?: string;
 }
 
 // ============================================================================

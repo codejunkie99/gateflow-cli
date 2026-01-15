@@ -60,6 +60,8 @@ export function extractHierarchy(
         global: false,
         projectIds: [options.projectId],
         modules: [node.moduleName],
+        defineContextId: options.defineContextId,
+        compileOrderId: options.compileOrderId,
       },
       source: {
         method: "extracted",
@@ -157,6 +159,8 @@ function extractProjectOverview(
     scope: {
       global: false,
       projectIds: [options.projectId],
+      defineContextId: options.defineContextId,
+      compileOrderId: options.compileOrderId,
     },
     source: {
       method: "extracted",

@@ -56,6 +56,10 @@ export type KnowledgeAddInput = Omit<
 export interface ExtractionDependencies {
     /** Project identifier for scoping */
     projectId: string;
+    /** Optional context ID for scoping */
+    defineContextId?: string;
+    /** Optional compile order ID for MFCU tools */
+    compileOrderId?: string;
     /** Bound method to add knowledge items */
     addKnowledge: (item: KnowledgeAddInput) => KnowledgeItem;
     /** Trigger debounced save */
@@ -124,7 +128,9 @@ export function extractFromLintSession(
             scope: {
                 global: false,
                 projectIds: [deps.projectId],
-                filePatterns: inferFilePatterns(data.files)
+                filePatterns: inferFilePatterns(data.files),
+                defineContextId: deps.defineContextId,
+                compileOrderId: deps.compileOrderId
             },
             source: {
                 method: 'extracted',
@@ -150,7 +156,9 @@ export function extractFromLintSession(
             keywords: diffPattern.keywords,
             scope: {
                 global: false,
-                projectIds: [deps.projectId]
+                projectIds: [deps.projectId],
+                defineContextId: deps.defineContextId,
+                compileOrderId: deps.compileOrderId
             },
             source: {
                 method: 'extracted',
@@ -208,7 +216,9 @@ export function extractFromCodeGen(
         scope: {
             global: false,
             projectIds: [deps.projectId],
-            modules: metadata.moduleName ? [metadata.moduleName] : undefined
+            modules: metadata.moduleName ? [metadata.moduleName] : undefined,
+            defineContextId: deps.defineContextId,
+            compileOrderId: deps.compileOrderId
         },
         source: {
             method: 'extracted',
@@ -260,7 +270,9 @@ export function learnFromCorrection(
             global: false,
             projectIds: [deps.projectId],
             modules: metadata.moduleName ? [metadata.moduleName] : undefined,
-            filePatterns: metadata.filePath ? [toGlobPattern(metadata.filePath)] : undefined
+            filePatterns: metadata.filePath ? [toGlobPattern(metadata.filePath)] : undefined,
+            defineContextId: deps.defineContextId,
+            compileOrderId: deps.compileOrderId
         },
         source: {
             method: 'user_provided',
