@@ -66,6 +66,8 @@ export class MemoryService {
   private initialized = false;
   private initMutex = new AsyncMutex();
   private contextTokenBudget: number;
+  private activeDefineContextId?: string;
+  private activeCompileOrderId?: string;
 
   constructor(
     private projectRoot: string,
@@ -166,10 +168,11 @@ export class MemoryService {
     const adjustedKnowledgeBudget =
       knowledgeBudget + (memoryBudget - actualMemoryTokens);
 
+    const enrichedQuery = this.enrichQuery(query);
     const knowledgeContext = this.knowledgeStore.getContextKnowledge(
-      query?.filePath,
-      query?.moduleName,
-      query?.query,
+      enrichedQuery?.filePath,
+      enrichedQuery?.moduleName,
+      enrichedQuery?.query,
       adjustedKnowledgeBudget,
     );
     const knowledgeTokens = estimateTokens(knowledgeContext);
@@ -307,11 +310,51 @@ export class MemoryService {
     }
     return this.memoryManager.getProjectId();
   }
+
+  /**
+   * Set active context to be used for knowledge queries.
+   */
+  setActiveContext(defineContextId?: string, compileOrderId?: string): void {
+    this.activeDefineContextId = defineContextId;
+    this.activeCompileOrderId = compileOrderId;
+    this.knowledgeStore.setActiveContext(defineContextId, compileOrderId);
+  }
+
+  private enrichQuery(query?: KnowledgeQuery): KnowledgeQuery | undefined {
+    if (!query) return query;
+    if (!this.activeDefineContextId && !this.activeCompileOrderId) return query;
+    return {
+      ...query,
+      defineContextId: query.defineContextId ?? this.activeDefineContextId,
+      compileOrderId: query.compileOrderId ?? this.activeCompileOrderId,
+    };
+  }
 }
 
 // ============================================================================
-// Factory Functions
+// Factory Functions & Singleton Management
 // ============================================================================
+
+/** Global singleton instance - null until explicitly set */
+let globalMemoryService: MemoryService | null = null;
+
+/**
+ * Get the global MemoryService singleton.
+ * @returns The singleton instance, or null if not yet initialized
+ */
+export function getMemoryService(): MemoryService | null {
+  return globalMemoryService;
+}
+
+/**
+ * Set the global MemoryService singleton.
+ * Call this once during app initialization after creating the service.
+ *
+ * @param service - The initialized MemoryService instance
+ */
+export function setGlobalMemoryService(service: MemoryService): void {
+  globalMemoryService = service;
+}
 
 /**
  * Create a new MemoryService instance

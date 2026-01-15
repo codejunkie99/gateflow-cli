@@ -52,6 +52,11 @@ export function computeFingerprint(type: KnowledgeType, title: string, scope: Kn
     if (scope.modules?.length) scopeParts.push(`m:${[...scope.modules].sort().join(',')}`);
     if (scope.filePatterns?.length) scopeParts.push(`f:${[...scope.filePatterns].sort().join(',')}`);
 
+    const contextSensitiveTypes: KnowledgeType[] = ['lint_fix', 'project_context', 'code_pattern'];
+    if (contextSensitiveTypes.includes(type) && scope.defineContextId) {
+        scopeParts.push(`c:${scope.defineContextId}`);
+    }
+
     return crypto
         .createHash('sha256')
         .update(`${type}|${normalizedTitle}|${scopeParts.join('|')}`)
@@ -79,9 +84,7 @@ export function createDefaultIndex(projectId: string): KnowledgeIndex {
 export function migrateIndex(index: KnowledgeIndex, projectId: string): KnowledgeIndex {
     const migrated = { ...createDefaultIndex(projectId), ...index };
     for (const item of migrated.items) {
-        if (!item.fingerprint) {
-            item.fingerprint = computeFingerprint(item.type, item.title, item.scope);
-        }
+        item.fingerprint = computeFingerprint(item.type, item.title, item.scope);
     }
     return migrated;
 }

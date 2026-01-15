@@ -40,6 +40,16 @@ export interface ExtractionOptions {
     sessionId: string;
 
     /**
+     * Hash of defines + include paths for the compilation context.
+     */
+    defineContextId?: string;
+
+    /**
+     * Hash of ordered file list (MFCU only).
+     */
+    compileOrderId?: string;
+
+    /**
      * Whether to extract module/interface/package information
      * @default true
      */
@@ -134,6 +144,8 @@ export function validateExtractionOptions(
     return {
         projectId: options.projectId,
         sessionId: options.sessionId,
+        defineContextId: options.defineContextId,
+        compileOrderId: options.compileOrderId,
         extractModules: options.extractModules ?? true,
         extractDependencies: options.extractDependencies ?? true,
         extractHierarchy: options.extractHierarchy ?? true,

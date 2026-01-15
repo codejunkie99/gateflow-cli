@@ -19,6 +19,18 @@ export interface KnowledgeItem {
     content: string;
     tags: string[];
     keywords: string[];
+    /**
+     * Optional LLM-derived tags for semantic matching.
+     */
+    aiTags?: string[];
+    /**
+     * Optional LLM-derived summary for display or future ranking.
+     */
+    aiSummary?: string;
+    /**
+     * Timestamp of last AI enrichment.
+     */
+    aiEnrichedAt?: number;
     scope: KnowledgeScope;
     source: KnowledgeSource;
     confidence: number;
@@ -45,6 +57,17 @@ export interface KnowledgeScope {
     projectIds?: string[];
     filePatterns?: string[];
     modules?: string[];
+    /**
+     * Hash of defines + include paths for the compilation context.
+     * Used to prevent mixing knowledge across incompatible build contexts.
+     */
+    defineContextId?: string;
+
+    /**
+     * Hash of ordered file list (only for MFCU toolchains).
+     * Used to distinguish compile-order-sensitive contexts.
+     */
+    compileOrderId?: string;
 }
 
 export interface KnowledgeSource {
@@ -68,6 +91,15 @@ export interface KnowledgeQuery {
     moduleName?: string;
     maxResults?: number;
     minConfidence?: number;
+    /**
+     * Restrict search to a specific define context.
+     */
+    defineContextId?: string;
+
+    /**
+     * Optional compile order context (MFCU only).
+     */
+    compileOrderId?: string;
 
     /**
      * If true, include items with scope mismatches but apply score penalty.
@@ -83,6 +115,36 @@ export interface KnowledgeStoreConfig {
     maxItems: number;
     minExtractionConfidence: number;
     maxUnusedAge: number;
+    /**
+     * Maximum number of active define contexts to retain.
+     */
+    maxActiveContexts: number;
+
+    /**
+     * Maximum age (ms) before a context becomes eligible for eviction.
+     */
+    contextMaxAgeMs: number;
+
+    /**
+     * Minimum number of items to keep for a context to be protected from eviction.
+     */
+    minItemsToProtect: number;
+
+    /**
+     * Optional LLM enrichment configuration.
+     */
+    llm?: KnowledgeLlmConfig;
+}
+
+export interface KnowledgeLlmConfig {
+    enabled: boolean;
+    model?: string;
+    maxTokens?: number;
+    temperature?: number;
+    queryExpansion?: boolean;
+    semanticTags?: boolean;
+    maxConcurrent?: number;
+    queryCacheSize?: number;
 }
 
 export interface KnowledgeIndex {
@@ -104,7 +166,20 @@ export const DEFAULT_KNOWLEDGE_STORE_CONFIG: KnowledgeStoreConfig = {
     knowledgeDir: path.join(os.homedir(), '.gateflow'),
     maxItems: 500,
     minExtractionConfidence: 0.6,
-    maxUnusedAge: 30 * 24 * 60 * 60 * 1000
+    maxUnusedAge: 30 * 24 * 60 * 60 * 1000,
+    maxActiveContexts: 4,
+    contextMaxAgeMs: 48 * 60 * 60 * 1000,
+    minItemsToProtect: 20,
+    llm: {
+        enabled: false,
+        model: 'claude-sonnet-4-20250514',
+        maxTokens: 512,
+        temperature: 0.2,
+        queryExpansion: false,
+        semanticTags: false,
+        maxConcurrent: 2,
+        queryCacheSize: 500
+    }
 };
 
 // BM25 parameters

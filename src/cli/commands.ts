@@ -17,6 +17,7 @@ import { Verilator } from '../verification/index.js';
 import { FixLoop } from '../verification/fix-loop.js';
 import { WatchManager } from '../watch/index.js';
 import { TerminalRenderer, createRenderer, InputManager, initInputManager } from '../ui/index.js';
+import { getConfigManager } from '../config/index.js';
 import {
     getToolRegistry,
     getContextFileManager,
@@ -37,7 +38,7 @@ import {
     type ToolDescriptionManager,
     type SemanticSummarizer
 } from '../context/index.js';
-import { createMemoryService, type MemoryService } from '../memory/index.js';
+import { createMemoryService, setGlobalMemoryService, type MemoryService } from '../memory/index.js';
 
 // ============================================================================
 // Types
@@ -147,6 +148,11 @@ export async function setupContext(options: GlobalOptions): Promise<CommandConte
     // Generate unique session ID
     const sessionId = `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
+    // Load configuration (for optional LLM enrichment)
+    const configManager = getConfigManager();
+    const gateConfig = await configManager.load(projectRoot);
+    const llmConfig = gateConfig.LLM ?? {};
+
     // Unified memory service for persistent context, knowledge, and token budgeting
     const memoryService = createMemoryService(projectRoot, bus, {
         contextTokenBudget: 2000,  // Token budget for AI context injection
@@ -155,9 +161,20 @@ export async function setupContext(options: GlobalOptions): Promise<CommandConte
             warmThreshold: 3,      // Promote to hot after 3 accesses
             coldAgeDays: 30,       // Demote to cold after 30 days unused
             enabled: true
+        },
+        knowledge: {
+            llm: {
+                enabled: llmConfig.knowledgeEnabled ?? false,
+                model: llmConfig.knowledgeModel ?? llmConfig.defaultModel,
+                maxTokens: llmConfig.knowledgeMaxTokens ?? 512,
+                temperature: llmConfig.knowledgeTemperature ?? 0.2,
+                queryExpansion: llmConfig.knowledgeQueryExpansion ?? false,
+                semanticTags: llmConfig.knowledgeSemanticTags ?? false
+            }
         }
     });
     await memoryService.initialize();
+    setGlobalMemoryService(memoryService);  // Make available globally for adapter
 
     // Phase 2: Context Window Management managers (Cursor's Dynamic Context Discovery)
     const dynamicContextManager = createDynamicContextManager(bus, { projectId: sessionId });
@@ -533,9 +550,18 @@ function setupKnowledgeUpdateCallback(
                     project,
                     knowledgeStore,
                     createExtractionOptions(knowledgeStore.getProjectId(), {
-                        maxItemsPerCategory: 100  // Lower limit for incremental updates
+                        maxItemsPerCategory: 100,  // Lower limit for incremental updates
+                        defineContextId: project.defineContextId,
+                        compileOrderId: project.compileOrderId
                     })
                 );
+
+                if (project.defineContextId) {
+                    ctx.memoryService.setActiveContext(
+                        project.defineContextId,
+                        project.compileOrderId
+                    );
+                }
 
                 if (result.success) {
                     ctx.bus.emit({

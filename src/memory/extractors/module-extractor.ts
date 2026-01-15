@@ -77,6 +77,8 @@ export function extractModuleInfo(
         global: false,
         projectIds: [options.projectId],
         modules: [decl.name],
+        defineContextId: options.defineContextId,
+        compileOrderId: options.compileOrderId,
       },
       source: {
         method: "extracted",

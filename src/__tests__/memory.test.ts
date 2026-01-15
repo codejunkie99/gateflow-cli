@@ -23,6 +23,10 @@ import {
   TieredKnowledgeStore,
   createTieredStore,
 } from "../memory/tiered-store.js";
+import {
+  computeDefineContextId,
+  computeCompileOrderId,
+} from "../memory/context-id.js";
 
 describe("Memory Module", () => {
   let tmpDir: string;
@@ -183,6 +187,155 @@ describe("Memory Module", () => {
       expect(results[0].item.title).toBe("Verilog");
     });
 
+    it("should respect defineContextId in strict scope", async () => {
+      const store = new KnowledgeStore(tmpDir, bus, { knowledgeDir: tmpDir });
+      await store.load();
+
+      store.addKnowledge({
+        type: "code_pattern",
+        title: "Ctx A",
+        content: "alpha",
+        tags: ["a"],
+        keywords: ["alpha"],
+        scope: { global: false, defineContextId: "ctx-a" },
+        source: { method: "extracted" },
+        confidence: 0.8,
+      });
+
+      store.addKnowledge({
+        type: "code_pattern",
+        title: "Ctx B",
+        content: "alpha",
+        tags: ["b"],
+        keywords: ["alpha"],
+        scope: { global: false, defineContextId: "ctx-b" },
+        source: { method: "extracted" },
+        confidence: 0.8,
+      });
+
+      const results = store.search({
+        query: "alpha",
+        defineContextId: "ctx-a",
+        relaxedScope: false,
+      });
+      expect(results).toHaveLength(1);
+      expect(results[0].item.title).toBe("Ctx A");
+    });
+
+    it("should update tokens on content change", async () => {
+      const store = new KnowledgeStore(tmpDir, bus, { knowledgeDir: tmpDir });
+      await store.load();
+
+      store.addKnowledge({
+        type: "code_pattern",
+        title: "Token Update",
+        content: "foo",
+        tags: [],
+        keywords: ["foo"],
+        scope: { global: false },
+        source: { method: "user_provided" },
+        confidence: 0.9,
+      });
+
+      expect(store.search({ query: "foo" })).toHaveLength(1);
+
+      // Same title/type/scope → updates existing item
+      store.addKnowledge({
+        type: "code_pattern",
+        title: "Token Update",
+        content: "bar",
+        tags: [],
+        keywords: ["bar"],
+        scope: { global: false },
+        source: { method: "user_provided" },
+        confidence: 0.9,
+      });
+
+      expect(store.search({ query: "foo" })).toHaveLength(0);
+      expect(store.search({ query: "bar" })).toHaveLength(1);
+    });
+
+    it("should expand queries with static HDL expansions when enabled", async () => {
+      const store = new KnowledgeStore(tmpDir, bus, {
+        knowledgeDir: tmpDir,
+        llm: { enabled: false, queryExpansion: true },
+      });
+      await store.load();
+
+      store.addKnowledge({
+        type: "code_pattern",
+        title: "Clock Naming",
+        content: "Use clk for clock signals",
+        tags: ["naming"],
+        keywords: ["clk"],
+        scope: { global: false },
+        source: { method: "user_provided" },
+        confidence: 0.9,
+      });
+
+      const results = store.search({ query: "clock" });
+      expect(results).toHaveLength(1);
+      expect(results[0].item.title).toBe("Clock Naming");
+    });
+
+    it("should evict cold contexts when over limit", async () => {
+      const store = new KnowledgeStore(tmpDir, bus, {
+        knowledgeDir: tmpDir,
+        maxItems: 3,
+        maxActiveContexts: 1,
+        contextMaxAgeMs: 0,
+        minItemsToProtect: 0,
+      });
+      await store.load();
+
+      store.setActiveContext("ctx-a");
+      store.addKnowledge({
+        type: "code_pattern",
+        title: "A1",
+        content: "a1",
+        tags: ["a"],
+        keywords: ["a1"],
+        scope: { global: false, defineContextId: "ctx-a" },
+        source: { method: "extracted" },
+        confidence: 0.8,
+      });
+      store.addKnowledge({
+        type: "code_pattern",
+        title: "A2",
+        content: "a2",
+        tags: ["a"],
+        keywords: ["a2"],
+        scope: { global: false, defineContextId: "ctx-a" },
+        source: { method: "extracted" },
+        confidence: 0.8,
+      });
+      store.addKnowledge({
+        type: "code_pattern",
+        title: "B1",
+        content: "b1",
+        tags: ["b"],
+        keywords: ["b1"],
+        scope: { global: false, defineContextId: "ctx-b" },
+        source: { method: "extracted" },
+        confidence: 0.8,
+      });
+      store.addKnowledge({
+        type: "code_pattern",
+        title: "B2",
+        content: "b2",
+        tags: ["b"],
+        keywords: ["b2"],
+        scope: { global: false, defineContextId: "ctx-b" },
+        source: { method: "extracted" },
+        confidence: 0.8,
+      });
+
+      const remaining = store.getItems();
+      expect(remaining.some((i) => i.scope.defineContextId === "ctx-b")).toBe(
+        false,
+      );
+    });
+
     describe("Knowledge Extraction", () => {
       it("should extract patterns from lint sessions", async () => {
         const store = new KnowledgeStore(tmpDir, bus, { knowledgeDir: tmpDir });
@@ -245,6 +398,33 @@ describe("Memory Module", () => {
         expect(result).toBeDefined();
         expect(result.confidence).toBe(0.95);
         expect(result.source.method).toBe("user_provided");
+      });
+    });
+
+    describe("Context IDs", () => {
+      it("should be stable for define order but preserve include order", () => {
+        const id1 = computeDefineContextId(
+          { A: "1", B: "2" },
+          ["inc/a", "inc/b"],
+        );
+        const id2 = computeDefineContextId(
+          { B: "2", A: "1" },
+          ["inc/a", "inc/b"],
+        );
+        const id3 = computeDefineContextId(
+          { A: "1", B: "2" },
+          ["inc/b", "inc/a"],
+        );
+        expect(id1).toBe(id2);
+        expect(id1).not.toBe(id3);
+      });
+
+      it("should deduplicate but preserve compile order", () => {
+        const id1 = computeCompileOrderId(["a.sv", "b.sv", "a.sv"]);
+        const id2 = computeCompileOrderId(["a.sv", "b.sv"]);
+        const id3 = computeCompileOrderId(["b.sv", "a.sv"]);
+        expect(id1).toBe(id2);
+        expect(id1).not.toBe(id3);
       });
     });
   });

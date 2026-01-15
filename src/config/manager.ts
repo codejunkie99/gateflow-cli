@@ -11,6 +11,12 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 export interface GateFlowConfig {
     LLM?: {
+        knowledgeEnabled?: boolean;
+        knowledgeModel?: string;
+        knowledgeMaxTokens?: number;
+        knowledgeTemperature?: number;
+        knowledgeQueryExpansion?: boolean;
+        knowledgeSemanticTags?: boolean;
         defaultModel?: string;
         maxTokens?: number;
         temperature?: number;
@@ -34,6 +40,12 @@ export interface GateFlowConfig {
 
 const DEFAULT_CONFIG: GateFlowConfig = {
     LLM: {
+        knowledgeEnabled: false,
+        knowledgeModel: undefined,
+        knowledgeMaxTokens: 512,
+        knowledgeTemperature: 0.2,
+        knowledgeQueryExpansion: false,
+        knowledgeSemanticTags: false,
         defaultModel: 'claude-sonnet-4-20250514',
         maxTokens: 8192,
         temperature: 0.7
@@ -143,6 +155,12 @@ export class ConfigManager {
             }
             if (this.config.LLM.temperature && (this.config.LLM.temperature < 0 || this.config.LLM.temperature > 2)) {
                 errors.push('LLM.temperature must be between 0 and 2');
+            }
+            if (this.config.LLM.knowledgeMaxTokens && (this.config.LLM.knowledgeMaxTokens < 1 || this.config.LLM.knowledgeMaxTokens > 100000)) {
+                errors.push('LLM.knowledgeMaxTokens must be between 1 and 100000');
+            }
+            if (this.config.LLM.knowledgeTemperature && (this.config.LLM.knowledgeTemperature < 0 || this.config.LLM.knowledgeTemperature > 2)) {
+                errors.push('LLM.knowledgeTemperature must be between 0 and 2');
             }
         }
 

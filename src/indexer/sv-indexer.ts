@@ -141,6 +141,9 @@ import { ProjectResolver } from './resolver/index.js';
 import { DependencyGraph } from './analyzer/index.js';
 import { SlangBackend, type SlangBackendOptions, type SlangBackendResult } from './slang/index.js';
 import { mergeIndices, combineFileResults, toResolvedProject, type MergedIndex } from './merge/index.js';
+import { computeCompileOrderId, computeDefineContextId } from '../memory/context-id.js';
+
+const MFCU_TOOLCHAINS = new Set(['quartus-standard', 'vcs', 'modelsim', 'xcelium']);
 
 /**
  * Main entry point for indexing SystemVerilog projects.
@@ -189,6 +192,12 @@ export interface SVIndexerOptions {
    * Default: false
    */
   verbose?: boolean;
+
+  /**
+   * Toolchain identifier to determine compile-order sensitivity.
+   * Examples: 'quartus-standard', 'vcs', 'xcelium'
+   */
+  toolchain?: string;
 }
 
 export class SVIndexer {
@@ -205,6 +214,7 @@ export class SVIndexer {
       enableSemanticAnalysis: options.enableSemanticAnalysis ?? true,
       slangOptions: options.slangOptions,
       verbose: options.verbose ?? false,
+      toolchain: options.toolchain,
     };
   }
 
@@ -243,6 +253,10 @@ export class SVIndexer {
     // Parse filelist
     const parseStart = performance.now();
     const recipe = await this.filelistParser.parse(filelistPath);
+    const defineContextId = computeDefineContextId(recipe.defines, recipe.includePaths);
+    const toolchain = this.options.toolchain;
+    const isMFCU = toolchain ? MFCU_TOOLCHAINS.has(toolchain) : false;
+    const compileOrderId = isMFCU ? computeCompileOrderId(recipe.files) : undefined;
     const parseTime = performance.now() - parseStart;
 
     if (this.options.verbose) {
@@ -309,6 +323,8 @@ export class SVIndexer {
           },
         },
         hasSemanticAnalysis: true,
+        defineContextId,
+        compileOrderId,
       };
     }
 
@@ -333,6 +349,8 @@ export class SVIndexer {
     return {
       ...project,
       hasSemanticAnalysis: false,
+      defineContextId,
+      compileOrderId,
     };
   }
 
@@ -412,6 +430,13 @@ export class SVIndexer {
       nestedFilelists: [],
     };
 
+    const defineContextId = recipe
+      ? computeDefineContextId(recipe.defines, recipe.includePaths)
+      : 'default';
+    const toolchain = this.options.toolchain;
+    const isMFCU = toolchain ? MFCU_TOOLCHAINS.has(toolchain) : false;
+    const compileOrderId = recipe && isMFCU ? computeCompileOrderId(recipe.files) : undefined;
+
     // Run Layer A and Layer B in parallel
     const [layerAResults, layerBResult] = await Promise.all([
       this.parseFiles(filePaths),
@@ -442,6 +467,8 @@ export class SVIndexer {
           },
         },
         hasSemanticAnalysis: true,
+        defineContextId,
+        compileOrderId,
       };
     }
 
@@ -457,6 +484,8 @@ export class SVIndexer {
     return {
       ...project,
       hasSemanticAnalysis: false,
+      defineContextId,
+      compileOrderId,
     };
   }
 
