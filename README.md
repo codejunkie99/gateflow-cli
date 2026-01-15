@@ -9,127 +9,160 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.3-blue)](https://www.typescriptlang.org/)
 [![Powered by Claude](https://img.shields.io/badge/Powered%20by-Claude%20AI-orange)](https://www.anthropic.com/)
 
-A production-grade CLI that brings AI-powered natural language interactions to SystemVerilog development. Chat with your codebase, auto-fix lint errors, generate testbenches, and debug waveforms—all from the command line.
-
-[Features](#features) •
-[Quick Start](#quick-start) •
-[Documentation](#documentation) •
-[Architecture](#architecture) •
-[Contributing](#contributing)
-
 </div>
+
+---
+
+GateFlow CLI is a production-grade command-line interface that integrates AI-powered natural language processing into SystemVerilog development workflows. It enables developers to query codebases conversationally, automatically resolve lint errors, generate testbenches, and analyze waveforms directly from the terminal.
+
+## Table of Contents
+
+- [Features](#features)
+- [System Requirements](#system-requirements)
+- [Installation](#installation)
+- [Usage](#usage)
+- [Configuration](#configuration)
+- [Architecture](#architecture)
+- [Safety and Reliability](#safety-and-reliability)
+- [Development](#development)
+- [Contributing](#contributing)
+- [License](#license)
 
 ---
 
 ## Features
 
-### **AI-Powered Multi-Agent System**
-- **Specialized Worker Agents**: Understanding, Code Generation, Testbench, Debug, and Refactoring agents
-- **Intelligent Orchestration**: Automatic complexity detection and task routing
-- **Execution Planning**: Multi-step task decomposition with dependency resolution
-- **Thinking Visibility**: Real-time insight into agent reasoning and decision-making
+### Multi-Agent AI System
 
-### **Smart Development Tools**
-- **Natural Language Queries**: Ask questions about your codebase in plain English
-- **Auto-Fix Lint Errors**: Iterative Verilator-based error fixing with AI suggestions
-- **Code Generation**: Create synthesizable SystemVerilog modules, testbenches, and packages
-- **Project Indexing**: Fast module discovery, dependency analysis, and compilation order
+- **Specialized Worker Agents** — Five purpose-built agents for understanding, code generation, testbench creation, debugging, and refactoring
+- **Intelligent Orchestration** — Automatic complexity detection with dynamic task routing
+- **Execution Planning** — Multi-step task decomposition with dependency resolution
+- **Transparent Reasoning** — Real-time visibility into agent decision-making processes
 
-### **Waveform Analysis**
-- **Terminal Viewer**: VCD waveform visualization directly in your terminal
-- **Web Viewer**: Full-featured browser-based waveform explorer
-- **MCP Integration**: Model Context Protocol server for waveform data access
+### Development Tools
 
-###  **Production-Ready Safety**
-- **Diff Preview System**: Visual diff for all file changes before applying
-- **Policy Engine**: Fine-grained approval controls for file operations
-- **Dry-Run Mode**: Preview changes without touching files
-- **Exit Code Standards**: Standardized error codes for CI/CD integration
+- **Natural Language Queries** — Query your codebase using plain English
+- **Automated Lint Resolution** — Iterative Verilator-based error detection and AI-assisted fixes
+- **Code Generation** — Generate synthesizable SystemVerilog modules, testbenches, and packages
+- **Project Indexing** — Fast module discovery, dependency analysis, and compilation order resolution
 
-###  **Multi-Language Support** *(Roadmap)*
-- SystemVerilog (current), Verilog, and VHDL support planned
-- Cross-language project analysis and dependency resolution
+### Waveform Analysis
+
+- **Terminal Viewer** — VCD waveform visualization in the terminal
+- **Web Viewer** — Browser-based waveform explorer with full interactivity
+- **MCP Integration** — Model Context Protocol server for programmatic waveform data access
+
+### Safety Features
+
+- **Diff Preview System** — Visual diff for all file modifications before application
+- **Policy Engine** — Fine-grained approval controls for file operations
+- **Dry-Run Mode** — Preview changes without modifying files
+- **Standardized Exit Codes** — CI/CD-compatible error codes for automation pipelines
 
 ---
 
-## 🚀 Quick Start
+## System Requirements
 
-### Prerequisites
-- **Node.js** ≥18.0.0
-- **Anthropic API Key** ([Get one here](https://console.anthropic.com/))
-- **Verilator** (optional, for linting)
+| Requirement | Version | Notes |
+|-------------|---------|-------|
+| Node.js | >= 18.0.0 | Required |
+| npm | >= 8.0.0 | Required |
+| Anthropic API Key | — | [Obtain key](https://console.anthropic.com/) |
+| Verilator | >= 5.0 | Optional, required for linting |
 
-### Installation
+### Platform Support
+
+- **Linux** — Full support
+- **macOS** — Full support
+- **Windows** — Full support (WSL recommended for Verilator)
+
+---
+
+## Installation
+
+### From Source
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/cursor-for-vhdl.git
-cd cursor-for-vhdl/cli
+git clone https://github.com/gateflow/gateflow-cli.git
+cd gateflow-cli/cli
 
-# Install dependencies and build
-npm install && npm run build
+# Install dependencies
+npm install
 
-# Set your API key
-export ANTHROPIC_API_KEY=your_key_here
+# Build the project
+npm run build
+
+# Configure API key
+export ANTHROPIC_API_KEY=<your-api-key>
 
 # Verify installation
 gateflow doctor
 ```
 
-### First Run
+### Verify Installation
 
 ```bash
-# Interactive chat mode
-gateflow chat
-
-# Ask a question
-gateflow "list all modules in my project"
-
-# Generate a module
-gateflow gen module uart_tx
-
-# Lint and auto-fix
-gateflow lint src/counter.sv
-gateflow fix src/counter.sv
+gateflow doctor
 ```
+
+This command validates your environment, checking for required dependencies and proper configuration.
 
 ---
 
-## 📖 Documentation
+## Usage
+
+### Interactive Mode
+
+```bash
+gateflow chat
+```
+
+Launches an interactive session for multi-turn conversations with the AI agents.
+
+### Single Query
+
+```bash
+gateflow "list all modules in my project"
+```
+
+Executes a one-off query and returns the result.
 
 ### Command Reference
 
 | Command | Description | Example |
 |---------|-------------|---------|
-| `gateflow chat` | Start interactive chat session | `gateflow chat` |
-| `gateflow <query>` | Run a single natural language query | `gateflow "explain this module"` |
-| `gateflow scan` | Index SystemVerilog files for fast lookup | `gateflow scan` |
-| `gateflow lint [files]` | Run Verilator lint on files | `gateflow lint src/*.sv` |
-| `gateflow fix <file>` | Auto-fix lint errors iteratively | `gateflow fix src/alu.sv` |
-| `gateflow gen <type> <name>` | Generate module/testbench/package | `gateflow gen testbench uart_rx` |
-| `gateflow wave <vcd>` | View waveforms in terminal | `gateflow wave sim/out.vcd` |
-| `gateflow wave-web <vcd>` | View waveforms in browser | `gateflow wave-web sim/out.vcd` |
-| `gateflow doctor` | Check environment and dependencies | `gateflow doctor` |
+| `gateflow chat` | Start interactive session | `gateflow chat` |
+| `gateflow <query>` | Execute single query | `gateflow "explain this module"` |
+| `gateflow scan` | Index SystemVerilog files | `gateflow scan` |
+| `gateflow lint [files]` | Run Verilator lint | `gateflow lint src/*.sv` |
+| `gateflow fix <file>` | Auto-fix lint errors | `gateflow fix src/alu.sv` |
+| `gateflow gen <type> <name>` | Generate code artifacts | `gateflow gen testbench uart_rx` |
+| `gateflow wave <vcd>` | View waveforms (terminal) | `gateflow wave sim/out.vcd` |
+| `gateflow wave-web <vcd>` | View waveforms (browser) | `gateflow wave-web sim/out.vcd` |
+| `gateflow doctor` | Validate environment | `gateflow doctor` |
 
-### Global Flags
+### Global Options
 
-| Flag | Description |
-|------|-------------|
-| `-y, --yes` | Auto-approve all changes (use with caution) |
-| `-n, --dry-run` | Preview changes without applying them |
-| `--json` | Output in machine-readable JSON format |
-| `-v, --verbose` | Enable verbose logging with agent decisions |
+| Option | Description |
+|--------|-------------|
+| `-y, --yes` | Auto-approve all changes |
+| `-n, --dry-run` | Preview changes without applying |
+| `--json` | Output in JSON format |
+| `-v, --verbose` | Enable verbose logging |
 
-### Configuration
+---
 
-#### Environment Variables
+## Configuration
 
-| Variable | Purpose | Default |
-|----------|---------|---------|
-| `ANTHROPIC_API_KEY` | **Required** - Your Anthropic API key | - |
-| `VERILATOR_PATH` | Custom Verilator binary path (WSL support) | `verilator` |
+### Environment Variables
 
-#### Project Configuration (`.gaterc.json`)
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `ANTHROPIC_API_KEY` | Anthropic API key (required) | — |
+| `VERILATOR_PATH` | Path to Verilator binary | `verilator` |
+
+### Project Configuration
 
 Create a `.gaterc.json` file in your project root:
 
@@ -146,8 +179,7 @@ Create a `.gaterc.json` file in your project root:
   },
   "ux": {
     "showThinking": true,
-    "streamTokens": true,
-    "showThinkingConfidence": false
+    "streamTokens": true
   },
   "project": {
     "includePaths": ["src/", "rtl/"],
@@ -156,15 +188,18 @@ Create a `.gaterc.json` file in your project root:
 }
 ```
 
-#### Windows + WSL Support
+### Windows with WSL
 
-If you're using Verilator in WSL from Windows:
+For Windows users running Verilator through WSL:
 
 ```powershell
 # PowerShell
 $env:VERILATOR_PATH = "/usr/bin/verilator"
+```
 
-# Or in .gaterc.json
+Or configure in `.gaterc.json`:
+
+```json
 {
   "tools": {
     "verilatorPath": "/usr/bin/verilator"
@@ -174,90 +209,96 @@ $env:VERILATOR_PATH = "/usr/bin/verilator"
 
 ---
 
-## 🏗️ Architecture
+## Architecture
 
-GateFlow CLI is built on a sophisticated multi-agent architecture:
+GateFlow CLI implements a multi-agent architecture designed for complex hardware design tasks.
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                       User Query                             │
-└─────────────────────────────────────────────────────────────┘
-                           │
-                           ▼
-┌─────────────────────────────────────────────────────────────┐
-│              Complexity Detection (AI SDK)                   │
-│         "Does this need multi-agent coordination?"           │
-└─────────────────────────────────────────────────────────────┘
-                           │
-          ┌────────────────┴────────────────┐
-          ▼                                 ▼
-   Simple Request                    Complex Request
-          │                                 │
-          ▼                                 ▼
-┌──────────────────┐           ┌─────────────────────────┐
-│  AI Routing      │           │   Planning Agent        │
-│  Single Agent    │           │   ExecutionPlan         │
-└──────────────────┘           └─────────────────────────┘
-          │                                 │
-          ▼                                 ▼
-┌──────────────────┐           ┌─────────────────────────┐
-│  Worker Agent    │           │   Sequential Execution  │
-│  Execution       │           │   (dependency order)    │
-└──────────────────┘           └─────────────────────────┘
+┌─────────────────────────────────────────────────────────┐
+│                      User Query                         │
+└─────────────────────────────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────┐
+│               Complexity Detection                       │
+│         Determines routing strategy for query           │
+└─────────────────────────────────────────────────────────┘
+                            │
+           ┌────────────────┴────────────────┐
+           ▼                                 ▼
+    Simple Request                    Complex Request
+           │                                 │
+           ▼                                 ▼
+┌─────────────────────┐         ┌─────────────────────────┐
+│    Direct Routing   │         │    Planning Agent       │
+│    Single Agent     │         │    Execution Plan       │
+└─────────────────────┘         └─────────────────────────┘
+           │                                 │
+           ▼                                 ▼
+┌─────────────────────┐         ┌─────────────────────────┐
+│   Worker Execution  │         │  Sequential Execution   │
+└─────────────────────┘         └─────────────────────────┘
 ```
 
 ### Core Components
 
-- **Agent System** (`src/agent/`): Multi-agent orchestration with 5 specialized workers
-- **Event Bus** (`src/events/`): Decoupled pub/sub for UI and agent communication
-- **Policy Engine** (`src/approval/`): Safety checks and approval workflows
-- **Project Indexer** (`src/indexer/`): Fast module discovery and dependency analysis
-- **File Operations** (`src/fileops/`): Safe, policy-aware file manipulation
-- **Verification** (`src/verification/`): Verilator integration and fix loops
+| Component | Location | Responsibility |
+|-----------|----------|----------------|
+| Agent System | `src/agent/` | Multi-agent orchestration |
+| Event Bus | `src/events/` | Decoupled pub/sub messaging |
+| Policy Engine | `src/approval/` | Safety checks and approvals |
+| Project Indexer | `src/indexer/` | Module discovery and analysis |
+| File Operations | `src/fileops/` | Policy-aware file manipulation |
+| Verification | `src/verification/` | Verilator integration |
 
 ### Specialized Agents
 
-| Agent | Purpose | Tools |
-|-------|---------|-------|
-| **Understanding** | Read and analyze existing code | `read_file`, `find_module`, `search_code`, `get_dependencies` |
-| **Code Generation** | Create new synthesizable modules | `write_file`, `lint_file`, `find_module` |
-| **Testbench** | Generate verification code | `write_file`, `read_file`, `run_simulation` |
-| **Debug** | Diagnose simulation failures | `read_file`, `lint_file`, `run_simulation` |
-| **Refactoring** | Modify existing code minimally | `edit_lines`, `search_replace`, `lint_file` |
+| Agent | Responsibility | Available Tools |
+|-------|----------------|-----------------|
+| Understanding | Code analysis and comprehension | `read_file`, `find_module`, `search_code`, `get_dependencies` |
+| Code Generation | Module and package creation | `write_file`, `lint_file`, `find_module` |
+| Testbench | Verification code generation | `write_file`, `read_file`, `run_simulation` |
+| Debug | Simulation failure diagnosis | `read_file`, `lint_file`, `run_simulation` |
+| Refactoring | Targeted code modifications | `edit_lines`, `search_replace`, `lint_file` |
 
-For detailed architecture documentation, see:
-- [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) - System architecture deep-dive
-- [`docs/AGENTS.md`](./docs/AGENTS.md) - Multi-agent system details
-- [`docs/MULTI_LANGUAGE_ARCHITECTURE.md`](./docs/MULTI_LANGUAGE_ARCHITECTURE.md) - Future multi-language support
+For detailed architecture documentation:
+
+- [Architecture Overview](./docs/ARCHITECTURE.md)
+- [Multi-Agent System](./docs/AGENTS.md)
+- [Multi-Language Support](./docs/MULTI_LANGUAGE_ARCHITECTURE.md)
 
 ---
 
-## 🔒 Safety & Reliability
+## Safety and Reliability
 
-### Diff Preview System
-Every file modification shows a colorized diff before applying:
+### Diff Preview
+
+All file modifications display a colorized diff before application:
+
 ```
 [DIFF PREVIEW] src/counter.sv
 ─────────────────────────────────────────────
 -  logic [7:0] count;
-+  logic [15:0] count;  // Widened to 16 bits
++  logic [15:0] count;
 ─────────────────────────────────────────────
 Apply this change? [Y/n/a/s]
 ```
 
-### Approval Workflow
-- `Y` - Apply this change
-- `N` - Reject this change
-- `A` - Approve all remaining changes
-- `S` - Skip this change and continue
+### Approval Options
+
+| Key | Action |
+|-----|--------|
+| `Y` | Apply change |
+| `N` | Reject change |
+| `A` | Approve all remaining |
+| `S` | Skip and continue |
 
 ### Exit Codes
-Standard exit codes for CI/CD integration:
 
-| Code | Meaning |
-|------|---------|
+| Code | Description |
+|------|-------------|
 | 0 | Success |
-| 1 | Lint failed |
+| 1 | Lint failure |
 | 2 | User rejected change |
 | 3 | Tool error |
 | 4 | Configuration error |
@@ -267,16 +308,16 @@ Standard exit codes for CI/CD integration:
 
 ---
 
-## 🛠️ Development
+## Development
 
 ### Build Commands
 
 ```bash
-npm run build              # Compile TypeScript
-npm run dev                # Development mode with tsx
-npm run lint               # Type-check with tsc
-npm test                   # Run unit tests (vitest)
-npm run test:unit          # Run tests in CI mode
+npm run build          # Compile TypeScript
+npm run dev            # Development mode with tsx
+npm run lint           # Type-check with tsc
+npm test               # Run unit tests
+npm run test:unit      # Run tests in CI mode
 ```
 
 ### Project Structure
@@ -290,163 +331,93 @@ cli/
 │   │   ├── prompts/        # Prompt engineering
 │   │   └── reasoning/      # Thinking chain
 │   ├── approval/           # Policy engine
-│   ├── cli/                # CLI commands & entry
+│   ├── cli/                # CLI commands
 │   ├── config/             # Configuration management
 │   ├── events/             # Event bus system
 │   ├── fileops/            # File operations
 │   ├── indexer/            # Project indexing
 │   ├── ui/                 # Terminal UI renderer
 │   ├── verification/       # Verilator integration
-│   └── waveform/           # VCD parsing & viewing
-├── docs/                   # Architecture documentation
-└── scripts/                # Build & download scripts
+│   └── waveform/           # VCD parsing and viewing
+├── docs/                   # Documentation
+└── scripts/                # Build scripts
 ```
 
 ### Running Tests
 
 ```bash
-# Run all tests
+# All tests
 npm test
 
-# Run tests in watch mode
+# Watch mode
 npm test -- --watch
 
-# Run specific test file
+# Specific file
 npm test ThinkingChain.test.ts
 ```
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
-We welcome contributions! Here's how you can help:
+Contributions are welcome. Please follow these guidelines:
 
 ### Reporting Issues
-- Use the [GitHub Issues](https://github.com/your-org/cursor-for-vhdl/issues) tracker
-- Include steps to reproduce, expected vs actual behavior
-- Attach relevant logs (use `--verbose` flag)
+
+1. Search existing issues before creating a new one
+2. Include reproduction steps, expected behavior, and actual behavior
+3. Attach logs using the `--verbose` flag
+4. Specify your environment (OS, Node.js version, etc.)
 
 ### Pull Requests
+
 1. Fork the repository
-2. Create a feature branch: `git checkout -b feature/my-feature`
-3. Make your changes with clear commit messages
+2. Create a feature branch: `git checkout -b feature/description`
+3. Write clear, atomic commits
 4. Add tests for new functionality
 5. Ensure `npm run lint` and `npm test` pass
-6. Submit a PR with a clear description
+6. Submit a pull request with a clear description
 
-### Development Guidelines
+### Code Standards
+
 - Follow TypeScript best practices
-- Use Zod for schema validation
-- Add JSDoc comments for public APIs
-- Keep agents focused on single responsibilities
+- Use Zod for runtime validation
+- Document public APIs with JSDoc
+- Maintain single responsibility for agents
 - Use the event bus for cross-component communication
 
 ---
 
-## 📚 Examples
+## Roadmap
 
-### Example 1: Understanding a Module
-```bash
-$ gateflow "what does counter.sv do?"
-
-[Understanding Agent]
-Analyzing counter.sv...
-
-The counter module (src/counter.sv:5) is a 16-bit up counter with:
-- Ports: clk (input), rst_n (input), count (output [15:0])
-- Synchronous active-low reset
-- Increments on positive clock edge
-- Instantiated in: top.sv, testbench.sv
-```
-
-### Example 2: Auto-Fixing Lint Errors
-```bash
-$ gateflow fix src/alu.sv
-
-[Lint Agent]
-Running Verilator on src/alu.sv...
-Found 3 errors:
-
-1. Width mismatch: 'result' expects 32 bits, got 16 bits
-2. Unused signal: 'temp'
-3. Missing default in case statement
-
-[Refactoring Agent]
-Proposing fixes...
-
-[DIFF PREVIEW]
-...
-Apply all fixes? [Y/n/a/s] Y
-
-✓ All fixes applied successfully
-✓ Re-linting... Clean!
-```
-
-### Example 3: Generating a Testbench
-```bash
-$ gateflow gen testbench uart_rx
-
-[Code Generation Agent]
-Generating tb_uart_rx.sv...
-
-✓ Created tb_uart_rx.sv
-✓ Added clock generator (100MHz)
-✓ Added reset logic
-✓ Instantiated DUT with proper connections
-✓ Added $dumpfile for waveform capture
-✓ Linted: Clean
-
-Testbench ready! Run with:
-  verilator --binary tb_uart_rx.sv
-  gateflow wave sim/uart_rx.vcd
-```
+| Feature | Status |
+|---------|--------|
+| Multi-Language Support (VHDL, Verilog) | Planned |
+| Plugin System | Planned |
+| Cloud Indexing | Planned |
+| Formal Verification Integration | Planned |
+| Coverage Analysis | Planned |
+| Web Interface | Planned |
 
 ---
 
-## 🗺️ Roadmap
+## License
 
-- [ ] **Multi-Language Support**: VHDL and Verilog support (see `docs/MULTI_LANGUAGE_ARCHITECTURE.md`)
-- [ ] **Plugin System**: Extensible tool integrations
-- [ ] **Cloud Indexing**: Remote codebase analysis
-- [ ] **Formal Verification**: Integration with model checkers
-- [ ] **Coverage Analysis**: AI-driven coverage hole detection
-- [ ] **Web UI**: Browser-based interface for non-terminal users
-
+This project is licensed under the MIT License. See [LICENSE](./LICENSE) for details.
 
 ---
 
-## 📄 License
+## Acknowledgments
 
-This project is licensed under the **MIT License** - see the [LICENSE](./LICENSE) file for details.
-
-```
-MIT License
-Copyright (c) 2024 GateFlow
-```
+- [Anthropic](https://www.anthropic.com/) — Claude AI
+- [Verilator](https://www.veripool.org/verilator/) — SystemVerilog simulation and linting
+- [Verible](https://github.com/chipsalliance/verible) — SystemVerilog parsing
+- [Slang](https://github.com/MikePopoloski/slang) — SystemVerilog compiler frontend
 
 ---
 
-## 🙏 Acknowledgments
-
-- **Anthropic** - Claude AI powers the multi-agent system
-- **Verilator** - Open-source SystemVerilog linting and simulation
-- **Verible** - SystemVerilog parsing and analysis
-- **Slang** - High-performance SystemVerilog compiler frontend
-
----
-
-## 📧 Support
+## Support
 
 - **Documentation**: [`docs/`](./docs/)
-- **Issues**: [GitHub Issues](https://github.com/your-org/cursor-for-vhdl/issues)
-- **Discussions**: [GitHub Discussions](https://github.com/your-org/cursor-for-vhdl/discussions)
-
----
-
-<div align="center">
-
-**Built with ❤️ for the hardware design community**
-
-[⬆ Back to Top](#gateflow-cli)
-
-</div>
+- **Issues**: [GitHub Issues](https://github.com/gateflow/gateflow-cli/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/gateflow/gateflow-cli/discussions)
