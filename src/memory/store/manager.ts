@@ -240,7 +240,10 @@ export class MemoryManager {
                         encoding: 'utf-8',
                         timeout: 2000
                     });
-                    const isStale = !result.stdout.includes(lock.pid.toString());
+                    // Use word boundary matching to avoid false positives (e.g., "12" matching "123")
+                    const pidStr = lock.pid.toString();
+                    const pidRegex = new RegExp(`\\b${pidStr}\\b`);
+                    const isStale = !pidRegex.test(result.stdout);
                     return { isStale, content };
                 } catch {
                     return { isStale: false, content };
