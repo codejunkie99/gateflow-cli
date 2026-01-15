@@ -68,3 +68,11 @@ export function setGlobalKnowledgeStore(store: KnowledgeStore): void {
     globalStore = store;
 }
 
+/**
+ * Clear the global KnowledgeStore singleton.
+ * Useful for testing or when switching projects.
+ */
+export function clearGlobalKnowledgeStore(): void {
+    globalStore = null;
+}
+

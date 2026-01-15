@@ -87,7 +87,36 @@ export function inferFilePatterns(files: Set<string>): string[] | undefined {
     const commonDir = findCommonPrefix(dirs);
 
     if (commonDir && commonDir !== '.') {
-        return [`${commonDir}/**/*.sv`];
+        // Count extension frequencies (excluding files without extensions)
+        const extCounts = new Map<string, number>();
+        for (const f of files) {
+            const ext = path.extname(f).toLowerCase();
+            if (ext) {
+                extCounts.set(ext, (extCounts.get(ext) || 0) + 1);
+            }
+        }
+
+        // If no files have extensions, don't scope by extension
+        if (extCounts.size === 0) {
+            return [`${commonDir}/**/*`];
+        }
+
+        // If single extension, use it; otherwise find most common
+        let ext: string;
+        if (extCounts.size === 1) {
+            ext = [...extCounts.keys()][0];
+        } else {
+            // Find most common extension
+            let maxCount = 0;
+            ext = '.sv'; // fallback
+            for (const [e, count] of extCounts) {
+                if (count > maxCount) {
+                    maxCount = count;
+                    ext = e;
+                }
+            }
+        }
+        return [`${commonDir}/**/*${ext}`];
     }
 
     return undefined;
