@@ -18,3 +18,10 @@ export {
   DEFAULT_TOKEN_CONFIG,
 } from "./token-estimator.js";
 export * from "./tiered-store.js";
+// KnowledgeService for unified structural + learned knowledge queries
+export { KnowledgeService } from "./knowledge-service/index.js";
+export type {
+  UnifiedKnowledgeQuery,
+  UnifiedKnowledgeResult,
+  IKnowledgeService,
+} from "./knowledge-service/index.js";

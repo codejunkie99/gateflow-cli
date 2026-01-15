@@ -52,7 +52,7 @@ export function computeFingerprint(type: KnowledgeType, title: string, scope: Kn
     if (scope.modules?.length) scopeParts.push(`m:${[...scope.modules].sort().join(',')}`);
     if (scope.filePatterns?.length) scopeParts.push(`f:${[...scope.filePatterns].sort().join(',')}`);
 
-    const contextSensitiveTypes: KnowledgeType[] = ['lint_fix', 'project_context', 'code_pattern'];
+    const contextSensitiveTypes: KnowledgeType[] = ['lint_fix', 'code_pattern'];
     if (contextSensitiveTypes.includes(type) && scope.defineContextId) {
         scopeParts.push(`c:${scope.defineContextId}`);
     }

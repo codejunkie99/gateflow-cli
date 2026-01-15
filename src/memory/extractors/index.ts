@@ -3,6 +3,10 @@
  *
  * @module memory/extractors
  *
+ * NOTE: Structural extraction (modules, dependencies, hierarchy) has been removed.
+ * The KnowledgeStore now focuses on learned patterns only.
+ * These exports are kept for backwards compatibility.
+ *
  * @example
  * ```typescript
  * import {
@@ -22,24 +26,16 @@
 // ═══════════════════════════════════════════════════════════════════════════
 
 export {
-    // Main orchestrator function
+    // Main orchestrator function (now a no-op for structural extraction)
     extractFromIndex,
 
-    // Lightweight variant
+    // Lightweight variant (deprecated, same as extractFromIndex)
     extractModulesOnly,
 
     // Helper functions
     createExtractionOptions,
     formatExtractionSummary
 } from './indexer-extractor.js';
-
-// ═══════════════════════════════════════════════════════════════════════════
-// Individual Extractors (for advanced usage)
-// ═══════════════════════════════════════════════════════════════════════════
-
-export { extractModuleInfo } from './module-extractor.js';
-export { extractDependencies } from './dependency-extractor.js';
-export { extractHierarchy } from './hierarchy-extractor.js';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // Types

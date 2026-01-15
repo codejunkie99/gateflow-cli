@@ -40,6 +40,7 @@ import { estimateTokens } from "../utils.js";
 import { KnowledgeIndexManager } from "../knowledge-index.js";
 import {
   DEFAULT_KNOWLEDGE_STORE_CONFIG,
+  REMOVED_STRUCTURAL_TYPES,
   type KnowledgeIndex,
   type KnowledgeItem,
   type KnowledgeQuery,
@@ -139,6 +140,15 @@ export class KnowledgeStore {
           this.projectId,
         );
         this.index.items = this.migrateLegacyItems(this.index.items);
+        // Filter out stale structural items extracted by indexer (migration)
+        const filteredResult = this.filterExtractedStructuralItems(this.index.items);
+        if (filteredResult.removedCount > 0) {
+          console.log(
+            `KnowledgeStore: Removed ${filteredResult.removedCount} stale structural items during migration`,
+          );
+          this.index.items = filteredResult.items;
+          this.markDirty();
+        }
         this.pruneStaleItems();
         this.indexManager.rebuild(this.index.items);
         return this.index;
@@ -572,6 +582,35 @@ export class KnowledgeStore {
       }
       return item;
     });
+  }
+
+  /**
+   * Filter out stale structural items that were extracted by the indexer.
+   * These types (module_info, dependency, project_context) are no longer supported
+   * and should be removed during migration.
+   */
+  private filterExtractedStructuralItems(
+    items: KnowledgeItem[],
+  ): { items: KnowledgeItem[]; removedCount: number } {
+    const structuralTypes: readonly string[] = REMOVED_STRUCTURAL_TYPES;
+    const originalCount = items.length;
+
+    const filtered = items.filter((item) => {
+      // Only filter items that were extracted by the indexer
+      if (
+        item.source.method === "extracted" &&
+        item.source.tool === "indexer" &&
+        structuralTypes.includes(item.type as string)
+      ) {
+        return false;
+      }
+      return true;
+    });
+
+    return {
+      items: filtered,
+      removedCount: originalCount - filtered.length,
+    };
   }
 
   private enforceCapacity(): void {

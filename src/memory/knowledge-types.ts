@@ -44,13 +44,32 @@ export type KnowledgeType =
     | 'code_pattern'
     | 'lint_fix'
     | 'test_pattern'
-    | 'module_info'
-    | 'dependency'
     | 'style_preference'
     | 'workflow'
     | 'debug_solution'
-    | 'tool_usage'
-    | 'project_context';
+    | 'tool_usage';
+
+/**
+ * Structural types that have been removed from KnowledgeType.
+ * Used for migration filtering during load().
+ */
+export const REMOVED_STRUCTURAL_TYPES = ['module_info', 'dependency', 'project_context'] as const;
+
+/**
+ * Type guard to check if a type string is a valid learned KnowledgeType
+ */
+export function isLearnedKnowledgeType(type: string): type is KnowledgeType {
+    const learnedTypes: string[] = [
+        'code_pattern',
+        'lint_fix',
+        'test_pattern',
+        'style_preference',
+        'workflow',
+        'debug_solution',
+        'tool_usage'
+    ];
+    return learnedTypes.includes(type);
+}
 
 export interface KnowledgeScope {
     global: boolean;

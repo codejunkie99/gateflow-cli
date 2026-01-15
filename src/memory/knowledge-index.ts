@@ -24,9 +24,6 @@ export class KnowledgeIndexManager {
     private totalDocLength = 0;
 
     private readonly TYPE_PORTABILITY: Record<KnowledgeType, number> = {
-        module_info: 0.8,
-        dependency: 0.85,
-        project_context: 0.5,
         lint_fix: 0.2,
         code_pattern: 0.5,
         style_preference: 0.95,
