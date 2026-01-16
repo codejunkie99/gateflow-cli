@@ -20,20 +20,20 @@ describe('Agent Factory', () => {
         expect(agent.system).toContain('Test Role');
         expect(agent.system).toContain('testing');
         expect(agent.toolChoice).toBe('auto');
-        expect(agent.maxSteps).toBe(10);
+        expect(agent.stepLimit).toBe(10);
     });
 
-    it('should use custom maxSteps', () => {
+    it('should use custom stepLimit', () => {
         const agent = createAgent({
             name: 'test',
             role: 'Test',
             expertise: 'test',
             constraints: [],
             tools: {},
-            maxSteps: 20
+            stepLimit: 20
         });
 
-        expect(agent.maxSteps).toBe(20);
+        expect(agent.stepLimit).toBe(20);
     });
 
     it('should include constraints in system prompt', () => {

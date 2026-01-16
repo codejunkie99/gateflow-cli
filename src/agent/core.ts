@@ -202,7 +202,7 @@ export class GateFlowAgent {
                 {
                     mode,
                     model: this.config.model,
-                    maxSteps: this.config.maxToolCalls,
+                    stepLimit: this.config.maxToolCalls,
                     autoApprove: this.toolContext.autoApprove,
                 },
                 this.toolContext

@@ -33,7 +33,7 @@ export function createDebugAgent(tools: Record<string, Tool>): GateFlowAgent {
             search_code: tools.search_code
         },
         toolChoice: 'required',
-        maxSteps: 15
+        stepLimit: 15
     });
 }
 

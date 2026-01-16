@@ -35,7 +35,7 @@ export function createTestbenchAgent(tools: Record<string, Tool>): GateFlowAgent
             run_simulation: tools.run_simulation
         },
         toolChoice: 'required',
-        maxSteps: 12
+        stepLimit: 12
     });
 }
 

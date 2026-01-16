@@ -70,7 +70,8 @@ export interface GateFlowAgent {
     system: string;
     tools: Record<string, Tool>;
     toolChoice?: 'auto' | 'required' | 'none';
-    maxSteps?: number;
+    /** Maximum steps for tool loop (used with stopWhen: stepCountIs()) */
+    stepLimit?: number;
 }
 
 // ============= Routing Schema (for orchestrator) =============

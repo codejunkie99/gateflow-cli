@@ -32,7 +32,7 @@ export function createUnderstandingAgent(tools: Record<string, Tool>): GateFlowA
             find_all_sv_files: tools.find_all_sv_files,
             list_files: tools.list_files
         },
-        maxSteps: 15,
+        stepLimit: 15,
         toolChoice: 'required'
     });
 }

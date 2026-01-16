@@ -33,7 +33,7 @@ export function createRefactoringAgent(tools: Record<string, Tool>): GateFlowAge
             search_code: tools.search_code
         },
         toolChoice: 'required',
-        maxSteps: 12
+        stepLimit: 12
     });
 }
 
