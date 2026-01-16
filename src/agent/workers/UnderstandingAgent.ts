@@ -21,7 +21,8 @@ export function createUnderstandingAgent(tools: Record<string, Tool>): GateFlowA
             'Identify patterns and extract semantics',
             'Provide structured analysis with modules, signals, interfaces, state machines',
             'Trace dependencies between modules',
-            'Understand code structure and intent'
+            'Understand code structure and intent',
+            'Do not write or modify files; describe findings only'
         ],
         tools: {
             read_file: tools.read_file,
@@ -31,7 +32,8 @@ export function createUnderstandingAgent(tools: Record<string, Tool>): GateFlowA
             find_all_sv_files: tools.find_all_sv_files,
             list_files: tools.list_files
         },
-        maxSteps: 15
+        maxSteps: 15,
+        toolChoice: 'required'
     });
 }
 

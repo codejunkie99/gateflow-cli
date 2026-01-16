@@ -422,6 +422,15 @@ export function createToolExecutors(ctx: ToolContext) {
         return keys.length > 0 ? keys.slice(0, 3).join(', ') : '';
     };
 
+    const formatApprovalError = (error: unknown): string => {
+        const message = error instanceof Error ? error.message : String(error);
+        const lower = message.toLowerCase();
+        if (lower.includes('timed out') || lower.includes('timeout')) {
+            return 'Approval request timed out';
+        }
+        return message || 'Approval request failed';
+    };
+
     const requestToolApproval = async (
         toolName: string,
         args: Record<string, unknown>
@@ -448,10 +457,14 @@ export function createToolExecutors(ctx: ToolContext) {
         const details = summarizeApprovalDetails(args);
 
         if (ctx.inputManager) {
-            const approval = await ctx.inputManager.requestApproval(toolName, details);
-            return approval.approved
-                ? { approved: true }
-                : { approved: false, reason: 'User denied approval' };
+            try {
+                const approval = await ctx.inputManager.requestApproval(toolName, details);
+                return approval.approved
+                    ? { approved: true }
+                    : { approved: false, reason: 'User denied approval' };
+            } catch (error) {
+                return { approved: false, reason: formatApprovalError(error) };
+            }
         }
 
         try {
@@ -462,7 +475,7 @@ export function createToolExecutors(ctx: ToolContext) {
         } catch (error) {
             return {
                 approved: false,
-                reason: error instanceof Error ? error.message : 'Approval request failed'
+                reason: formatApprovalError(error)
             };
         }
     };
