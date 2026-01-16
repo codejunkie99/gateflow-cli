@@ -94,9 +94,8 @@ export function createAgentBundle(
 
         if (needsApproval) {
             // For tools needing approval, we still provide execute but
-            // the caller (core.ts) will handle approval before calling it
-            // This is the current pattern; AI SDK 6's ToolLoopAgent would
-            // handle this differently by omitting execute
+            // approvals are enforced inside tool executors.
+            // AI SDK 6's ToolLoopAgent would handle this differently by omitting execute.
             tools[name] = {
                 description: spec.description,
                 inputSchema: spec.parameters,

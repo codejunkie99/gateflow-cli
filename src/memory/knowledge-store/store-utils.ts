@@ -56,6 +56,9 @@ export function computeFingerprint(type: KnowledgeType, title: string, scope: Kn
     if (contextSensitiveTypes.includes(type) && scope.defineContextId) {
         scopeParts.push(`c:${scope.defineContextId}`);
     }
+    if (scope.compileOrderId) {
+        scopeParts.push(`o:${scope.compileOrderId}`);
+    }
 
     return crypto
         .createHash('sha256')

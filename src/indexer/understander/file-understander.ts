@@ -14,7 +14,8 @@
  *   - Only source for `define, `include, `ifdef directives
  *   - Slang evaluates preprocessor but doesn't report directives
  *
- * Both tools auto-download from GitHub releases if not installed.
+ * Both tools can auto-download from GitHub releases if not installed.
+ * If Verible is unavailable after auto-download attempts, directives are skipped.
  *
  * The result contains:
  * - FileRecord with metadata
@@ -36,6 +37,7 @@ import type {
   Instance,
   ParseError,
 } from '../types/index.js';
+import { readFile as readSourceFile } from '../reader/index.js';
 import {
   VeribleAdapter,
   isVeribleAvailable,
@@ -199,42 +201,78 @@ export class FileUnderstander {
    * Parse a file using both parsers and merge results.
    */
   private async parseAndMerge(filePath: string): Promise<FileUnderstanderResult> {
-    // Run both parsers in parallel - both auto-download if needed
+    const parseStart = Date.now();
+    const veribleAvailable = await this.isVeribleAvailable(true);
+
+    // Run parsers in parallel, skip Verible if unavailable
     const [slangResult, veribleResult] = await Promise.allSettled([
       this.parseWithSlang(filePath),
-      this.parseWithVerible(filePath),
+      veribleAvailable ? this.parseWithVerible(filePath) : Promise.resolve(null),
     ]);
 
     // Extract results
     const slang = slangResult.status === 'fulfilled' ? slangResult.value : null;
     const verible = veribleResult.status === 'fulfilled' ? veribleResult.value : null;
 
-    // Verible is required for directive extraction
-    if (!verible) {
+    if (!slang && !verible) {
       const error = veribleResult.status === 'rejected' ? veribleResult.reason : 'Unknown error';
       throw new Error(
-        `Verible parsing failed (required for directive extraction): ${error}\n` +
+        `Parsing failed: Slang and Verible unavailable or failed.\n` +
+        `Verible error: ${error}\n` +
         'Install Verible: https://github.com/chipsalliance/verible/releases\n' +
         'Or use your package manager: brew install verible'
       );
     }
 
+    // Build file record (fallback to reader if Verible unavailable)
+    const fileRecord = verible?.file ?? (await readSourceFile(filePath)).file;
+
+    const parseErrors: ParseError[] = [];
+    if (verible?.errors?.length) {
+      parseErrors.push(...verible.errors);
+    }
+    if (slang?.errors?.length) {
+      parseErrors.push(...slang.errors);
+    }
+
+    if (!verible) {
+      const veribleFailure = veribleResult.status === 'rejected' ? veribleResult.reason : null;
+      const baseMessage = veribleAvailable
+        ? 'Verible parsing failed; directives will be skipped.'
+        : 'Verible not available after auto-download attempt; directives will be skipped.';
+      parseErrors.push({
+        message: `${baseMessage}${veribleFailure ? ` ${veribleFailure}` : ''}`.trim(),
+        location: {
+          file: filePath,
+          line: 1,
+          col: 1,
+        },
+        severity: 'warning',
+      });
+    }
+
+    const declarations = slang?.declarations ?? verible?.declarations ?? [];
+    const references = slang?.references ?? verible?.references ?? [];
+    const instances = slang?.instances ?? verible?.instances ?? [];
+    const directives = verible?.directives ?? [];
+
     // Simple merge: Slang for semantics, Verible for directives
     return {
-      file: verible.file,
+      file: fileRecord,
       // Prefer Slang results (better semantic analysis)
-      declarations: slang?.declarations ?? verible.declarations,
-      references: slang?.references ?? verible.references,
-      instances: slang?.instances ?? verible.instances,
+      declarations,
+      references,
+      instances,
       // Only Verible provides directive tracking
-      directives: verible.directives,
+      directives,
       // Combine errors from both parsers
-      errors: [
-        ...verible.errors,
-        ...(slang?.errors ?? []),
-      ],
+      errors: parseErrors,
       stats: {
-        ...verible.stats,
+        parseTimeMs: verible?.stats.parseTimeMs ?? Date.now() - parseStart,
+        declarationCount: declarations.length,
+        referenceCount: references.length,
+        instanceCount: instances.length,
+        directiveCount: directives.length,
         slangUsed: !!slang,
       },
     };
@@ -243,9 +281,9 @@ export class FileUnderstander {
   /**
    * Check if Verible is available.
    */
-  async isVeribleAvailable(): Promise<boolean> {
-    if (!this.veribleChecked) {
-      this.veribleAvailable = await isVeribleAvailable();
+  async isVeribleAvailable(autoDownload = false): Promise<boolean> {
+    if (!this.veribleChecked || autoDownload) {
+      this.veribleAvailable = await isVeribleAvailable(autoDownload);
       this.veribleChecked = true;
     }
     return this.veribleAvailable;

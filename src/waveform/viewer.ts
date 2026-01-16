@@ -129,6 +129,8 @@ export class WaveformViewer {
     // Data layer
     private store: WaveformStore;
     private legacyData: WaveformData | null = null; // For compatibility with Navigator/Hierarchy
+    private legacyTimeOffset: bigint = 0n;
+    private legacyTimeScale: bigint = 1n;
 
     // Components
     private navigator: Navigator;
@@ -563,6 +565,7 @@ export class WaveformViewer {
      */
     private async convertToLegacyFormat(): Promise<WaveformData> {
         const metadata = this.store.getMetadata();
+        this.configureLegacyTimeScale(metadata.timeRange);
         const storeSignals = this.store.getSignals();
 
         // Load all signal data
@@ -575,7 +578,7 @@ export class WaveformViewer {
                 id: sig.id,
                 name: sig.name,
                 width: sig.width,
-                values: data.values.map(v => [Number(v.time), v.value] as [number, number | string]),
+                values: data.values.map(v => [this.toLegacyTime(v.time), v.value] as [number, number | string]),
             });
         }
 
@@ -587,6 +590,38 @@ export class WaveformViewer {
             signals,
             rootScope,
         };
+    }
+
+    private configureLegacyTimeScale(timeRange: { start: bigint; end: bigint }): void {
+        const start = timeRange.start ?? 0n;
+        const end = timeRange.end ?? start;
+        const duration = end > start ? end - start : 0n;
+        const maxSafe = BigInt(Number.MAX_SAFE_INTEGER);
+        const scale = duration > maxSafe
+            ? (duration + maxSafe - 1n) / maxSafe
+            : 1n;
+
+        this.legacyTimeOffset = start;
+        this.legacyTimeScale = scale > 0n ? scale : 1n;
+    }
+
+    private toLegacyTime(time: bigint): number {
+        if (this.legacyTimeScale <= 0n) {
+            return 0;
+        }
+        const delta = time > this.legacyTimeOffset ? time - this.legacyTimeOffset : 0n;
+        const scaled = delta / this.legacyTimeScale;
+        return Number(scaled);
+    }
+
+    private toStoreTime(time: number): bigint {
+        const safeTime = Number.isFinite(time) ? time : 0;
+        const rounded = Math.round(safeTime);
+        return this.legacyTimeOffset + BigInt(rounded) * this.legacyTimeScale;
+    }
+
+    private formatDisplayTime(time: number): string {
+        return this.toStoreTime(time).toString();
     }
 
     private convertScopeNode(node: import('./store/index.js').ScopeNode): import('./types.js').WaveformScope {
@@ -708,7 +743,13 @@ export class WaveformViewer {
 
         // Render time ruler
         const timescaleUnit = this.legacyData.timescale.replace(/\d+/g, '');
-        const ruler = this.waveRenderer.renderTimeRuler(state.timeStart, state.timeEnd, dims.width, timescaleUnit);
+        const ruler = this.waveRenderer.renderTimeRuler(
+            state.timeStart,
+            state.timeEnd,
+            dims.width,
+            timescaleUnit,
+            (time) => `${this.formatDisplayTime(time)}${timescaleUnit}`
+        );
         this.timeRuler.setContent(`{cyan-fg}${ruler}{/}`);
 
         // Render signals
@@ -767,10 +808,13 @@ export class WaveformViewer {
         // Update status bar
         const zoomPercent = Math.round(state.zoom * 100);
         const cursorInfo = state.cursorTime !== null
-            ? ` | Cursor: ${Math.round(state.cursorTime)}${timescaleUnit}`
+            ? ` | Cursor: ${this.formatDisplayTime(state.cursorTime)}${timescaleUnit}`
+            : '';
+        const scaleInfo = this.legacyTimeScale > 1n
+            ? ` | Scale: x${this.legacyTimeScale.toString()}`
             : '';
         const modeInfo = this.useUnicode ? '' : ' [ASCII]';
-        const statusInfo = ` Time: ${Math.round(state.timeStart)}-${Math.round(state.timeEnd)}${timescaleUnit} | Zoom: ${zoomPercent}%${cursorInfo}${modeInfo}`;
+        const statusInfo = ` Time: ${this.formatDisplayTime(state.timeStart)}-${this.formatDisplayTime(state.timeEnd)}${timescaleUnit} | Zoom: ${zoomPercent}%${cursorInfo}${scaleInfo}${modeInfo}`;
 
         this.statusBar.setContent(this.getHelpText() + `\n{dim-fg}${statusInfo}{/}`);
 

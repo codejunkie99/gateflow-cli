@@ -10,6 +10,7 @@ import os from 'os';
 import type { EventBus } from '../../events/index.js';
 import type { ApprovalGrant } from '../../approval/index.js';
 import { AsyncMutex } from '../../concurrency/index.js';
+import { FileLockManager } from '../file-lock.js';
 import { ArchiveManager } from './conversation-archive.js';
 import type {
     ProjectMemory,
@@ -32,7 +33,7 @@ export class MemoryManager {
     private projectId: string;
     private memoryPath: string;
     private lockPath: string;
-    private lockAcquired: boolean = false;
+    private lockManager: FileLockManager;
     private ioMutex = new AsyncMutex();
     private dirty: boolean = false;
     private revision: number = 0;
@@ -62,6 +63,9 @@ export class MemoryManager {
 
         this.memoryPath = path.join(this.config.memoryDir, `${this.projectId}.json`);
         this.lockPath = path.join(this.config.memoryDir, `${this.projectId}.lock`);
+        this.lockManager = new FileLockManager(this.lockPath, {
+            lockTimeout: this.config.lockTimeout
+        });
 
         // Initialize archive manager
         this.archiveManager = new ArchiveManager(this.projectId, this.config, this.bus);
@@ -152,116 +156,14 @@ export class MemoryManager {
      * Acquire lock for exclusive access
      */
     private async acquireLock(): Promise<boolean> {
-        const startTime = Date.now();
-        const effectiveTimeout = this.config.lockTimeout + 3000;
-
-        while (Date.now() - startTime < effectiveTimeout) {
-            try {
-                await fs.writeFile(
-                    this.lockPath,
-                    JSON.stringify({ pid: process.pid, time: Date.now() }),
-                    { flag: 'wx' }
-                );
-                this.lockAcquired = true;
-                return true;
-            } catch (error: any) {
-                if (error.code === 'EEXIST') {
-                    const staleInfo = await this.getStaleInfo();
-                    if (staleInfo.isStale) {
-                        try {
-                            const currentContent = await fs.readFile(this.lockPath, 'utf-8');
-                            if (currentContent === staleInfo.content) {
-                                await fs.unlink(this.lockPath);
-                                await fs.writeFile(
-                                    this.lockPath,
-                                    JSON.stringify({ pid: process.pid, time: Date.now() }),
-                                    { flag: 'wx' }
-                                );
-                                this.lockAcquired = true;
-                                return true;
-                            }
-                        } catch (innerError: any) {
-                            if (innerError.code !== 'EEXIST' && innerError.code !== 'ENOENT') {
-                                throw innerError;
-                            }
-                        }
-                    }
-                    await new Promise(r => setTimeout(r, 100));
-                } else {
-                    throw error;
-                }
-            }
-        }
-
-        return false;
+        return this.lockManager.acquire();
     }
 
     /**
      * Release lock
      */
     private async releaseLock(): Promise<void> {
-        if (this.lockAcquired) {
-            try {
-                await fs.unlink(this.lockPath);
-            } catch {
-                // Lock file may have been removed - safe to ignore
-            }
-            this.lockAcquired = false;
-        }
-    }
-
-    /**
-     * Get stale lock info for TOCTOU-safe deletion
-     */
-    private async getStaleInfo(): Promise<{ isStale: boolean; content: string }> {
-        try {
-            const content = await fs.readFile(this.lockPath, 'utf-8');
-
-            let lock: { pid: number; time: number };
-            try {
-                lock = JSON.parse(content);
-            } catch (parseError) {
-                return { isStale: false, content };
-            }
-
-            // Self-heal: if lock belongs to this process but we don't hold it, treat as stale
-            if (lock.pid === process.pid && !this.lockAcquired) {
-                return { isStale: true, content };
-            }
-
-            if (Date.now() - lock.time > 5 * 60 * 1000) {
-                return { isStale: true, content };
-            }
-
-            if (process.platform === 'win32') {
-                try {
-                    const { spawnSync } = await import('child_process');
-                    const result = spawnSync('tasklist', ['/FI', `PID eq ${lock.pid}`, '/NH'], {
-                        encoding: 'utf-8',
-                        timeout: 2000
-                    });
-                    // Use word boundary matching to avoid false positives (e.g., "12" matching "123")
-                    const pidStr = lock.pid.toString();
-                    const pidRegex = new RegExp(`\\b${pidStr}\\b`);
-                    const isStale = !pidRegex.test(result.stdout);
-                    return { isStale, content };
-                } catch {
-                    return { isStale: false, content };
-                }
-            } else {
-                try {
-                    process.kill(lock.pid, 0);
-                    return { isStale: false, content };
-                } catch {
-                    return { isStale: true, content };
-                }
-            }
-        } catch (error: any) {
-            if (error.code === 'ENOENT') {
-                return { isStale: true, content: '' };
-            }
-            return { isStale: false, content: '' };
-        }
+        await this.lockManager.release();
     }
 
     /**

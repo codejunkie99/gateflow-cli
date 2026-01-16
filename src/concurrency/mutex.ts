@@ -19,14 +19,37 @@ export class AsyncMutex {
      * Acquire the mutex lock
      * If already locked, wait until released
      */
-    async acquire(): Promise<void> {
+    async acquire(timeoutMs?: number): Promise<void> {
         if (!this.locked) {
             this.locked = true;
             return;
         }
 
-        return new Promise<void>((resolve) => {
-            this.queue.push(resolve);
+        if (timeoutMs === undefined) {
+            return new Promise<void>((resolve) => {
+                this.queue.push(resolve);
+            });
+        }
+
+        return new Promise<void>((resolve, reject) => {
+            let settled = false;
+            const onAcquire = (): void => {
+                if (settled) return;
+                settled = true;
+                clearTimeout(timer);
+                resolve();
+            };
+            const timer = setTimeout(() => {
+                if (settled) return;
+                settled = true;
+                const idx = this.queue.indexOf(onAcquire);
+                if (idx >= 0) {
+                    this.queue.splice(idx, 1);
+                }
+                reject(new Error("AsyncMutex acquire timed out"));
+            }, timeoutMs);
+
+            this.queue.push(onAcquire);
         });
     }
 
@@ -50,8 +73,8 @@ export class AsyncMutex {
      * Execute a function while holding the lock
      * Automatically releases the lock when done
      */
-    async withLock<T>(fn: () => Promise<T>): Promise<T> {
-        await this.acquire();
+    async withLock<T>(fn: () => Promise<T>, timeoutMs?: number): Promise<T> {
+        await this.acquire(timeoutMs);
         try {
             return await fn();
         } finally {

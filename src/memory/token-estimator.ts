@@ -153,7 +153,12 @@ export function estimateTokens(
 
     // Method 1: Word-based estimation
     const words = text.split(/\s+/).filter(w => w.length > 0);
-    const wordBased = Math.ceil(words.length * cfg.textMultiplier);
+    const wordMultiplier = contentType === 'code'
+        ? cfg.codeMultiplier
+        : contentType === 'mixed'
+            ? (cfg.textMultiplier + cfg.codeMultiplier) / 2
+            : cfg.textMultiplier;
+    const wordBased = Math.ceil(words.length * wordMultiplier);
 
     // Method 2: Character-based estimation
     const charBased = Math.ceil(text.length / 4);

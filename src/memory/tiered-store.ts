@@ -236,8 +236,14 @@ export class TieredKnowledgeStore {
       const item = this.itemLookup?.(id);
       if (item) {
         this.promoteToHot(id, item);
-        meta.tier = "hot";
+        if (this.hotItems.has(id)) {
+          meta.tier = "hot";
+          return;
+        }
       }
+      meta.tier = "warm";
+    } else if (meta.tier === "cold") {
+      meta.tier = "warm";
     }
   }
 

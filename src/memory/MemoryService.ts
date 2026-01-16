@@ -104,6 +104,7 @@ export class MemoryService {
    * Throws if initialization fails, allowing retry
    */
   async initialize(): Promise<void> {
+    if (this.initialized) return;
     return this.initMutex.withLock(async () => {
       if (this.initialized) return;
 

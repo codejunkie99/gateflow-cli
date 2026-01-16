@@ -333,6 +333,10 @@ export class KnowledgeStore {
     this.indexManager.add(knowledge);
     this.markDirty();
 
+    if (this.getActiveContextIds().length > this.config.maxActiveContexts) {
+      this.evictColdContexts();
+    }
+
     if (this.index.items.length > this.config.maxItems) {
       this.enforceCapacity();
     }
@@ -703,7 +707,12 @@ export class KnowledgeStore {
     let remaining = contexts.length;
     for (const ctx of candidates) {
       if (remaining <= this.config.maxActiveContexts) break;
-      if (ctx.itemCount >= this.config.minItemsToProtect) continue;
+      if (
+        this.config.minItemsToProtect > 0 &&
+        ctx.itemCount >= this.config.minItemsToProtect
+      ) {
+        continue;
+      }
       this.removeItemsByContext(ctx.id);
       this.contextAccess.delete(ctx.id);
       remaining -= 1;
@@ -716,8 +725,14 @@ export class KnowledgeStore {
   ): number {
     const age = now - ctx.lastAccessed;
     const beyondTtl = Math.max(0, age - this.config.contextMaxAgeMs);
+    const ageScore =
+      this.config.contextMaxAgeMs > 0
+        ? beyondTtl / this.config.contextMaxAgeMs
+        : beyondTtl > 0
+          ? 1
+          : 0;
     return (
-      (beyondTtl / this.config.contextMaxAgeMs) * 0.5 +
+      ageScore * 0.5 +
       (1 / (ctx.itemCount + 1)) * 0.3 +
       (ctx.accessCount === 0 ? 0.2 : 0)
     );

@@ -7,6 +7,7 @@ import { z } from 'zod';
 import type { EventBus } from '../events/index.js';
 import type { PolicyEngine } from '../approval/index.js';
 import type { FileTools, EditTools } from '../fileops/index.js';
+import { shouldAutoApprove } from '../fileops/approval.js';
 import type { SVIndexerAdapter } from '../indexer/sv-indexer-adapter.js';
 import type { DiffEngine } from '../diff/index.js';
 import type { Verilator } from '../verification/verilator.js';
@@ -395,6 +396,77 @@ export const TOOL_APPROVAL_CONFIG: Record<string, boolean> = {
 // ============================================================================
 
 export function createToolExecutors(ctx: ToolContext) {
+    const requiresApproval = (toolName: string): boolean =>
+        (TOOL_APPROVAL_CONFIG[toolName] ?? false) && !ctx.autoApprove;
+
+    const getPathArg = (args: Record<string, unknown>): string | undefined => {
+        const path = args.path ?? args.filePath;
+        return typeof path === 'string' ? path : undefined;
+    };
+
+    const summarizeApprovalDetails = (args: Record<string, unknown>): string => {
+        const path = getPathArg(args);
+        if (path) return path;
+        if (typeof args.scriptPath === 'string') return args.scriptPath;
+        if (typeof args.top === 'string') return args.top;
+        if (typeof args.module === 'string') return args.module;
+        if (typeof args.name === 'string') return args.name;
+        if (typeof args.pattern === 'string') return args.pattern;
+
+        const toolsArg = args.tools;
+        if (Array.isArray(toolsArg) && toolsArg.every((tool) => typeof tool === 'string')) {
+            return `tools=${toolsArg.join(', ')}`;
+        }
+
+        const keys = Object.keys(args);
+        return keys.length > 0 ? keys.slice(0, 3).join(', ') : '';
+    };
+
+    const requestToolApproval = async (
+        toolName: string,
+        args: Record<string, unknown>
+    ): Promise<{ approved: boolean; reason?: string }> => {
+        if (!requiresApproval(toolName)) {
+            return { approved: true };
+        }
+
+        const isFileWrite = toolName === 'write_file'
+            || toolName === 'edit_lines'
+            || toolName === 'search_replace';
+
+        if (isFileWrite && ctx.dryRun) {
+            return { approved: true };
+        }
+
+        if (isFileWrite) {
+            const path = getPathArg(args);
+            if (path && shouldAutoApprove(path)) {
+                return { approved: true };
+            }
+        }
+
+        const details = summarizeApprovalDetails(args);
+
+        if (ctx.inputManager) {
+            const approval = await ctx.inputManager.requestApproval(toolName, details);
+            return approval.approved
+                ? { approved: true }
+                : { approved: false, reason: 'User denied approval' };
+        }
+
+        try {
+            const response = await ctx.bus.requestApproval(`Tool: ${toolName}`, details);
+            return response.approved
+                ? { approved: true }
+                : { approved: false, reason: 'User denied approval' };
+        } catch (error) {
+            return {
+                approved: false,
+                reason: error instanceof Error ? error.message : 'Approval request failed'
+            };
+        }
+    };
+
     return {
         read_file: async (args: z.infer<typeof readFileSchema>) => {
             const result = await ctx.fileTools.readFile(args.path, {
@@ -426,8 +498,16 @@ export function createToolExecutors(ctx: ToolContext) {
                 return { dryRun: true, diff: patch.unifiedDiff };
             }
 
+            const approval = await requestToolApproval('write_file', {
+                path: args.path,
+                contentLength: args.content.length
+            });
+            if (!approval.approved) {
+                return { error: approval.reason ?? 'User denied write_file' };
+            }
+
             const result = await ctx.fileTools.writeFile(args.path, args.content, {
-                skipApproval: ctx.autoApprove
+                skipApproval: true
             });
 
             if (!result.success) {
@@ -452,9 +532,19 @@ export function createToolExecutors(ctx: ToolContext) {
         },
 
         edit_lines: async (args: z.infer<typeof editLinesSchema>) => {
+            if (!ctx.dryRun) {
+                const approval = await requestToolApproval('edit_lines', {
+                    path: args.path,
+                    editCount: args.edits.length
+                });
+                if (!approval.approved) {
+                    return { error: approval.reason ?? 'User denied edit_lines' };
+                }
+            }
+
             const result = await ctx.editTools.editLines(args.path, args.edits, {
                 dryRun: ctx.dryRun,
-                skipApproval: ctx.autoApprove
+                skipApproval: true
             });
 
             if (!result.success) {
@@ -469,6 +559,16 @@ export function createToolExecutors(ctx: ToolContext) {
         },
 
         search_replace: async (args: z.infer<typeof searchReplaceSchema>) => {
+            if (!ctx.dryRun) {
+                const approval = await requestToolApproval('search_replace', {
+                    path: args.path,
+                    search: args.search
+                });
+                if (!approval.approved) {
+                    return { error: approval.reason ?? 'User denied search_replace' };
+                }
+            }
+
             const result = await ctx.editTools.searchReplace(
                 args.path,
                 args.search,
@@ -477,7 +577,7 @@ export function createToolExecutors(ctx: ToolContext) {
                     all: args.all,
                     isRegex: args.isRegex,
                     dryRun: ctx.dryRun,
-                    skipApproval: ctx.autoApprove
+                    skipApproval: true
                 }
             );
 
@@ -679,6 +779,14 @@ export function createToolExecutors(ctx: ToolContext) {
         run_simulation: async (args: z.infer<typeof runSimSchema>) => {
             if (!ctx.verilator) {
                 return { error: 'Verilator not configured' };
+            }
+
+            const approval = await requestToolApproval('run_simulation', {
+                top: args.top,
+                testbench: args.testbench
+            });
+            if (!approval.approved) {
+                return { error: approval.reason ?? 'User denied run_simulation' };
             }
 
             ctx.bus.emit({
@@ -1440,6 +1548,14 @@ export function createToolExecutors(ctx: ToolContext) {
                 };
             }
 
+            const approval = await requestToolApproval('run_skill_script', {
+                skillName: args.skillName,
+                scriptPath: args.scriptPath
+            });
+            if (!approval.approved) {
+                return { error: approval.reason ?? 'User denied run_skill_script' };
+            }
+
             try {
                 const result = await ctx.skillRegistry.executeScript(
                     args.skillName,
@@ -1610,6 +1726,15 @@ export function createToolExecutors(ctx: ToolContext) {
                 // Continue with setup
             }
 
+            const approval = await requestToolApproval('setup_verible', { tool: 'verible' });
+            if (!approval.approved) {
+                return {
+                    success: false,
+                    error: approval.reason ?? 'User denied setup_verible',
+                    message: 'Verible setup canceled by user.'
+                };
+            }
+
             // Run interactive setup flow
             try {
                 const { runToolSetupFlow } = await import('../indexer/setup/setup-flow.js');
@@ -1661,6 +1786,15 @@ export function createToolExecutors(ctx: ToolContext) {
                 }
             } catch {
                 // Continue with setup
+            }
+
+            const approval = await requestToolApproval('setup_slang', { tool: 'slang' });
+            if (!approval.approved) {
+                return {
+                    success: false,
+                    error: approval.reason ?? 'User denied setup_slang',
+                    message: 'Slang setup canceled by user.'
+                };
             }
 
             // Check prerequisites first with streaming feedback
@@ -1832,6 +1966,17 @@ export function createToolExecutors(ctx: ToolContext) {
                         verible: veribleAvailable ? 'installed' : 'missing',
                         slang: slangAvailable ? 'installed' : 'missing'
                     }
+                };
+            }
+
+            const approval = await requestToolApproval('help_setup_tools', {
+                tools: toolsToSetup
+            });
+            if (!approval.approved) {
+                return {
+                    success: false,
+                    error: approval.reason ?? 'User denied help_setup_tools',
+                    message: 'Tool setup canceled by user.'
                 };
             }
 

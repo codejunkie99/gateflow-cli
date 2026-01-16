@@ -7,6 +7,7 @@
  * This file is kept for API compatibility but performs minimal work.
  */
 
+import * as crypto from "crypto";
 import type { ResolvedProject } from "../../indexer/types/index.js";
 import type { KnowledgeStore } from "../ParentKnowledgeStore.js";
 import type {

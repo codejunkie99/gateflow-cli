@@ -236,7 +236,7 @@ export class KnowledgeIndexManager {
             if (!cleaned) continue;
 
             const lower = cleaned.toLowerCase();
-            if (!this.SV_STOP_WORDS.has(lower)) {
+            if (this.isValidToken(lower)) {
                 tokens.push(lower);
             }
 
