@@ -202,6 +202,7 @@ Return JSON with:
     }
 
     private async warmQueryExpansion(query: string): Promise<void> {
+        if (!this.enabled) return;
         if (this.inflightQueries.has(query)) return;
         this.inflightQueries.add(query);
         try {

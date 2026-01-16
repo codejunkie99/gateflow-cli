@@ -6,6 +6,7 @@
  * in the environment before the SDK tries to access credential storage mechanisms.
  */
 
+import '../env/bootstrap-env.js';
 import { anthropic } from '@ai-sdk/anthropic';
 
 /**
@@ -66,4 +67,3 @@ export function createAnthropicClient(model: string) {
     // the SDK initializes, so it doesn't try credential storage first.
     return anthropic(model);
 }
-

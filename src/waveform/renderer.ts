@@ -237,7 +237,13 @@ export class WaveformRenderer {
     }
 
     // Render time ruler
-    renderTimeRuler(timeStart: number, timeEnd: number, width: number, unit: string): string {
+    renderTimeRuler(
+        timeStart: number,
+        timeEnd: number,
+        width: number,
+        unit: string,
+        labelFormatter?: (time: number) => string
+    ): string {
         // Ensure width is a valid positive integer
         const safeWidth = Math.max(1, Math.min(1000, Math.floor(width) || 60));
         const result: string[] = new Array(safeWidth).fill(' ');
@@ -249,7 +255,7 @@ export class WaveformRenderer {
         for (let time = firstTick; time <= timeEnd; time += tickInterval) {
             const col = Math.floor(((time - timeStart) / timeRange) * width);
             if (col >= 0 && col < width) {
-                const label = `${time}${unit}`;
+                const label = labelFormatter ? labelFormatter(time) : `${time}${unit}`;
                 for (let i = 0; i < label.length && col + i < width; i++) {
                     result[col + i] = label[i];
                 }

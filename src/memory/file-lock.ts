@@ -43,6 +43,11 @@ export interface FileLockConfig {
 
 export class FileLockManager {
     private lockAcquired: boolean = false;
+    private lockCheckCache?: {
+        pid: number;
+        isAlive: boolean;
+        time: number;
+    };
 
     constructor(
         private readonly lockPath: string,
@@ -108,6 +113,7 @@ export class FileLockManager {
                 // Lock file may have been removed externally - safe to ignore
             }
             this.lockAcquired = false;
+            this.lockCheckCache = undefined;
         }
     }
 
@@ -210,13 +216,34 @@ export class FileLockManager {
 
     private async isProcessAliveWindows(pid: number): Promise<boolean> {
         try {
+            const cacheAge = this.lockCheckCache
+                ? Date.now() - this.lockCheckCache.time
+                : Infinity;
+            const cacheHit = this.lockCheckCache &&
+                this.lockCheckCache.pid === pid &&
+                cacheAge < 1000;
+
+            if (cacheHit && this.lockCheckCache) {
+                return this.lockCheckCache.isAlive;
+            }
+
             const { spawnSync } = await import('child_process');
             const result = spawnSync('tasklist', ['/FI', `PID eq ${pid}`, '/NH'], {
                 encoding: 'utf-8',
                 timeout: TASKLIST_TIMEOUT_MS
             });
-            // If PID not found, tasklist returns "INFO: No tasks..."
-            return result.stdout.includes(pid.toString());
+            // Use word boundary matching to avoid false positives (e.g., "12" matching "123")
+            const pidStr = pid.toString();
+            const pidRegex = new RegExp(`\\b${pidStr}\\b`);
+            const isAlive = pidRegex.test(result.stdout);
+
+            this.lockCheckCache = {
+                pid,
+                isAlive,
+                time: Date.now()
+            };
+
+            return isAlive;
         } catch {
             // If tasklist fails, be conservative
             return true;

@@ -5,10 +5,8 @@
  * AI-powered SystemVerilog development assistant
  */
 
+import '../env/bootstrap-env.js';
 import { Command } from 'commander';
-import dotenv from 'dotenv';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import { ExitCodes } from '../events/index.js';
 import {
     setupContext,
@@ -26,16 +24,6 @@ import {
     type GlobalOptions
 } from './commands.js';
 import { startMCPServer } from '../waveform/mcp-server.js';
-
-// Load environment variables from multiple locations
-// Priority (first found wins): cwd/.env > parent/.env > script-relative
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-// Load in reverse priority order (dotenv doesn't override existing vars)
-dotenv.config({ path: path.resolve(__dirname, '../../../.env') }); // for dist/ (lowest priority)
-dotenv.config({ path: path.resolve(__dirname, '../../.env') }); // relative to script
-dotenv.config({ path: path.resolve(process.cwd(), '../.env') }); // parent (for running from cli/)
-dotenv.config({ path: path.resolve(process.cwd(), '.env') }); // cwd/.env (highest priority)
 
 /**
  * Validate required environment variables
