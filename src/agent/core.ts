@@ -143,7 +143,15 @@ export class GateFlowAgent {
      * Initialize orchestrator with all specialized agents
      */
     private initializeOrchestrator(): void {
-        this.orchestrator = new Orchestrator(this.bus, this.toolContext.projectRoot, this.config.model);
+        this.orchestrator = new Orchestrator(
+            this.bus,
+            this.toolContext.projectRoot,
+            this.config.model,
+            {
+                indexer: this.toolContext.indexer,
+                memoryService: this.toolContext.memoryService
+            }
+        );
 
         // Register all worker agents
         // Note: Planning is handled by Orchestrator.executeWithPlan(), not as a worker agent
@@ -254,9 +262,9 @@ export class GateFlowAgent {
                     );
                     const approved = response.approved;
                     return { approved, reason: approved ? 'User approved' : 'User denied' };
-                } catch {
+                } catch (error) {
                     // If approval request fails, deny by default for safety
-                    return { approved: false, reason: 'Approval request failed' };
+                    return { approved: false, reason: this.formatApprovalError(error) };
                 }
             }
         }
@@ -270,8 +278,8 @@ export class GateFlowAgent {
                 { timeout: 60000 }
             );
             return { approved: response.approved, reason: response.approved ? 'User approved' : 'User denied' };
-        } catch {
-            return { approved: false, reason: 'Approval request failed' };
+        } catch (error) {
+            return { approved: false, reason: this.formatApprovalError(error) };
         }
     }
 
@@ -720,6 +728,15 @@ ${contextBlock}
         return 'Done';
     }
 
+    private formatApprovalError(error: unknown): string {
+        const message = error instanceof Error ? error.message : String(error);
+        const lower = message.toLowerCase();
+        if (lower.includes('timed out') || lower.includes('timeout')) {
+            return 'Approval request timed out';
+        }
+        return message || 'Approval request failed';
+    }
+
     // ========================================================================
     // Session Management
     // ========================================================================
@@ -779,4 +796,3 @@ ${contextBlock}
         return [...this.session.messages];
     }
 }
-

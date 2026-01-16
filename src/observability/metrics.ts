@@ -410,6 +410,17 @@ export const metrics = {
         'gateflow_active_agents',
         'Number of currently active agents'
     ),
+    agentExecutions: registry.createCounter(
+        'gateflow_agent_executions_total',
+        'Total agent task executions',
+        ['agent', 'status']
+    ),
+    agentDuration: registry.createHistogram(
+        'gateflow_agent_duration_seconds',
+        'Agent execution duration in seconds',
+        [0.5, 1, 2, 5, 10, 30, 60, 120, 300],
+        ['agent', 'status']
+    ),
     agentSteps: registry.createCounter(
         'gateflow_agent_steps_total',
         'Total agent steps executed',
