@@ -11,6 +11,7 @@ import {
 } from '../../resilience/retry.js';
 import { CircuitBreaker, CircuitOpenError } from '../../resilience/circuit-breaker.js';
 import type { EventBus } from '../../events/index.js';
+import { metrics } from '../../observability/metrics.js';
 
 export interface AgentResilienceConfig {
     agentTimeout: number;
@@ -105,6 +106,14 @@ export class AgentResilienceLayer {
                 successThreshold: 2,
                 timeout: 60000,
                 volumeThreshold: 5,
+                onTrip: (name) => {
+                    metrics.circuitBreakerTrips.inc({ name });
+                    this.bus.emit({
+                        type: 'status',
+                        phase: 'thinking',
+                        label: `Circuit breaker tripped for ${name}`,
+                    });
+                },
             });
             this.circuitBreakers.set(agentName, breaker);
         }

@@ -7,7 +7,7 @@
  * @module indexer/setup/setup-flow
  */
 
-import { streamText, tool, zodSchema } from 'ai';
+import { streamText, tool, zodSchema, stepCountIs } from 'ai';
 
 // Message type for conversation history
 interface Message {
@@ -131,7 +131,7 @@ export async function runToolSetupFlow(
         system: TOOL_SETUP_SYSTEM_PROMPT,
         messages,
         tools,
-        maxSteps: 25,
+        stopWhen: stepCountIs(25),
       } as any);
 
       // Collect assistant response and emit events for all stream parts

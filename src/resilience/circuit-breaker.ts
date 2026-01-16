@@ -35,6 +35,8 @@ export interface CircuitBreakerConfig {
     rollingWindow: number;
     /** Function to determine if an error counts as a failure */
     isFailure: (error: unknown) => boolean;
+    /** Callback when circuit trips (transitions to OPEN state) */
+    onTrip?: (name: string) => void;
 }
 
 export interface CircuitBreakerStats {
@@ -181,6 +183,7 @@ export class CircuitBreaker {
      */
     private transitionTo(newState: CircuitState): void {
         if (this.state !== newState) {
+            const wasOpen = newState === CircuitState.OPEN && this.state !== CircuitState.OPEN;
             this.state = newState;
             this.lastStateChange = Date.now();
 
@@ -191,6 +194,11 @@ export class CircuitBreaker {
                 this.recentFailures = [];
             } else if (newState === CircuitState.HALF_OPEN) {
                 this.successes = 0;
+            }
+
+            // Notify on trip (transition to OPEN)
+            if (wasOpen && this.config.onTrip) {
+                this.config.onTrip(this.name);
             }
         }
     }
