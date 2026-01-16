@@ -32,6 +32,7 @@ export function createRefactoringAgent(tools: Record<string, Tool>): GateFlowAge
             get_dependencies: tools.get_dependencies,
             search_code: tools.search_code
         },
+        toolChoice: 'required',
         maxSteps: 12
     });
 }
