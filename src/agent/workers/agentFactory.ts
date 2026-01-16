@@ -13,7 +13,8 @@ export interface AgentConfig {
     expertise: string;
     constraints: string[];
     tools: Record<string, Tool>;
-    maxSteps?: number;
+    /** Maximum steps for tool loop (used with stopWhen: stepCountIs()) */
+    stepLimit?: number;
     toolChoice?: 'auto' | 'required' | 'none';
 }
 
@@ -33,7 +34,7 @@ export function createAgent(config: AgentConfig): GateFlowAgent {
         system,
         tools: config.tools,
         toolChoice: config.toolChoice ?? 'auto',
-        maxSteps: config.maxSteps ?? 10
+        stepLimit: config.stepLimit ?? 10
     };
 }
 

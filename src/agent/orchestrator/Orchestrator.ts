@@ -197,7 +197,7 @@ Select the most appropriate agent and describe the task.`
                 prompt: routing.taskDescription,
                 tools: worker.tools,
                 toolChoice: worker.toolChoice,
-                stopWhen: stepCountIs(worker.maxSteps || 10),
+                stopWhen: stepCountIs(worker.stepLimit || 10),
                 onStepFinish: (step) => {
                     this.thinkingChain.onStepFinish(step);
                 },
@@ -522,7 +522,7 @@ Select the most appropriate agent and describe the task.`
             prompt: enhancedPrompt,
             tools: worker.tools,
             toolChoice: worker.toolChoice,
-            stopWhen: stepCountIs(worker.maxSteps || 10),
+            stopWhen: stepCountIs(worker.stepLimit || 10),
             abortSignal: signal,
             onStepFinish: (step) => {
                 stepCount += 1;

@@ -75,7 +75,7 @@ export function createAgentBundle(
     const {
         mode,
         model = 'claude-sonnet-4-20250514',
-        maxSteps = 25,
+        stepLimit = 25,
         autoApprove = false,
     } = options;
 
@@ -127,7 +127,7 @@ export function createAgentBundle(
         model: createAnthropicClient(model) as ReturnType<typeof createAnthropicClient>,
         instructions: getSystemPrompt(mode),
         tools,
-        stopWhen: stepCountIs(maxSteps),
+        stopWhen: stepCountIs(stepLimit),
         modelName: model,
         mode,
         autoApprove,

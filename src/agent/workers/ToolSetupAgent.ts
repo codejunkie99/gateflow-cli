@@ -45,7 +45,7 @@ export function createToolSetupAgent(tools: Record<string, Tool>): GateFlowAgent
       install_prerequisite: tools.install_prerequisite,
       open_install_url: tools.open_install_url,
     },
-    maxSteps: 25,
+    stepLimit: 25,
   });
 }
 

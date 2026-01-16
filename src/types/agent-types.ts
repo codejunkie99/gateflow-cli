@@ -107,8 +107,8 @@ export interface CreateAgentOptions {
     mode: PromptMode;
     /** Model name (default: claude-sonnet-4-20250514) */
     model?: string;
-    /** Maximum tool call steps (default: 25) */
-    maxSteps?: number;
+    /** Maximum steps for tool loop (default: 25, used with stopWhen: stepCountIs()) */
+    stepLimit?: number;
     /** Whether to auto-approve all tool calls */
     autoApprove?: boolean;
 }
