@@ -186,9 +186,18 @@ export class MemoryService {
     // Use KnowledgeService for combined structural + learned knowledge context
     // Method signature: getContextForAI(query?, filePath?, moduleName?, maxTokens?)
     const knowledgeContext = this.knowledgeService.getContextForAI(
-      enrichedQuery?.query,
-      enrichedQuery?.filePath,
-      enrichedQuery?.moduleName,
+      {
+        query: enrichedQuery?.query,
+        filePath: enrichedQuery?.filePath,
+        moduleName: enrichedQuery?.moduleName,
+        knowledgeTypes: enrichedQuery?.types,
+        tags: enrichedQuery?.tags,
+        maxResults: enrichedQuery?.maxResults,
+        minConfidence: enrichedQuery?.minConfidence,
+        defineContextId: enrichedQuery?.defineContextId,
+        compileOrderId: enrichedQuery?.compileOrderId,
+        relaxedScope: enrichedQuery?.relaxedScope,
+      },
       adjustedKnowledgeBudget,
     );
     const knowledgeTokens = estimateTokens(knowledgeContext);
@@ -200,14 +209,14 @@ export class MemoryService {
 
     // Truncate memory context only if it exceeds budget
     const truncatedMemoryContext =
-      actualMemoryTokens > memoryBudget
+      memoryTokens > memoryBudget
         ? this.truncateToTokenBudget(memoryContext, memoryBudget)
         : memoryContext;
 
     return {
       memoryContext: truncatedMemoryContext,
       knowledgeContext,
-      totalTokens: Math.min(actualMemoryTokens, memoryBudget) + knowledgeTokens,
+      totalTokens: actualMemoryTokens + knowledgeTokens,
     };
   }
 

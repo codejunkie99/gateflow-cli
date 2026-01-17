@@ -183,11 +183,24 @@ export class MemoryManager {
                 return;
             }
 
-            try {
-                await this.save();
-            } catch (error) {
-                console.error('Auto-save failed:', error);
+            // Retry logic with exponential backoff
+            const delays = [1000, 2000, 4000]; // 1s, 2s, 4s
+            let lastError: unknown;
+
+            for (let attempt = 0; attempt <= delays.length; attempt++) {
+                try {
+                    await this.save();
+                    return; // Success
+                } catch (error) {
+                    lastError = error;
+                    if (attempt < delays.length) {
+                        console.warn(`Auto-save failed (attempt ${attempt + 1}/${delays.length + 1}), retrying in ${delays[attempt]}ms:`, error);
+                        await new Promise(resolve => setTimeout(resolve, delays[attempt]));
+                    }
+                }
             }
+
+            console.error('Auto-save failed after all retries:', lastError);
         }, this.SAVE_DEBOUNCE_MS);
     }
 

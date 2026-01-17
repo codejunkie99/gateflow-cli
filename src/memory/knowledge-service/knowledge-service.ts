@@ -120,16 +120,45 @@ export class KnowledgeService implements IKnowledgeService {
     query?: string,
     filePath?: string,
     moduleName?: string,
+    maxTokens?: number
+  ): string;
+  getContextForAI(query?: UnifiedKnowledgeQuery, maxTokens?: number): string;
+  getContextForAI(
+    query?: string | UnifiedKnowledgeQuery,
+    filePathOrMaxTokens?: string | number,
+    moduleName?: string,
     maxTokens = 1000
   ): string {
     const parts: string[] = [];
     let currentTokens = 0;
 
+    let contextQuery: UnifiedKnowledgeQuery;
+    let maxTokensBudget = maxTokens;
+
+    if (query && typeof query === 'object') {
+      contextQuery = query;
+      if (typeof filePathOrMaxTokens === 'number') {
+        maxTokensBudget = filePathOrMaxTokens;
+      }
+    } else {
+      const filePath =
+        typeof filePathOrMaxTokens === 'string' ? filePathOrMaxTokens : undefined;
+      if (typeof filePathOrMaxTokens === 'number') {
+        maxTokensBudget = filePathOrMaxTokens;
+      }
+      contextQuery = {
+        query,
+        filePath,
+        moduleName,
+      };
+    }
+
+    const queryText = contextQuery.query;
     const resolvedModuleName =
-      moduleName ?? this.resolveModuleNameFromQuery(query);
+      contextQuery.moduleName ?? this.resolveModuleNameFromQuery(queryText);
     const learnedModuleName =
-      moduleName ??
-      (resolvedModuleName && query?.trim() === resolvedModuleName
+      contextQuery.moduleName ??
+      (resolvedModuleName && queryText?.trim() === resolvedModuleName
         ? resolvedModuleName
         : undefined);
 
@@ -137,11 +166,11 @@ export class KnowledgeService implements IKnowledgeService {
     if (resolvedModuleName) {
       const structuralContext = this.buildStructuralContext(
         resolvedModuleName,
-        maxTokens / 2
+        maxTokensBudget / 2
       );
       if (structuralContext) {
         const tokens = estimateTokens(structuralContext);
-        if (currentTokens + tokens <= maxTokens) {
+        if (currentTokens + tokens <= maxTokensBudget) {
           parts.push(structuralContext);
           currentTokens += tokens;
         }
@@ -150,17 +179,18 @@ export class KnowledgeService implements IKnowledgeService {
 
     // Add learned context
     const learnedContext = this.buildLearnedContext(
-      query,
-      filePath,
-      learnedModuleName,
-      maxTokens - currentTokens
+      {
+        ...contextQuery,
+        moduleName: learnedModuleName ?? contextQuery.moduleName,
+      },
+      maxTokensBudget - currentTokens
     );
     if (learnedContext) {
       parts.push(learnedContext);
     } else if (resolvedModuleName && parts.length > 0) {
       const expandedStructural = this.buildStructuralContext(
         resolvedModuleName,
-        maxTokens
+        maxTokensBudget
       );
       if (expandedStructural) {
         return expandedStructural;
@@ -260,17 +290,20 @@ export class KnowledgeService implements IKnowledgeService {
    * Build learned context from KnowledgeStore.
    */
   private buildLearnedContext(
-    query?: string,
-    filePath?: string,
-    moduleName?: string,
+    query?: UnifiedKnowledgeQuery,
     maxTokens = 500
   ): string {
     const results = this.learnedProvider.search({
-      query,
-      filePath,
-      moduleName,
-      maxResults: 10,
-      minConfidence: 0.5,
+      query: query?.query,
+      filePath: query?.filePath,
+      moduleName: query?.moduleName,
+      tags: query?.tags,
+      knowledgeTypes: query?.knowledgeTypes,
+      maxResults: query?.maxResults ?? 10,
+      minConfidence: query?.minConfidence ?? 0.5,
+      defineContextId: query?.defineContextId,
+      compileOrderId: query?.compileOrderId,
+      relaxedScope: query?.relaxedScope,
     });
 
     if (results.length === 0) return '';

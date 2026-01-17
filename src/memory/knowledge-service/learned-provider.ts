@@ -70,6 +70,9 @@ export class LearnedKnowledgeProvider {
       moduleName: query.moduleName,
       maxResults: query.maxResults ?? 20,
       minConfidence: query.minConfidence,
+      defineContextId: query.defineContextId,
+      compileOrderId: query.compileOrderId,
+      relaxedScope: query.relaxedScope,
     });
 
     return results.map((r) => this.toUnifiedResult(r));
