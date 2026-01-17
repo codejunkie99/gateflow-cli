@@ -138,8 +138,8 @@ export class FileLockManager {
             try {
                 lock = JSON.parse(content);
             } catch {
-                // Corrupted/partial JSON - can't determine staleness, but preserve content
-                return { isStale: false, content };
+                // Corrupted/partial JSON - treat as stale so it can be cleaned up
+                return { isStale: true, content };
             }
 
             // Self-heal: if lock belongs to this process but we don't hold it, treat as stale
@@ -254,8 +254,13 @@ export class FileLockManager {
         try {
             process.kill(pid, 0);
             return true; // Process exists
-        } catch {
-            return false; // Process doesn't exist
+        } catch (error: any) {
+            // EPERM means process exists but we can't signal it (different user)
+            if (error.code === 'EPERM') {
+                return true;
+            }
+            // ESRCH means process doesn't exist
+            return false;
         }
     }
 

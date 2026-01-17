@@ -42,6 +42,11 @@ export interface UnifiedKnowledgeQuery {
   knowledgeTypes?: LearnedKnowledgeType[];
   tags?: string[];
 
+  // Learned knowledge scope controls (passed to KnowledgeStore)
+  defineContextId?: string;
+  compileOrderId?: string;
+  relaxedScope?: boolean;
+
   // Result configuration
   maxResults?: number;
   minConfidence?: number;
@@ -83,6 +88,10 @@ export interface IKnowledgeService {
     query?: string,
     filePath?: string,
     moduleName?: string,
+    maxTokens?: number
+  ): string;
+  getContextForAI(
+    query?: UnifiedKnowledgeQuery,
     maxTokens?: number
   ): string;
 

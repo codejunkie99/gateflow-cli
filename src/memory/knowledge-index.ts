@@ -387,8 +387,15 @@ export class KnowledgeIndexManager {
             }
         }
 
-        if (scope.compileOrderId && query.compileOrderId) {
-            if (scope.compileOrderId !== query.compileOrderId) {
+        if (scope.compileOrderId) {
+            if (!query.compileOrderId) {
+                // Item has compileOrderId but query doesn't - apply penalty or exclude
+                if (query.relaxedScope) {
+                    scoreMultiplier *= 0.5;
+                } else {
+                    return 0;
+                }
+            } else if (scope.compileOrderId !== query.compileOrderId) {
                 scoreMultiplier *= 0.9;
             }
         }
