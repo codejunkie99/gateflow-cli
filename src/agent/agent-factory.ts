@@ -13,6 +13,7 @@ import { createAnthropicClient } from './anthropic-client.js';
 import { getToolSpecs, createToolExecutors, TOOL_APPROVAL_CONFIG, type ToolContext, type ToolSpec } from './tools.js';
 import { getSystemPrompt, type PromptMode } from './prompts.js';
 import type { CreateAgentOptions } from '../types/agent-types.js';
+import { createModeStopCondition, type StopCondition } from './stop-conditions.js';
 
 // ============================================================================
 // Types
@@ -41,8 +42,8 @@ export interface AgentBundle {
     instructions: string;
     /** Tools with approval-aware execute functions */
     tools: Record<string, Tool>;
-    /** Stop condition */
-    stopWhen: ReturnType<typeof stepCountIs>;
+    /** Stop condition - can be composed with stopWhenAny/stopWhenAll */
+    stopWhen: StopCondition;
     /** Model name for reference */
     modelName: string;
     /** Current mode */
@@ -127,7 +128,8 @@ export function createAgentBundle(
         model: createAnthropicClient(model) as ReturnType<typeof createAnthropicClient>,
         instructions: getSystemPrompt(mode),
         tools,
-        stopWhen: stepCountIs(stepLimit),
+        // Use mode-aware stop condition (e.g., lint_fix stops when lint passes)
+        stopWhen: createModeStopCondition(mode, stepLimit),
         modelName: model,
         mode,
         autoApprove,

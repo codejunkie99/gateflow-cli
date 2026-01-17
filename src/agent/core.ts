@@ -33,6 +33,25 @@ import {
     shouldAutoApprovePath,
     type AgentBundle
 } from './agent-factory.js';
+import {
+    stopWhenAny,
+    type StopCondition
+} from './stop-conditions.js';
+import type { RuntimeCallOptions } from '../types/agent-types.js';
+import {
+    classifyWorkflow,
+    executeWorkflow,
+    type WorkflowSelection,
+    type WorkflowContext
+} from './workflows/index.js';
+import {
+    combinePrepareSteps,
+    contextWindowManager,
+    dynamicModelSelector,
+    budgetAwareExecution,
+    type PrepareStepFn,
+    type StepSettings
+} from './loop-control.js';
 
 // ============================================================================
 // Types
@@ -88,6 +107,8 @@ export interface RunOptions {
     modeContext?: DetectModeContext;
     /** AI SDK 6: Type-safe call options for context injection */
     callOptions?: AgentCallOptions;
+    /** Runtime configuration overrides (per-request) */
+    runtimeOptions?: RuntimeCallOptions;
 }
 
 // ============================================================================
@@ -399,6 +420,12 @@ Multi-agent is needed for:
 Return needsMultiAgent: true only for genuinely complex requests.`
             });
 
+            // Check if request matches a specialized workflow pattern
+            const workflowResult = await this.tryWorkflowExecution(userMessage, mode);
+            if (workflowResult) {
+                return workflowResult;
+            }
+
             if (complexity.needsMultiAgent && this.orchestrator) {
                 this.session.thinkingChain.addCoordinationStep(
                     'Using multi-agent orchestrator',
@@ -456,16 +483,33 @@ ${contextBlock}
                 label: `[${mode}] Generating response...`
             });
 
-            // AI SDK 6: Use bundle configuration with stopWhen
+            // AI SDK 6: Apply runtime options overrides
+            const runtime = options?.runtimeOptions;
+
+            // Compute effective stop condition (combine bundle default with runtime overrides)
+            let effectiveStopWhen: StopCondition = bundle.stopWhen;
+            if (runtime?.stopConditions && runtime.stopConditions.length > 0) {
+                // Combine runtime conditions with bundle default using OR logic
+                effectiveStopWhen = stopWhenAny(
+                    bundle.stopWhen,
+                    ...runtime.stopConditions as StopCondition[]
+                );
+            }
+
+            // AI SDK 6: Create prepareStep for dynamic control
+            const prepareStep = this.createPrepareStep(mode);
+
+            // AI SDK 6: Use bundle configuration with stopWhen and runtime overrides
             const result = streamText({
                 model: bundle.model as any,
                 system: systemPrompt,
                 messages: this.session.messages,
                 tools: bundle.tools,
-                maxOutputTokens: this.config.maxTokens,
-                temperature: this.config.temperature,
-                abortSignal: options?.signal,
-                stopWhen: bundle.stopWhen,  // AI SDK handles the loop automatically
+                maxOutputTokens: runtime?.maxTokens ?? this.config.maxTokens,
+                temperature: runtime?.temperature ?? this.config.temperature,
+                abortSignal: runtime?.signal ?? options?.signal,
+                stopWhen: effectiveStopWhen,  // AI SDK handles the loop automatically
+                prepareStep: prepareStep as any,  // Dynamic step control (cast for AI SDK compatibility)
 
                 // Thinking visibility via onStepFinish
                 // Note: Tool call/result events are emitted from the stream loop for real-time updates
@@ -672,6 +716,194 @@ ${contextBlock}
 
             throw error;
         }
+    }
+
+    // ========================================================================
+    // Workflow Pattern Execution
+    // ========================================================================
+
+    /**
+     * Try to execute the request using a specialized workflow pattern.
+     * Returns null if no workflow matches, otherwise returns the result.
+     *
+     * Workflow patterns provide structured execution for specific task types:
+     * - lint_fix: Iterative error fixing
+     * - module_generation: Generate with quality checks
+     * - testbench: Generate comprehensive testbenches
+     * - code_review: Multi-perspective review
+     */
+    private async tryWorkflowExecution(
+        userMessage: string,
+        mode: PromptMode
+    ): Promise<string | null> {
+        // Only try workflows for specific modes that benefit from structured patterns
+        const workflowModes: PromptMode[] = ['lint_fix', 'generate', 'testbench', 'edit'];
+        if (!workflowModes.includes(mode)) {
+            return null;
+        }
+
+        try {
+            // Classify the request to see if a workflow pattern fits
+            const selection = await classifyWorkflow(
+                userMessage,
+                {
+                    hasLintErrors: this.session.hasErrors,
+                    hasCode: true
+                },
+                this.config.model
+            );
+
+            // Only use workflow if confidence is high enough
+            if (selection.confidence < 0.7) {
+                return null;
+            }
+
+            // Skip simple_generation - let the normal agent handle it
+            if (selection.workflow === 'simple_generation') {
+                return null;
+            }
+
+            this.session.thinkingChain.addCoordinationStep(
+                `Using ${selection.workflow} workflow pattern`,
+                { workflow: selection.workflow, confidence: selection.confidence },
+                selection.confidence
+            );
+
+            this.bus.emit({
+                type: 'status',
+                phase: 'thinking',
+                label: `Executing ${selection.workflow} workflow...`
+            });
+
+            // Build workflow context from tool context
+            const workflowContext: WorkflowContext = {
+                model: this.config.model,
+                lintFunction: this.toolContext.verilator
+                    ? async (code: string) => {
+                        // Write to temp file, lint, return errors
+                        const tempPath = `${this.toolContext.projectRoot}/.gateflow/temp_lint.sv`;
+                        await this.toolContext.fileTools.writeFile(tempPath, code);
+                        const result = await this.toolContext.verilator!.lint(tempPath);
+                        return {
+                            errors: result.errors.map(e => `${e.file}:${e.line}: ${e.message}`),
+                            warnings: result.warnings.map(w => `${w.file}:${w.line}: ${w.message}`)
+                        };
+                    }
+                    : undefined,
+                readFile: async (path: string) => {
+                    const result = await this.toolContext.fileTools.readFile(path);
+                    if (!result.content) {
+                        throw new Error(`Failed to read file: ${path}`);
+                    }
+                    return result.content;
+                },
+                writeFile: async (path: string, content: string) => {
+                    await this.toolContext.fileTools.writeFile(path, content);
+                }
+            };
+
+            const result = await executeWorkflow(userMessage, selection, workflowContext);
+
+            // Emit completion
+            this.bus.emit({
+                type: 'status',
+                phase: 'thinking',
+                label: result.success
+                    ? `Workflow completed${result.iterations ? ` in ${result.iterations} iterations` : ''}`
+                    : 'Workflow completed with issues'
+            });
+
+            // Add result to session
+            this.session.messages.push({
+                role: 'assistant',
+                content: result.output
+            });
+
+            return result.output;
+
+        } catch (error) {
+            // If workflow execution fails, fall back to normal agent
+            this.bus.emit({
+                type: 'error',
+                message: `Workflow failed, falling back: ${error instanceof Error ? error.message : error}`
+            });
+            return null;
+        }
+    }
+
+    // ========================================================================
+    // PrepareStep Configuration
+    // ========================================================================
+
+    /**
+     * Create a prepareStep function for dynamic step control.
+     * Configures context management, model selection, and tool availability per step.
+     */
+    private createPrepareStep(mode: PromptMode): PrepareStepFn {
+        return combinePrepareSteps(
+            // 1. Context window management - trim old messages to stay within limits
+            contextWindowManager({
+                maxMessages: 40,
+                keepSystem: true,
+                keepRecent: 15
+            }),
+
+            // 2. Dynamic model selection based on complexity
+            dynamicModelSelector({
+                defaultModel: this.config.model,
+                complexModel: this.config.model, // Could use larger model
+                complexityThreshold: 5
+            }),
+
+            // 3. Budget-aware execution
+            budgetAwareExecution({
+                maxInputTokens: 80000,
+                maxOutputTokens: 16000,
+                onBudgetExceeded: 'summarize'
+            }),
+
+            // 4. Mode-specific tool control
+            this.createModeSpecificPrepareStep(mode)
+        );
+    }
+
+    /**
+     * Create mode-specific prepareStep logic.
+     */
+    private createModeSpecificPrepareStep(mode: PromptMode): PrepareStepFn {
+        return ({ stepNumber, steps }) => {
+            // Mode-specific tool restrictions
+            switch (mode) {
+                case 'lint_fix':
+                    // For lint fix, prioritize lint and edit tools
+                    if (stepNumber === 0) {
+                        return { activeTools: ['lint_file', 'read_file'] };
+                    }
+                    return { activeTools: ['lint_file', 'read_file', 'edit_lines', 'search_replace'] };
+
+                case 'testbench':
+                    // For testbench, focus on read then write
+                    if (stepNumber < 2) {
+                        return { activeTools: ['read_file', 'find_module', 'list_files'] };
+                    }
+                    return { activeTools: ['write_file', 'read_file', 'run_simulation'] };
+
+                case 'generate':
+                    // For generation, analyze first then write
+                    if (stepNumber < 2) {
+                        return { activeTools: ['read_file', 'find_module', 'list_files', 'search_code'] };
+                    }
+                    return {}; // All tools available
+
+                case 'debug':
+                    // Debug mode - focus on analysis tools
+                    return { activeTools: ['read_file', 'search_code', 'grep_context', 'tail_context', 'lint_file'] };
+
+                default:
+                    // General mode - no restrictions
+                    return {};
+            }
+        };
     }
 
     // ========================================================================

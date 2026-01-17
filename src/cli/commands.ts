@@ -12,7 +12,7 @@ import { PolicyEngine, initPolicyEngine } from '../approval/index.js';
 import { createTools } from '../fileops/index.js';
 import { DiffEngine } from '../diff/index.js';
 import { SVIndexerAdapter } from '../indexer/sv-indexer-adapter.js';
-import { GateFlowAgent, type ToolContext, type PromptMode } from '../agent/index.js';
+import { GateFlowAgent, type ToolContext, type PromptMode, UIAgentCoordinator, type UIMode } from '../agent/index.js';
 import { Verilator } from '../verification/index.js';
 import { FixLoop } from '../verification/fix-loop.js';
 import { WatchManager } from '../watch/index.js';
@@ -285,6 +285,13 @@ export async function chatCommand(
     // Create agent
     const agent = new GateFlowAgent(ctx.bus, toolContext);
 
+    // Create UI coordinator for mode transitions
+    const uiCoordinator = new UIAgentCoordinator({
+        model: 'claude-sonnet-4-20250514',
+        tools: {},  // Tools are managed by GateFlowAgent
+        bus: ctx.bus
+    });
+
     // Build project index first (blocking)
     ctx.bus.emit({
         type: 'status',
@@ -371,6 +378,30 @@ export async function chatCommand(
                 console.log('\nSession:', sessionStats);
                 console.log('Index:', indexStats);
                 console.log('');
+                continue;
+            }
+
+            // Mode switching command: /mode [planning|execution|review|chat]
+            if (trimmed.toLowerCase().startsWith('/mode')) {
+                const parts = trimmed.split(/\s+/);
+                if (parts.length === 1) {
+                    console.log(chalk.cyan(`Current mode: ${uiCoordinator.currentMode}`));
+                    console.log(chalk.dim('Available modes: planning, execution, review, chat'));
+                    console.log(chalk.dim('Usage: /mode <mode>'));
+                    console.log('');
+                } else {
+                    const targetMode = parts[1].toLowerCase() as UIMode;
+                    const validModes: UIMode[] = ['planning', 'execution', 'review', 'chat'];
+                    if (validModes.includes(targetMode)) {
+                        uiCoordinator.setMode(targetMode);
+                        console.log(chalk.green(`Switched to ${targetMode} mode`));
+                        console.log('');
+                    } else {
+                        console.log(chalk.red(`Invalid mode: ${parts[1]}`));
+                        console.log(chalk.dim('Valid modes: planning, execution, review, chat'));
+                        console.log('');
+                    }
+                }
                 continue;
             }
 
