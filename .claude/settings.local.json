@@ -4,7 +4,19 @@
       "Bash(git push:*)",
       "WebSearch",
       "Bash(node dist/cli/main.js:*)",
-      "Bash(cat:*)"
+      "Bash(cat:*)",
+      "Bash(npm run build:*)",
+      "Bash(npm test)",
+      "Bash(grep:*)",
+      "Bash(npm test:*)",
+      "Bash(git commit:*)",
+      "Bash(wc -l \"C:\\\\Users\\\\adasb\\\\cursor-for-vhdl\\\\cli\\\\src\"/**/*.ts)",
+      "mcp__sequential-thinking__sequentialthinking",
+      "Bash(git rm:*)",
+      "Bash(git add:*)",
+      "mcp__serena__list_dir",
+      "mcp__serena__get_symbols_overview",
+      "mcp__serena__find_symbol"
     ]
   }
 }

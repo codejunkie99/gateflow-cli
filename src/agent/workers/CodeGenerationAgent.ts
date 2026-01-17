@@ -30,7 +30,8 @@ export function createCodeGenAgent(tools: Record<string, Tool>): GateFlowAgent {
             find_module: tools.find_module,
             get_dependencies: tools.get_dependencies
         },
-        maxSteps: 10
+        toolChoice: 'required',
+        stepLimit: 10
     });
 }
 

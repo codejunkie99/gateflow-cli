@@ -111,9 +111,11 @@ export class ContextFileManager {
     /**
      * Read a portion of a context file
      * Supports head, tail, or range reads
+     * @param ref - Either a ContextFileRef object or a string path
      */
-    async readOutput(refPath: string, options: ReadOptions = {}): Promise<string> {
-        const content = await fs.readFile(refPath, 'utf-8');
+    async readOutput(ref: ContextFileRef | string, options: ReadOptions = {}): Promise<string> {
+        const filePath = typeof ref === 'string' ? ref : ref.path;
+        const content = await fs.readFile(filePath, 'utf-8');
         const lines = content.split('\n');
 
         // Handle different read modes
@@ -143,10 +145,12 @@ export class ContextFileManager {
 
     /**
      * Check if a context file exists
+     * @param ref - Either a ContextFileRef object or a string path
      */
-    async exists(refPath: string): Promise<boolean> {
+    async exists(ref: ContextFileRef | string): Promise<boolean> {
+        const filePath = typeof ref === 'string' ? ref : ref.path;
         try {
-            await fs.access(refPath);
+            await fs.access(filePath);
             return true;
         } catch {
             return false;

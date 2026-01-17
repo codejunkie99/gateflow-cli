@@ -71,10 +71,11 @@ export async function readFile(filePath: string): Promise<FileReadResult> {
   const stats = await fs.stat(absolutePath);
 
   // Read content with encoding detection
-  const { content, encoding } = await readWithEncoding(absolutePath);
+  const { content, encoding, buffer } = await readWithEncoding(absolutePath);
 
-  // Compute content hash (SHA-256)
-  const hash = computeHash(content);
+  // Compute content hash from raw bytes (SHA-256)
+  // Using buffer ensures consistent hash regardless of encoding detection
+  const hash = computeHashFromBuffer(buffer);
 
   // Build line offset index
   const lineOffsets = buildLineIndex(content);
@@ -273,8 +274,8 @@ export async function checkHashChanged(
   filePath: string,
   existingHash: string
 ): Promise<boolean> {
-  const { content } = await readWithEncoding(filePath);
-  const newHash = computeHash(content);
+  const { buffer } = await readWithEncoding(filePath);
+  const newHash = computeHashFromBuffer(buffer);
   return newHash !== existingHash;
 }
 
@@ -292,7 +293,7 @@ export async function checkHashChanged(
  */
 async function readWithEncoding(
   filePath: string
-): Promise<{ content: string; encoding: string }> {
+): Promise<{ content: string; encoding: string; buffer: Buffer }> {
   // Read as buffer first
   const buffer = await fs.readFile(filePath);
 
@@ -302,7 +303,7 @@ async function readWithEncoding(
 
     // Check for replacement character (indicates encoding issues)
     if (!content.includes('\ufffd')) {
-      return { content, encoding: 'utf-8' };
+      return { content, encoding: 'utf-8', buffer };
     }
   } catch {
     // UTF-8 failed, try Latin-1
@@ -310,17 +311,20 @@ async function readWithEncoding(
 
   // Fall back to Latin-1 (never fails, but may not be correct)
   const content = buffer.toString('latin1');
-  return { content, encoding: 'latin1' };
+  return { content, encoding: 'latin1', buffer };
 }
 
 /**
- * Compute SHA-256 hash of content.
+ * Compute SHA-256 hash from raw buffer bytes.
  *
- * @param content - File content string
+ * Using raw bytes ensures consistent hashing regardless of
+ * how the content is decoded (UTF-8 vs Latin-1).
+ *
+ * @param buffer - Raw file content bytes
  * @returns Hex-encoded SHA-256 hash
  */
-function computeHash(content: string): string {
-  return crypto.createHash('sha256').update(content).digest('hex');
+function computeHashFromBuffer(buffer: Buffer): string {
+  return crypto.createHash('sha256').update(buffer).digest('hex');
 }
 
 /**

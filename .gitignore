@@ -33,6 +33,7 @@ coverage/
 # IDE
 .vscode/
 .idea/
+.serena/
 *.swp
 *.swo
 *~
@@ -90,3 +91,16 @@ out/
 # Verible binaries (downloaded at install time)
 binaries/
 
+# Deprecated code (kept for reference, not for production use)
+deprecated/
+
+# Debug/audit files
+debug-*.cjs
+bigpalns.md
+temp_verible_output.json
+
+# Test files and directories
+test/
+scripts/test-*.ts
+ralph-claude-code/
+docs/

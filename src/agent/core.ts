@@ -1,14 +1,21 @@
 /**
  * GateFlow Agent Core
  * Main agent orchestration using Vercel AI SDK
+ *
+ * AI SDK 6 Features:
+ * - Uses createAgentBundle for tool configuration
+ * - Supports needsApproval for tool approval workflow
+ * - Integrates with PolicyEngine for path safety
  */
 
 import { streamText, generateObject, stepCountIs, type StepResult, type Tool, type ModelMessage } from 'ai';
-import { anthropic } from '@ai-sdk/anthropic';
 import { z } from 'zod';
+import { createAnthropicClient } from './anthropic-client.js';
 import type { EventBus } from '../events/index.js';
-import type { ToolContext, getToolSpecs } from './tools.js';
-import { createToolExecutors } from './tools.js';
+import type { ToolContext } from './tools.js';
+import { createToolExecutors, getToolSpecs as getToolDefinitions, TOOL_APPROVAL_CONFIG } from './tools.js';
+import type { MemoryManager } from '../memory/store/manager.js';
+import type { MemoryService } from '../memory/MemoryService.js';
 import { getSystemPrompt, detectMode, type PromptMode, type DetectModeContext } from './prompts.js';
 import { ThinkingChain } from './reasoning/ThinkingChain.js';
 import { Orchestrator } from './orchestrator/Orchestrator.js';
@@ -20,6 +27,31 @@ import {
     createDebugAgent,
     createRefactoringAgent
 } from './workers/index.js';
+import {
+    createAgentBundle,
+    toolNeedsApproval,
+    shouldAutoApprovePath,
+    type AgentBundle
+} from './agent-factory.js';
+import {
+    stopWhenAny,
+    type StopCondition
+} from './stop-conditions.js';
+import type { RuntimeCallOptions } from '../types/agent-types.js';
+import {
+    classifyWorkflow,
+    executeWorkflow,
+    type WorkflowSelection,
+    type WorkflowContext
+} from './workflows/index.js';
+import {
+    combinePrepareSteps,
+    contextWindowManager,
+    dynamicModelSelector,
+    budgetAwareExecution,
+    type PrepareStepFn,
+    type StepSettings
+} from './loop-control.js';
 
 // ============================================================================
 // Types
@@ -43,6 +75,28 @@ export interface AgentSession {
     thinkingChain: ThinkingChain; // NEW: Thinking visibility
 }
 
+/**
+ * AI SDK 6: Type-safe call options for context injection
+ */
+export interface AgentCallOptions {
+    /** Session ID for memory/context management */
+    sessionId?: string;
+    /** User ID for personalization */
+    userId?: string;
+    /** Override the auto-detected mode */
+    mode?: PromptMode;
+    /** Memory context configuration */
+    memoryContext?: {
+        includeArchives?: boolean;
+        maxContextTokens?: number;
+    };
+    /** Approval policy overrides */
+    approvalPolicy?: {
+        autoApprove?: boolean;
+        requireConfirmation?: string[]; // tool names
+    };
+}
+
 export interface RunOptions {
     onToolCall?: (name: string, args: unknown) => void;
     onToolResult?: (name: string, result: unknown) => void;
@@ -51,6 +105,10 @@ export interface RunOptions {
     mode?: PromptMode;
     /** Context for mode detection */
     modeContext?: DetectModeContext;
+    /** AI SDK 6: Type-safe call options for context injection */
+    callOptions?: AgentCallOptions;
+    /** Runtime configuration overrides (per-request) */
+    runtimeOptions?: RuntimeCallOptions;
 }
 
 // ============================================================================
@@ -70,6 +128,10 @@ export class GateFlowAgent {
     private tools: Record<string, Tool>;
     private executors: ReturnType<typeof createToolExecutors>;
     private orchestrator: Orchestrator | null = null;
+    private memoryService?: MemoryService;
+    private memoryManager?: MemoryManager;
+    /** AI SDK 6: Agent bundle with approval-aware tools */
+    private agentBundle: AgentBundle | null = null;
 
     constructor(
         private bus: EventBus,
@@ -85,13 +147,15 @@ export class GateFlowAgent {
         };
 
         this.toolContext = toolContext;
+        this.memoryService = toolContext.memoryService;
+        this.memoryManager = toolContext.memoryManager ?? toolContext.memoryService?.memory;
         this.executors = createToolExecutors(toolContext);
         this.tools = this.buildTools();
         this.session = this.createSession();
-        
+
         // Initialize thinking chain (always visible per plan)
         this.session.thinkingChain = new ThinkingChain(bus, { showByDefault: true });
-        
+
         // Initialize orchestrator with worker agents
         this.initializeOrchestrator();
     }
@@ -100,8 +164,16 @@ export class GateFlowAgent {
      * Initialize orchestrator with all specialized agents
      */
     private initializeOrchestrator(): void {
-        this.orchestrator = new Orchestrator(this.bus, this.toolContext.projectRoot);
-        
+        this.orchestrator = new Orchestrator(
+            this.bus,
+            this.toolContext.projectRoot,
+            this.config.model,
+            {
+                indexer: this.toolContext.indexer,
+                memoryService: this.toolContext.memoryService
+            }
+        );
+
         // Register all worker agents
         // Note: Planning is handled by Orchestrator.executeWithPlan(), not as a worker agent
         this.orchestrator.registerWorker('understanding', createUnderstandingAgent(this.tools));
@@ -115,135 +187,18 @@ export class GateFlowAgent {
     // Build AI SDK Tools
     // ========================================================================
 
+    /**
+     * Build tools using the agent factory.
+     * Tools are configured with needsApproval metadata from TOOL_APPROVAL_CONFIG.
+     */
     private buildTools(): Record<string, Tool> {
-        const specs = {
-            read_file: {
-                description: 'Read the contents of a file. Returns the file content with line numbers.',
-                inputSchema: z.object({
-                    path: z.string().describe('Path to the file to read'),
-                    startLine: z.number().optional().describe('Starting line number (1-indexed)'),
-                    endLine: z.number().optional().describe('Ending line number (inclusive)')
-                })
-            },
-            write_file: {
-                description: 'Write content to a file. Creates the file if it does not exist.',
-                inputSchema: z.object({
-                    path: z.string().describe('Path to the file to write'),
-                    content: z.string().describe('Full content to write to the file')
-                })
-            },
-            edit_lines: {
-                description: 'Edit specific lines in a file. Specify line ranges to replace.',
-                inputSchema: z.object({
-                    path: z.string().describe('Path to the file to edit'),
-                    edits: z.array(z.object({
-                        startLine: z.number().describe('First line to replace (1-indexed)'),
-                        endLine: z.number().describe('Last line to replace (inclusive)'),
-                        newContent: z.string().describe('New content to insert')
-                    }))
-                })
-            },
-            search_replace: {
-                description: 'Search and replace text in a file.',
-                inputSchema: z.object({
-                    path: z.string().describe('Path to the file to edit'),
-                    search: z.string().describe('Text or regex pattern to search for'),
-                    replace: z.string().describe('Replacement text'),
-                    all: z.boolean().optional().default(false).describe('Replace all occurrences'),
-                    isRegex: z.boolean().optional().default(false).describe('Treat search as regex')
-                })
-            },
-            list_files: {
-                description: 'List SystemVerilog (.sv) files in a directory. Automatically filters for .sv files only.',
-                inputSchema: z.object({
-                    directory: z.string().describe('Directory path to list'),
-                    extensions: z.array(z.string()).optional().default(['.sv']).describe('Filter by extensions (default: [".sv"])'),
-                    recursive: z.boolean().optional().default(true).describe('List recursively (default: true)')
-                })
-            },
-            search_code: {
-                description: 'Search for a pattern across all SystemVerilog (.sv) files in the project.',
-                inputSchema: z.object({
-                    pattern: z.string().describe('Search pattern (regex)'),
-                    filePattern: z.string().optional().default('**/*.sv').describe('Glob pattern for files (default: "**/*.sv")'),
-                    caseSensitive: z.boolean().optional().default(false),
-                    maxResults: z.number().optional().default(50)
-                })
-            },
-            find_all_sv_files: {
-                description: 'Find all SystemVerilog (.sv) files in the project. Use this to discover what .sv files exist.',
-                inputSchema: z.object({
-                    directory: z.string().optional().default('.').describe('Starting directory (default: project root)')
-                })
-            },
-            find_module: {
-                description: 'Find a SystemVerilog module by name.',
-                inputSchema: z.object({
-                    name: z.string().describe('Module name to find')
-                })
-            },
-            get_dependencies: {
-                description: 'Get the dependency graph for a module.',
-                inputSchema: z.object({
-                    module: z.string().describe('Module name')
-                })
-            },
-            lint_file: {
-                description: 'Run Verilator lint on a SystemVerilog file.',
-                inputSchema: z.object({
-                    path: z.string().describe('Path to the file to lint')
-                })
-            },
-            run_simulation: {
-                description: 'Run a simulation with Verilator. Set analyzeWaveform=true to auto-analyze VCD. After simulation, ask user if they want to view the waveform.',
-                inputSchema: z.object({
-                    top: z.string().describe('Top module name'),
-                    testbench: z.string().optional().describe('Testbench file path'),
-                    timeout: z.number().optional().describe('Timeout in ms'),
-                    analyzeWaveform: z.boolean().optional().default(false).describe('Auto-analyze VCD after simulation')
-                })
-            },
-            open_waveform: {
-                description: 'Open interactive terminal waveform viewer for a VCD file. Use after simulation or when user mentions a .vcd file.',
-                inputSchema: z.object({
-                    vcdPath: z.string().describe('Path to VCD file')
-                })
-            },
-            analyze_waveform: {
-                description: 'Analyze a VCD file for clocks, X/Z anomalies, and coverage. Use when user asks to analyze simulation output.',
-                inputSchema: z.object({
-                    vcdPath: z.string().describe('Path to VCD file'),
-                    detectClocks: z.boolean().optional().default(true),
-                    checkAnomalies: z.boolean().optional().default(true)
-                })
-            },
-            ask_user: {
-                description: 'Ask user a yes/no question. Use after simulation to ask if they want to view waveforms.',
-                inputSchema: z.object({
-                    question: z.string().describe('Question to ask'),
-                    options: z.array(z.string()).optional().describe('Options like ["yes", "no"]'),
-                    default: z.string().optional().describe('Default answer')
-                })
-            },
-            find_vcd_files: {
-                description: 'Search for VCD waveform files in the project. ALWAYS use this first when user mentions a VCD file by name to find its full path before opening.',
-                inputSchema: z.object({
-                    directory: z.string().optional().default('.').describe('Starting directory'),
-                    pattern: z.string().optional().describe('Filename pattern to match (e.g., "counter" matches "counter.vcd")')
-                })
-            },
-            get_project_stats: {
-                description: 'Get project statistics.',
-                inputSchema: z.object({})
-            }
-        };
-
+        const specs = getToolDefinitions();
         const tools: Record<string, Tool> = {};
 
         for (const [name, spec] of Object.entries(specs)) {
             tools[name] = {
                 description: spec.description,
-                inputSchema: spec.inputSchema,
+                inputSchema: spec.parameters, // tools.ts uses 'parameters' which maps to inputSchema
                 execute: async (args: unknown) => {
                     const executor = (this.executors as any)[name];
                     if (!executor) {
@@ -255,6 +210,98 @@ export class GateFlowAgent {
         }
 
         return tools;
+    }
+
+    /**
+     * Get or create the agent bundle for the current mode.
+     * AI SDK 6: The bundle contains tools configured with needsApproval.
+     */
+    private getAgentBundle(mode: PromptMode): AgentBundle {
+        // Create new bundle if mode changed or not initialized
+        if (!this.agentBundle || this.agentBundle.mode !== mode) {
+            this.agentBundle = createAgentBundle(
+                {
+                    mode,
+                    model: this.config.model,
+                    stepLimit: this.config.maxToolCalls,
+                    autoApprove: this.toolContext.autoApprove,
+                },
+                this.toolContext
+            );
+        }
+        return this.agentBundle;
+    }
+
+    /**
+     * Check if a tool call requires approval.
+     * AI SDK 6: Uses TOOL_APPROVAL_CONFIG and PolicyEngine.
+     *
+     * Note: For tools not in the PolicyEngine's ToolName union,
+     * we fall back to TOOL_APPROVAL_CONFIG only.
+     */
+    private async checkToolApproval(
+        toolName: string,
+        args: Record<string, unknown>
+    ): Promise<{ approved: boolean; reason?: string }> {
+        // Check if tool needs approval based on config
+        if (!toolNeedsApproval(toolName, this.toolContext.autoApprove)) {
+            return { approved: true };
+        }
+
+        // Auto-approve SystemVerilog files for write operations
+        if (['write_file', 'edit_lines', 'search_replace'].includes(toolName)) {
+            const filePath = args.path as string | undefined;
+            if (filePath && shouldAutoApprovePath(filePath)) {
+                return { approved: true };
+            }
+        }
+
+        // Check PolicyEngine for path safety (for known tool names)
+        // PolicyEngine has a specific set of ToolNames - check if this tool is known
+        const knownPolicyTools = [
+            'read_file', 'list_files', 'search_code', 'lint_file',
+            'write_file', 'edit_lines', 'search_replace', 'find_module'
+        ];
+
+        if (knownPolicyTools.includes(toolName)) {
+            const policyDecision = this.toolContext.policy.checkTool(
+                toolName as 'write_file' | 'edit_lines' | 'search_replace' | 'read_file' | 'list_files' | 'search_code' | 'lint_file' | 'find_module',
+                args
+            );
+            if (!policyDecision.allowed) {
+                return { approved: false, reason: policyDecision.reason };
+            }
+
+            // Request human approval via EventBus if policy requires it
+            if (policyDecision.requiresApproval) {
+                try {
+                    const summary = this.summarizeArgs(args);
+                    const response = await this.bus.requestApproval(
+                        `Tool: ${toolName}`,
+                        summary,
+                        { timeout: 60000 }
+                    );
+                    const approved = response.approved;
+                    return { approved, reason: approved ? 'User approved' : 'User denied' };
+                } catch (error) {
+                    // If approval request fails, deny by default for safety
+                    return { approved: false, reason: this.formatApprovalError(error) };
+                }
+            }
+        }
+
+        // For other tools that need approval per config, request approval
+        try {
+            const summary = this.summarizeArgs(args);
+            const response = await this.bus.requestApproval(
+                `Tool: ${toolName}`,
+                summary,
+                { timeout: 60000 }
+            );
+            return { approved: response.approved, reason: response.approved ? 'User approved' : 'User denied' };
+        } catch (error) {
+            return { approved: false, reason: this.formatApprovalError(error) };
+        }
     }
 
     // ========================================================================
@@ -279,33 +326,88 @@ export class GateFlowAgent {
             content: userMessage.trim()
         });
 
-        // Emit status immediately so spinner shows during processing
+        // Check for context archiving (Dynamic Context Discovery)
+        if (this.memoryManager) {
+            // Include assistant messages in check by getting full history
+            const allMessages = this.session.messages.map(m => ({
+                role: m.role,
+                content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content)
+            }));
+
+            const archiveResult = await this.memoryManager.triggerSummarization(
+                this.toolContext.sessionId || 'default',
+                allMessages
+            );
+
+            if (archiveResult.triggered) {
+                // Replace session messages with remaining + summary context
+                // Convert remaining messages back to ModelMessage format
+                this.session.messages = archiveResult.remainingMessages.map(m => ({
+                    role: m.role as 'user' | 'assistant' | 'system',
+                    content: m.content
+                }));
+
+                // Add history reference as a system-like context at the start
+                if (archiveResult.historyRef) {
+                    this.session.messages.unshift({
+                        role: 'system',
+                        content: archiveResult.historyRef.agentInstructions
+                    });
+                }
+            }
+        }
+
+        // Emit agent lifecycle start
         this.bus.emit({
-            type: 'status',
-            phase: 'thinking',
-            label: 'Thinking...'
+            type: 'agent_start',
+            agentName: 'gateflow',
+            task: userMessage.slice(0, 100)
         });
+        const agentStartTime = Date.now();
 
-        // Detect mode for this query
-        const modeContext: DetectModeContext = {
-            hasErrors: this.session.hasErrors,
-            ...options?.modeContext
-        };
-        const mode = options?.mode ?? detectMode(userMessage, modeContext);
-        this.session.currentMode = mode;
+        // Track token usage for agent_complete
+        let lastUsage: { inputTokens?: number; outputTokens?: number } | undefined;
 
-        // Add thinking step at mode detection
-        this.session.thinkingChain.addAnalysisStep(
-            `Analyzing request in ${mode} mode`,
-            { mode, userMessage },
-            0.9
-        );
+        try {
+            // Emit status immediately so spinner shows during processing
+            this.bus.emit({
+                type: 'status',
+                phase: 'thinking',
+                label: 'Thinking...'
+            });
 
-        // AI SDK 6: Use generateObject for complexity detection
-        const { object: complexity } = await generateObject({
-            model: anthropic(this.config.model) as any,
-            schema: ComplexityDetectionSchema,
-            prompt: `Does this request need multi-agent coordination?
+            // AI SDK 6: Apply call options if provided
+            const callOptions = options?.callOptions;
+            if (callOptions?.sessionId && this.toolContext.sessionId !== callOptions.sessionId) {
+                this.toolContext.sessionId = callOptions.sessionId;
+            }
+
+            // Detect mode for this query (can be overridden by call options)
+            const modeContext: DetectModeContext = {
+                hasErrors: this.session.hasErrors,
+                ...options?.modeContext
+            };
+            const mode = callOptions?.mode ?? options?.mode ?? detectMode(userMessage, modeContext);
+            this.session.currentMode = mode;
+
+            // Apply approval policy overrides from call options
+            if (callOptions?.approvalPolicy) {
+                // This would integrate with PolicyEngine to override auto-approve settings
+                // For now, we track it for potential future use
+            }
+
+            // Add thinking step at mode detection
+            this.session.thinkingChain.addAnalysisStep(
+                `Analyzing request in ${mode} mode`,
+                { mode, userMessage },
+                0.9
+            );
+
+            // AI SDK 6: Use generateObject for complexity detection
+            const { object: complexity } = await generateObject({
+                model: createAnthropicClient(this.config.model) as any,
+                schema: ComplexityDetectionSchema,
+                prompt: `Does this request need multi-agent coordination?
 
 Request: "${userMessage}"
 
@@ -316,140 +418,492 @@ Multi-agent is needed for:
 - Multi-step operations requiring different agents
 
 Return needsMultiAgent: true only for genuinely complex requests.`
-        });
-
-        if (complexity.needsMultiAgent && this.orchestrator) {
-            this.session.thinkingChain.addCoordinationStep(
-                'Using multi-agent orchestrator',
-                { reasoning: complexity.reasoning },
-                0.9
-            );
-
-            // Update spinner for multi-agent mode
-            this.bus.emit({
-                type: 'status',
-                phase: 'thinking',
-                label: 'Planning multi-agent execution...'
             });
 
-            // Use orchestrator for complex requests
-            return this.orchestrator.executeWithPlan(userMessage);
-        }
+            // Check if request matches a specialized workflow pattern
+            const workflowResult = await this.tryWorkflowExecution(userMessage, mode);
+            if (workflowResult) {
+                return workflowResult;
+            }
 
-        // Simple requests: continue with single-agent flow
-        const systemPrompt = getSystemPrompt(mode);
+            if (complexity.needsMultiAgent && this.orchestrator) {
+                this.session.thinkingChain.addCoordinationStep(
+                    'Using multi-agent orchestrator',
+                    { reasoning: complexity.reasoning },
+                    0.9
+                );
 
-        // Update spinner with detected mode
-        this.bus.emit({
-            type: 'status',
-            phase: 'thinking',
-            label: `[${mode}] Generating response...`
-        });
+                // Update spinner for multi-agent mode
+                this.bus.emit({
+                    type: 'status',
+                    phase: 'thinking',
+                    label: 'Planning multi-agent execution...'
+                });
 
-        // AI SDK 6: Use stopWhen instead of maxSteps
-        const result = streamText({
-            model: anthropic(this.config.model) as any,
-            system: systemPrompt,
-            messages: this.session.messages,
-            tools: this.tools,
-            maxOutputTokens: this.config.maxTokens,
-            temperature: this.config.temperature,
-            abortSignal: options?.signal,
-            stopWhen: stepCountIs(this.config.maxToolCalls),  // AI SDK handles the loop automatically
-            
-            // Thinking visibility via onStepFinish
-            // Note: Tool call/result events are emitted from the stream loop for real-time updates
-            // We only handle thinking chain and error tracking here to avoid duplicate events
-            onStepFinish: (step: StepResult<any>) => {
-                this.session.thinkingChain.onStepFinish(step);
+                // Use orchestrator for complex requests
+                return this.orchestrator.executeWithPlan(userMessage);
+            }
 
-                // Track lint errors for mode detection (from tool results)
-                if (step.toolResults) {
-                    for (const toolResult of step.toolResults) {
-                        if (toolResult.toolName === 'lint_file') {
-                            const output = toolResult.output as { errors?: unknown[] } | null;
-                            if (output?.errors && Array.isArray(output.errors) && output.errors.length > 0) {
-                                this.session.hasErrors = true;
-                            }
-                        }
+            // Simple requests: continue with single-agent flow
+            // AI SDK 6: Get agent bundle with approval-aware tools
+            const bundle = this.getAgentBundle(mode);
+
+            // Inject context from MemoryService (token-budgeted project + knowledge context)
+            let systemPrompt = bundle.instructions;
+            if (this.memoryService) {
+                const contextInjection = this.memoryService.getContextForAI({
+                    query: userMessage  // Use user message as context hint for relevance filtering
+                });
+
+                if (contextInjection.totalTokens > 0) {
+                    const contextBlock = this.memoryService.getContextString({
+                        query: userMessage
+                    });
+
+                    if (contextBlock.trim()) {
+                        systemPrompt = `${bundle.instructions}
+
+<project_context>
+${contextBlock}
+</project_context>`;
+
+                        this.bus.emit({
+                            type: 'status',
+                            phase: 'thinking',
+                            label: `Injected ${contextInjection.totalTokens} tokens of context`
+                        });
                     }
                 }
             }
-        });
 
-        let fullResponse = '';
-        
-        // Process the stream for all event types (AI SDK 6)
-        for await (const part of result.fullStream) {
-            if (options?.signal?.aborted) {
-                throw new Error('Aborted');
+            // Update spinner with detected mode
+            this.bus.emit({
+                type: 'status',
+                phase: 'thinking',
+                label: `[${mode}] Generating response...`
+            });
+
+            // AI SDK 6: Apply runtime options overrides
+            const runtime = options?.runtimeOptions;
+
+            // Compute effective stop condition (combine bundle default with runtime overrides)
+            let effectiveStopWhen: StopCondition = bundle.stopWhen;
+            if (runtime?.stopConditions && runtime.stopConditions.length > 0) {
+                // Combine runtime conditions with bundle default using OR logic
+                effectiveStopWhen = stopWhenAny(
+                    bundle.stopWhen,
+                    ...runtime.stopConditions as StopCondition[]
+                );
             }
 
-            switch (part.type) {
-                case 'text-delta':
-                    fullResponse += part.text;
-                    this.bus.emit({
-                        type: 'token',
-                        text: part.text
-                    });
-                    break;
-                
-                case 'tool-call':
-                    // AI SDK 6: Emit tool call event from stream (uses 'input' not 'args')
-                    this.bus.emit({
-                        type: 'tool_call',
-                        tool: part.toolName,
-                        argsSummary: this.summarizeArgs(part.input),
-                        args: part.input as Record<string, unknown>
-                    });
-                    options?.onToolCall?.(part.toolName, part.input);
-                    break;
-                
-                case 'tool-result':
-                    // AI SDK 6: Emit tool result event from stream (uses 'output' not 'result')
-                    const streamHasError = part.output && typeof part.output === 'object' && 
-                                    part.output !== null && 'error' in part.output;
-                    this.bus.emit({
-                        type: 'tool_result',
-                        tool: part.toolName,
-                        ok: !streamHasError,
-                        summary: this.summarizeResult(part.output),
-                        result: part.output
-                    });
-                    options?.onToolResult?.(part.toolName, part.output);
-                    
-                    // Track lint errors for mode detection
-                    if (part.toolName === 'lint_file') {
-                        const lintResult = part.output as { errors?: unknown[] } | null;
-                        if (lintResult?.errors && Array.isArray(lintResult.errors) && lintResult.errors.length > 0) {
-                            this.session.hasErrors = true;
+            // AI SDK 6: Create prepareStep for dynamic control
+            const prepareStep = this.createPrepareStep(mode);
+
+            // AI SDK 6: Use bundle configuration with stopWhen and runtime overrides
+            const result = streamText({
+                model: bundle.model as any,
+                system: systemPrompt,
+                messages: this.session.messages,
+                tools: bundle.tools,
+                maxOutputTokens: runtime?.maxTokens ?? this.config.maxTokens,
+                temperature: runtime?.temperature ?? this.config.temperature,
+                abortSignal: runtime?.signal ?? options?.signal,
+                stopWhen: effectiveStopWhen,  // AI SDK handles the loop automatically
+                prepareStep: prepareStep as any,  // Dynamic step control (cast for AI SDK compatibility)
+
+                // Thinking visibility via onStepFinish
+                // Note: Tool call/result events are emitted from the stream loop for real-time updates
+                // We only handle thinking chain and error tracking here to avoid duplicate events
+                onStepFinish: (step: StepResult<any>) => {
+                    this.session.thinkingChain.onStepFinish(step);
+
+                    // Track lint errors for mode detection (from tool results)
+                    if (step.toolResults) {
+                        for (const toolResult of step.toolResults) {
+                            if (toolResult.toolName === 'lint_file') {
+                                const output = toolResult.output as { errors?: unknown[] } | null;
+                                if (output?.errors && Array.isArray(output.errors) && output.errors.length > 0) {
+                                    this.session.hasErrors = true;
+                                }
+                            }
                         }
                     }
-                    break;
+                },
+
+                // Error callback for stream errors (AI SDK v6)
+                onError: ({ error }) => {
+                    this.bus.emit({
+                        type: 'error',
+                        message: error instanceof Error ? error.message : String(error)
+                    });
+                },
+
+                // Abort callback for cleanup (AI SDK v6)
+                onAbort: ({ steps }) => {
+                    this.bus.emit({
+                        type: 'status',
+                        phase: 'thinking',
+                        label: `Aborted after ${steps.length} steps`
+                    });
+                },
+
+                // Finish callback for token tracking (AI SDK v6)
+                // Enhanced with extended usage tracking
+                // Note: Tool approval is handled in tool executors via PolicyEngine (see tools.ts)
+                onFinish: ({ totalUsage, finishReason }) => {
+                    lastUsage = totalUsage;
+
+                    // AI SDK 6: Extended usage tracking
+                    // Store detailed token breakdown for cost optimization and debugging
+                    if (totalUsage) {
+                        // Store extended usage details for agent_complete event
+                        (lastUsage as any).extended = {
+                            inputTokens: totalUsage.inputTokens,
+                            outputTokens: totalUsage.outputTokens,
+                            // Extended usage details (when available from provider)
+                            reasoningTokens: (totalUsage as any).outputTokenDetails?.reasoningTokens,
+                            textTokens: (totalUsage as any).outputTokenDetails?.textTokens,
+                            cachedTokens: (totalUsage as any).cachedTokens,
+                            finishReason: finishReason,
+                            // Raw provider usage for detailed analysis
+                            rawUsage: (totalUsage as any).raw
+                        };
+                    }
+                }
+            });
+
+            let fullResponse = '';
+
+            // Process the stream for all event types (AI SDK 6)
+            for await (const part of result.fullStream) {
+                if (options?.signal?.aborted) {
+                    throw new Error('Aborted');
+                }
+
+                switch (part.type) {
+                    case 'text-delta':
+                        fullResponse += part.text;
+                        this.bus.emit({
+                            type: 'token',
+                            text: part.text
+                        });
+                        break;
+
+                    case 'tool-call':
+                        // AI SDK 6: Emit tool call event from stream (uses 'input' not 'args')
+                        this.bus.emit({
+                            type: 'tool_call',
+                            tool: part.toolName,
+                            argsSummary: this.summarizeArgs(part.input),
+                            args: part.input as Record<string, unknown>
+                        });
+                        options?.onToolCall?.(part.toolName, part.input);
+                        break;
+
+                    case 'tool-result':
+                        // AI SDK 6: Emit tool result event from stream (uses 'output' not 'result')
+                        const streamHasError = part.output && typeof part.output === 'object' &&
+                            part.output !== null && 'error' in part.output;
+                        this.bus.emit({
+                            type: 'tool_result',
+                            tool: part.toolName,
+                            ok: !streamHasError,
+                            summary: this.summarizeResult(part.output),
+                            result: part.output
+                        });
+                        options?.onToolResult?.(part.toolName, part.output);
+
+                        // Track lint errors for mode detection
+                        if (part.toolName === 'lint_file') {
+                            const lintResult = part.output as { errors?: unknown[] } | null;
+                            if (lintResult?.errors && Array.isArray(lintResult.errors) && lintResult.errors.length > 0) {
+                                this.session.hasErrors = true;
+                            }
+                        }
+                        break;
+
+                    // Handle error stream parts (AI SDK v6)
+                    case 'error': {
+                        const errorMsg = (part as any).error instanceof Error
+                            ? (part as any).error.message
+                            : String((part as any).error);
+                        this.bus.emit({
+                            type: 'error',
+                            message: `Stream error: ${errorMsg}`
+                        });
+                        break;
+                    }
+
+                    // Handle tool errors (AI SDK v6)
+                    case 'tool-error': {
+                        const toolError = part as any;
+                        const errorMsg = toolError.error instanceof Error
+                            ? toolError.error.message
+                            : String(toolError.error);
+                        this.bus.emit({
+                            type: 'error',
+                            message: `Tool ${toolError.toolName} failed: ${errorMsg}`
+                        });
+                        break;
+                    }
+
+                    // Handle abort (AI SDK v6)
+                    case 'abort':
+                        this.bus.emit({
+                            type: 'status',
+                            phase: 'thinking',
+                            label: 'Stream aborted'
+                        });
+                        break;
+                }
             }
+
+            // Get final result
+            const finalResult = await result;
+            const textContent = await finalResult.text;
+
+            if (textContent && textContent.trim()) {
+                fullResponse = textContent;
+                this.session.messages.push({
+                    role: 'assistant',
+                    content: textContent
+                });
+            }
+
+            // Update tool call count from final result
+            const steps = await finalResult.steps;
+            if (steps) {
+                this.session.toolCallCount += steps.length;
+            }
+
+            this.bus.emit({ type: 'token_done' });
+
+            // Emit agent lifecycle complete with token usage
+            // AI SDK 6: Include extended usage details when available
+            const extendedUsage = (lastUsage as any)?.extended;
+            this.bus.emit({
+                type: 'agent_complete',
+                agentName: 'gateflow',
+                success: true,
+                durationMs: Date.now() - agentStartTime,
+                inputTokens: lastUsage?.inputTokens,
+                outputTokens: lastUsage?.outputTokens,
+                // Extended usage details (AI SDK 6)
+                reasoningTokens: extendedUsage?.reasoningTokens,
+                textTokens: extendedUsage?.textTokens,
+                cachedTokens: extendedUsage?.cachedTokens,
+                finishReason: extendedUsage?.finishReason,
+                rawUsage: extendedUsage?.rawUsage
+            });
+
+            return fullResponse;
+
+        } catch (error) {
+            // Emit error event
+            const errorMsg = error instanceof Error ? error.message : String(error);
+            this.bus.emit({
+                type: 'error',
+                message: errorMsg
+            });
+
+            // Emit agent_complete with failure
+            this.bus.emit({
+                type: 'agent_complete',
+                agentName: 'gateflow',
+                success: false,
+                durationMs: Date.now() - agentStartTime
+            });
+
+            throw error;
+        }
+    }
+
+    // ========================================================================
+    // Workflow Pattern Execution
+    // ========================================================================
+
+    /**
+     * Try to execute the request using a specialized workflow pattern.
+     * Returns null if no workflow matches, otherwise returns the result.
+     *
+     * Workflow patterns provide structured execution for specific task types:
+     * - lint_fix: Iterative error fixing
+     * - module_generation: Generate with quality checks
+     * - testbench: Generate comprehensive testbenches
+     * - code_review: Multi-perspective review
+     */
+    private async tryWorkflowExecution(
+        userMessage: string,
+        mode: PromptMode
+    ): Promise<string | null> {
+        // Only try workflows for specific modes that benefit from structured patterns
+        const workflowModes: PromptMode[] = ['lint_fix', 'generate', 'testbench', 'edit'];
+        if (!workflowModes.includes(mode)) {
+            return null;
         }
 
-        // Get final result
-        const finalResult = await result;
-        const textContent = await finalResult.text;
-        
-        if (textContent && textContent.trim()) {
-            fullResponse = textContent;
+        try {
+            // Classify the request to see if a workflow pattern fits
+            const selection = await classifyWorkflow(
+                userMessage,
+                {
+                    hasLintErrors: this.session.hasErrors,
+                    hasCode: true
+                },
+                this.config.model
+            );
+
+            // Only use workflow if confidence is high enough
+            if (selection.confidence < 0.7) {
+                return null;
+            }
+
+            // Skip simple_generation - let the normal agent handle it
+            if (selection.workflow === 'simple_generation') {
+                return null;
+            }
+
+            this.session.thinkingChain.addCoordinationStep(
+                `Using ${selection.workflow} workflow pattern`,
+                { workflow: selection.workflow, confidence: selection.confidence },
+                selection.confidence
+            );
+
+            this.bus.emit({
+                type: 'status',
+                phase: 'thinking',
+                label: `Executing ${selection.workflow} workflow...`
+            });
+
+            // Build workflow context from tool context
+            const workflowContext: WorkflowContext = {
+                model: this.config.model,
+                lintFunction: this.toolContext.verilator
+                    ? async (code: string) => {
+                        // Write to temp file, lint, return errors
+                        const tempPath = `${this.toolContext.projectRoot}/.gateflow/temp_lint.sv`;
+                        await this.toolContext.fileTools.writeFile(tempPath, code);
+                        const result = await this.toolContext.verilator!.lint(tempPath);
+                        return {
+                            errors: result.errors.map(e => `${e.file}:${e.line}: ${e.message}`),
+                            warnings: result.warnings.map(w => `${w.file}:${w.line}: ${w.message}`)
+                        };
+                    }
+                    : undefined,
+                readFile: async (path: string) => {
+                    const result = await this.toolContext.fileTools.readFile(path);
+                    if (!result.content) {
+                        throw new Error(`Failed to read file: ${path}`);
+                    }
+                    return result.content;
+                },
+                writeFile: async (path: string, content: string) => {
+                    await this.toolContext.fileTools.writeFile(path, content);
+                }
+            };
+
+            const result = await executeWorkflow(userMessage, selection, workflowContext);
+
+            // Emit completion
+            this.bus.emit({
+                type: 'status',
+                phase: 'thinking',
+                label: result.success
+                    ? `Workflow completed${result.iterations ? ` in ${result.iterations} iterations` : ''}`
+                    : 'Workflow completed with issues'
+            });
+
+            // Add result to session
             this.session.messages.push({
                 role: 'assistant',
-                content: textContent
+                content: result.output
             });
-        }
-        
-        // Update tool call count from final result
-        const steps = await finalResult.steps;
-        if (steps) {
-            this.session.toolCallCount += steps.length;
-        }
 
-        this.bus.emit({ type: 'token_done' });
+            return result.output;
 
-        return fullResponse;
+        } catch (error) {
+            // If workflow execution fails, fall back to normal agent
+            this.bus.emit({
+                type: 'error',
+                message: `Workflow failed, falling back: ${error instanceof Error ? error.message : error}`
+            });
+            return null;
+        }
+    }
+
+    // ========================================================================
+    // PrepareStep Configuration
+    // ========================================================================
+
+    /**
+     * Create a prepareStep function for dynamic step control.
+     * Configures context management, model selection, and tool availability per step.
+     */
+    private createPrepareStep(mode: PromptMode): PrepareStepFn {
+        return combinePrepareSteps(
+            // 1. Context window management - trim old messages to stay within limits
+            contextWindowManager({
+                maxMessages: 40,
+                keepSystem: true,
+                keepRecent: 15
+            }),
+
+            // 2. Dynamic model selection based on complexity
+            dynamicModelSelector({
+                defaultModel: this.config.model,
+                complexModel: this.config.model, // Could use larger model
+                complexityThreshold: 5
+            }),
+
+            // 3. Budget-aware execution
+            budgetAwareExecution({
+                maxInputTokens: 80000,
+                maxOutputTokens: 16000,
+                onBudgetExceeded: 'summarize'
+            }),
+
+            // 4. Mode-specific tool control
+            this.createModeSpecificPrepareStep(mode)
+        );
+    }
+
+    /**
+     * Create mode-specific prepareStep logic.
+     */
+    private createModeSpecificPrepareStep(mode: PromptMode): PrepareStepFn {
+        return ({ stepNumber, steps }) => {
+            // Mode-specific tool restrictions
+            switch (mode) {
+                case 'lint_fix':
+                    // For lint fix, prioritize lint and edit tools
+                    if (stepNumber === 0) {
+                        return { activeTools: ['lint_file', 'read_file'] };
+                    }
+                    return { activeTools: ['lint_file', 'read_file', 'edit_lines', 'search_replace'] };
+
+                case 'testbench':
+                    // For testbench, focus on read then write
+                    if (stepNumber < 2) {
+                        return { activeTools: ['read_file', 'find_module', 'list_files'] };
+                    }
+                    return { activeTools: ['write_file', 'read_file', 'run_simulation'] };
+
+                case 'generate':
+                    // For generation, analyze first then write
+                    if (stepNumber < 2) {
+                        return { activeTools: ['read_file', 'find_module', 'list_files', 'search_code'] };
+                    }
+                    return {}; // All tools available
+
+                case 'debug':
+                    // Debug mode - focus on analysis tools
+                    return { activeTools: ['read_file', 'search_code', 'grep_context', 'tail_context', 'lint_file'] };
+
+                default:
+                    // General mode - no restrictions
+                    return {};
+            }
+        };
     }
 
     // ========================================================================
@@ -465,9 +919,9 @@ Return needsMultiAgent: true only for genuinely complex requests.`
 
     private summarizeArgs(args: unknown): string {
         if (!args || typeof args !== 'object') return '';
-        
+
         const obj = args as Record<string, unknown>;
-        
+
         // Common patterns
         if ('path' in obj) return String(obj.path);
         if ('directory' in obj) return String(obj.directory);
@@ -475,15 +929,15 @@ Return needsMultiAgent: true only for genuinely complex requests.`
         if ('module' in obj) return String(obj.module);
         if ('pattern' in obj) return String(obj.pattern);
         if ('top' in obj) return String(obj.top);
-        
+
         return Object.keys(obj).slice(0, 2).join(', ');
     }
 
     private summarizeResult(result: unknown): string {
         if (!result || typeof result !== 'object') return String(result);
-        
+
         const obj = result as Record<string, unknown>;
-        
+
         if ('error' in obj) return `Error: ${obj.error}`;
         // FIX E: Show stderr or meaningful error for simulation failures
         if ('success' in obj && obj.success === false) {
@@ -502,8 +956,17 @@ Return needsMultiAgent: true only for genuinely complex requests.`
         if ('errors' in obj && Array.isArray(obj.errors)) {
             return obj.errors.length === 0 ? 'Success' : `${obj.errors.length} errors`;
         }
-        
+
         return 'Done';
+    }
+
+    private formatApprovalError(error: unknown): string {
+        const message = error instanceof Error ? error.message : String(error);
+        const lower = message.toLowerCase();
+        if (lower.includes('timed out') || lower.includes('timeout')) {
+            return 'Approval request timed out';
+        }
+        return message || 'Approval request failed';
     }
 
     // ========================================================================
@@ -551,7 +1014,7 @@ Return needsMultiAgent: true only for genuinely complex requests.`
      */
     addContext(content: string): void {
         if (!content || !content.trim()) return;
-        
+
         this.session.messages.push({
             role: 'user',
             content: `[Context]: ${content.trim()}`
@@ -565,4 +1028,3 @@ Return needsMultiAgent: true only for genuinely complex requests.`
         return [...this.session.messages];
     }
 }
-

@@ -44,7 +44,15 @@ export type ToolName =
     | 'simulate'
     | 'compile'
     // System operations
-    | 'exec_command';
+    | 'exec_command'
+    // Tool setup operations (require approval)
+    | 'run_command'
+    | 'download_file'
+    | 'extract_archive'
+    | 'set_env_var'
+    // Prerequisite installation (require approval)
+    | 'install_prerequisite'
+    | 'open_install_url';
 
 export interface ToolPolicy {
     /** Default approval requirement */
@@ -278,6 +286,40 @@ export const DEFAULT_TOOL_POLICIES: Record<ToolName, ToolPolicy> = {
         requiresApproval: true,
         checkPath: false,
         description: 'Execute shell command'
+    },
+
+    // Tool setup operations
+    run_command: {
+        requiresApproval: true,
+        checkPath: false,
+        description: 'Run shell command for tool setup'
+    },
+    download_file: {
+        requiresApproval: true,
+        checkPath: false,
+        description: 'Download file from URL'
+    },
+    extract_archive: {
+        requiresApproval: true,
+        checkPath: false,
+        description: 'Extract archive file'
+    },
+    set_env_var: {
+        requiresApproval: true,
+        checkPath: false,
+        description: 'Set environment variable in .env file'
+    },
+
+    // Prerequisite installation
+    install_prerequisite: {
+        requiresApproval: true,
+        checkPath: false,
+        description: 'Install build prerequisite via package manager'
+    },
+    open_install_url: {
+        requiresApproval: true,
+        checkPath: false,
+        description: 'Open download page in browser'
     }
 };
 

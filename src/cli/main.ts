@@ -5,10 +5,8 @@
  * AI-powered SystemVerilog development assistant
  */
 
+import '../env/bootstrap-env.js';
 import { Command } from 'commander';
-import dotenv from 'dotenv';
-import path from 'path';
-import { fileURLToPath } from 'url';
 import { ExitCodes } from '../events/index.js';
 import {
     setupContext,
@@ -19,22 +17,13 @@ import {
     watchCommand,
     generateCommand,
     doctorCommand,
+    setupCommand,
     versionCommand,
     waveCommand,
     waveWebCommand,
     type GlobalOptions
 } from './commands.js';
 import { startMCPServer } from '../waveform/mcp-server.js';
-
-// Load environment variables from multiple locations
-// Priority (first found wins): cwd/.env > parent/.env > script-relative
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
-// Load in reverse priority order (dotenv doesn't override existing vars)
-dotenv.config({ path: path.resolve(__dirname, '../../../.env') }); // for dist/ (lowest priority)
-dotenv.config({ path: path.resolve(__dirname, '../../.env') }); // relative to script
-dotenv.config({ path: path.resolve(process.cwd(), '../.env') }); // parent (for running from cli/)
-dotenv.config({ path: path.resolve(process.cwd(), '.env') }); // cwd/.env (highest priority)
 
 /**
  * Validate required environment variables
@@ -73,6 +62,8 @@ ${chalk.blue.bold(' ██║  ███╗███████║   ██║ 
 ${chalk.blue.bold(' ██║   ██║██╔══██║   ██║   ██╔══╝  ██╔══╝  ██║     ██║   ██║██║███╗██║')}
 ${chalk.blue.bold(' ╚██████╔╝██║  ██║   ██║   ███████╗██║     ███████╗╚██████╔╝╚███╔███╔╝')}
 ${chalk.blue.bold('  ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚══════╝╚═╝     ╚══════╝ ╚═════╝  ╚══╝╚══╝')}
+${chalk.cyan('                Founded & Built by Avidlive (Av1dlive) ')}
+${chalk.cyan('             Founding Contributor - Manas (Menace_thakur) ')}
 ${chalk.cyan('                AI-powered SystemVerilog Assistant')}
 `;
 
@@ -254,6 +245,20 @@ program
         const opts = program.opts() as GlobalOptions;
         const ctx = await setupContext(opts);
         const exitCode = await doctorCommand(ctx);
+        process.exit(exitCode);
+    });
+
+// ============================================================================
+// Setup Command
+// ============================================================================
+
+program
+    .command('setup [tools...]')
+    .description('Set up SystemVerilog analysis tools (Verible, Slang)')
+    .action(async (tools: string[]) => {
+        const opts = program.opts() as GlobalOptions;
+        const ctx = await setupContext(opts);
+        const exitCode = await setupCommand(ctx, tools);
         process.exit(exitCode);
     });
 

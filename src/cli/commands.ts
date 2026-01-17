@@ -5,28 +5,40 @@
 
 import path from 'path';
 import fs from 'fs/promises';
-import readline from 'readline';
 import chalk from 'chalk';
 import { glob } from 'glob';
 import { EventBus, ExitCodes, type ExitCode } from '../events/index.js';
 import { PolicyEngine, initPolicyEngine } from '../approval/index.js';
 import { createTools } from '../fileops/index.js';
 import { DiffEngine } from '../diff/index.js';
-import { ProjectIndexer } from '../indexer/index.js';
-import { GateFlowAgent, type ToolContext, type PromptMode } from '../agent/index.js';
+import { SVIndexerAdapter } from '../indexer/sv-indexer-adapter.js';
+import { GateFlowAgent, type ToolContext, type PromptMode, UIAgentCoordinator, type UIMode } from '../agent/index.js';
 import { Verilator } from '../verification/index.js';
 import { FixLoop } from '../verification/fix-loop.js';
 import { WatchManager } from '../watch/index.js';
-import { TerminalRenderer, createRenderer } from '../ui/index.js';
+import { TerminalRenderer, createRenderer, InputManager, initInputManager } from '../ui/index.js';
+import { getConfigManager } from '../config/index.js';
 import {
     getToolRegistry,
     getContextFileManager,
     getTerminalSessionManager,
+    createDynamicContextManager,
+    createTokenBudgetManager,
+    createFileChunker,
+    createSkillManager,
+    createToolDescriptionManager,
+    createSemanticSummarizer,
     type ToolRegistry,
     type ContextFileManager,
-    type TerminalSessionManager
+    type TerminalSessionManager,
+    type DynamicContextManager,
+    type TokenBudgetManager,
+    type FileChunker,
+    type SkillManager,
+    type ToolDescriptionManager,
+    type SemanticSummarizer
 } from '../context/index.js';
-import { MemoryManager } from '../memory/manager.js';
+import { createMemoryService, setGlobalMemoryService, type MemoryService } from '../memory/index.js';
 
 // ============================================================================
 // Types
@@ -45,17 +57,26 @@ export interface CommandContext {
     policy: PolicyEngine;
     tools: ReturnType<typeof createTools>;
     diffEngine: DiffEngine;
-    indexer: ProjectIndexer;
+    indexer: SVIndexerAdapter;
     verilator: Verilator;
     renderer: TerminalRenderer;
+    inputManager: InputManager;
     options: GlobalOptions;
     projectRoot: string;
     // Dynamic context discovery managers
     toolRegistry: ToolRegistry;
     contextFileManager: ContextFileManager;
     terminalSessionManager: TerminalSessionManager;
-    memoryManager: MemoryManager;
     sessionId: string;
+    // Unified memory service (provides memoryManager + knowledgeStore + token budgeting)
+    memoryService: MemoryService;
+    // Phase 2: Context Window Management managers
+    dynamicContextManager: DynamicContextManager;
+    tokenBudgetManager: TokenBudgetManager;
+    fileChunker: FileChunker;
+    skillManager: SkillManager;
+    toolDescriptionManager: ToolDescriptionManager;
+    semanticSummarizer: SemanticSummarizer;
 }
 
 // ============================================================================
@@ -109,8 +130,8 @@ export async function setupContext(options: GlobalOptions): Promise<CommandConte
     // Create diff engine
     const diffEngine = new DiffEngine(projectRoot);
 
-    // Create indexer
-    const indexer = new ProjectIndexer(projectRoot, bus);
+    // Create indexer (using new SVIndexer via adapter)
+    const indexer = new SVIndexerAdapter(projectRoot, bus);
 
     // Create Verilator instance (use VERILATOR_PATH env var if set)
     const verilatorPath = process.env.VERILATOR_PATH;
@@ -124,12 +145,69 @@ export async function setupContext(options: GlobalOptions): Promise<CommandConte
     // Initialize context file manager
     await contextFileManager.initialize();
 
-    // Memory manager for persistent context and history archiving
-    const memoryManager = new MemoryManager(projectRoot, bus);
-    await memoryManager.load();
-
     // Generate unique session ID
     const sessionId = `session-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    // Load configuration (for optional LLM enrichment)
+    const configManager = getConfigManager();
+    const gateConfig = await configManager.load(projectRoot);
+    const llmConfig = gateConfig.LLM ?? {};
+
+    // Unified memory service for persistent context, knowledge, and token budgeting
+    // Pass projectGetter so KnowledgeService can query indexer directly for structural knowledge
+    const memoryService = createMemoryService(projectRoot, bus, {
+        contextTokenBudget: 2000,  // Token budget for AI context injection
+        projectGetter: () => indexer.getProject(),  // Enable KnowledgeService to query indexer
+        tiering: {
+            hotSize: 100,          // Keep 100 frequently-accessed items in memory
+            warmThreshold: 3,      // Promote to hot after 3 accesses
+            coldAgeDays: 30,       // Demote to cold after 30 days unused
+            enabled: true
+        },
+        knowledge: {
+            llm: {
+                enabled: llmConfig.knowledgeEnabled ?? false,
+                model: llmConfig.knowledgeModel ?? llmConfig.defaultModel,
+                maxTokens: llmConfig.knowledgeMaxTokens ?? 512,
+                temperature: llmConfig.knowledgeTemperature ?? 0.2,
+                queryExpansion: llmConfig.knowledgeQueryExpansion ?? false,
+                semanticTags: llmConfig.knowledgeSemanticTags ?? false
+            }
+        }
+    });
+    await memoryService.initialize();
+    setGlobalMemoryService(memoryService);  // Make available globally for adapter
+
+    // Phase 2: Context Window Management managers (Cursor's Dynamic Context Discovery)
+    const dynamicContextManager = createDynamicContextManager(bus, { projectId: sessionId });
+    await dynamicContextManager.initialize();
+
+    const tokenBudgetManager = createTokenBudgetManager(bus);
+
+    // FileChunker always uses indexer for accurate AST-based boundaries
+    const fileChunker = createFileChunker({}, indexer);
+
+    const skillManager = createSkillManager();
+    await skillManager.initialize();
+
+    const toolDescriptionManager = createToolDescriptionManager();
+    await toolDescriptionManager.initialize();
+
+    const semanticSummarizer = createSemanticSummarizer();
+
+    // Initialize centralized input manager
+    const inputManager = initInputManager(bus);
+    
+    // Connect input manager to renderer for pause/resume coordination
+    inputManager.setPromptCallbacks(
+        () => renderer.pauseForInput(),
+        () => renderer.resumeAfterInput()
+    );
+
+    // Set auto-approve if -y flag
+    if (options.yes) {
+        inputManager.setApproveAll(true);
+    }
 
     return {
         bus,
@@ -139,13 +217,22 @@ export async function setupContext(options: GlobalOptions): Promise<CommandConte
         indexer,
         verilator,
         renderer,
+        inputManager,
         options,
         projectRoot,
         toolRegistry,
         contextFileManager,
         terminalSessionManager,
-        memoryManager,
-        sessionId
+        sessionId,
+        // Unified memory service
+        memoryService,
+        // Phase 2: Context Window Management
+        dynamicContextManager,
+        tokenBudgetManager,
+        fileChunker,
+        skillManager,
+        toolDescriptionManager,
+        semanticSummarizer
     };
 }
 
@@ -168,8 +255,20 @@ function buildToolContext(ctx: CommandContext): ToolContext {
         toolRegistry: ctx.toolRegistry,
         contextFileManager: ctx.contextFileManager,
         terminalSessionManager: ctx.terminalSessionManager,
-        memoryManager: ctx.memoryManager,
-        sessionId: ctx.sessionId
+        sessionId: ctx.sessionId,
+        // Memory service and its accessors for backward compatibility with tool executors
+        memoryService: ctx.memoryService,
+        memoryManager: ctx.memoryService.memory,
+        knowledgeStore: ctx.memoryService.knowledge,
+        // Centralized input manager
+        inputManager: ctx.inputManager,
+        // Phase 2: Context Window Management (Cursor's Dynamic Context Discovery)
+        dynamicContextManager: ctx.dynamicContextManager,
+        tokenBudgetManager: ctx.tokenBudgetManager,
+        fileChunker: ctx.fileChunker,
+        skillManager: ctx.skillManager,
+        toolDescriptionManager: ctx.toolDescriptionManager,
+        semanticSummarizer: ctx.semanticSummarizer
     };
 }
 
@@ -185,6 +284,13 @@ export async function chatCommand(
 
     // Create agent
     const agent = new GateFlowAgent(ctx.bus, toolContext);
+
+    // Create UI coordinator for mode transitions
+    const uiCoordinator = new UIAgentCoordinator({
+        model: 'claude-sonnet-4-20250514',
+        tools: {},  // Tools are managed by GateFlowAgent
+        bus: ctx.bus
+    });
 
     // Build project index first (blocking)
     ctx.bus.emit({
@@ -211,14 +317,8 @@ export async function chatCommand(
         agent.addContext(`Project indexed: ${stats.modules} modules, ${stats.packages} packages in ${stats.files} files.`);
     }
 
-    // Stop spinner
+    // Stop status
     ctx.bus.emit({ type: 'token_done' });
-
-    // Interactive REPL
-    const rl = readline.createInterface({
-        input: process.stdin,
-        output: process.stdout
-    });
 
     console.log('\n' + chalk.blue.bold('GateFlow') + ' - AI-powered SystemVerilog Assistant');
     if (indexingFailed) {
@@ -242,84 +342,87 @@ export async function chatCommand(
     }
     console.log('   Type your questions or commands. Type "exit" to quit.\n');
 
-    const promptUser = () => {
-        // Simple prompt with dotted border
+    // Use centralized InputManager for REPL
+    const { inputManager } = ctx;
+    let running = true;
+
+    while (running) {
         const border = chalk.blue('─'.repeat(60));
         console.log(border);
 
-        // FIX: Resume stdin if it was paused during agent execution
-        // This is critical because something (likely ora spinner or stream handling)
-        // pauses stdin, and readline doesn't automatically resume it
-        if (process.stdin.isPaused()) {
-            process.stdin.resume();
-        }
+        try {
+            const input = await inputManager.getLine(chalk.blue('> '));
+            console.log(border);
+            console.log('');
+            
+            const trimmed = input.trim();
 
-        rl.question(chalk.blue('> '), (input) => {
-            // Wrap async logic to properly handle rejections
-            (async () => {
-                console.log(border);
+            if (!trimmed) {
+                continue;
+            }
+
+            if (trimmed.toLowerCase() === 'exit' || trimmed.toLowerCase() === 'quit') {
+                running = false;
+                break;
+            }
+
+            if (trimmed.toLowerCase() === '/clear') {
+                agent.resetSession();
+                console.log('Session cleared.\n');
+                continue;
+            }
+
+            if (trimmed.toLowerCase() === '/stats') {
+                const sessionStats = agent.getSessionStats();
+                const indexStats = ctx.indexer.getStats();
+                console.log('\nSession:', sessionStats);
+                console.log('Index:', indexStats);
                 console.log('');
-                const trimmed = input.trim();
+                continue;
+            }
 
-                if (!trimmed) {
-                    setImmediate(promptUser); // Prevent stack overflow
-                    return;
-                }
-
-                if (trimmed.toLowerCase() === 'exit' || trimmed.toLowerCase() === 'quit') {
-                    rl.close();
-                    return;
-                }
-
-                if (trimmed.toLowerCase() === '/clear') {
-                    agent.resetSession();
-                    console.log('Session cleared.\n');
-                    setImmediate(promptUser);
-                    return;
-                }
-
-                if (trimmed.toLowerCase() === '/stats') {
-                    const sessionStats = agent.getSessionStats();
-                    const indexStats = ctx.indexer.getStats();
-                    console.log('\nSession:', sessionStats);
-                    console.log('Index:', indexStats);
+            // Mode switching command: /mode [planning|execution|review|chat]
+            if (trimmed.toLowerCase().startsWith('/mode')) {
+                const parts = trimmed.split(/\s+/);
+                if (parts.length === 1) {
+                    console.log(chalk.cyan(`Current mode: ${uiCoordinator.currentMode}`));
+                    console.log(chalk.dim('Available modes: planning, execution, review, chat'));
+                    console.log(chalk.dim('Usage: /mode <mode>'));
                     console.log('');
-                    setImmediate(promptUser);
-                    return;
+                } else {
+                    const targetMode = parts[1].toLowerCase() as UIMode;
+                    const validModes: UIMode[] = ['planning', 'execution', 'review', 'chat'];
+                    if (validModes.includes(targetMode)) {
+                        uiCoordinator.setMode(targetMode);
+                        console.log(chalk.green(`Switched to ${targetMode} mode`));
+                        console.log('');
+                    } else {
+                        console.log(chalk.red(`Invalid mode: ${parts[1]}`));
+                        console.log(chalk.dim('Valid modes: planning, execution, review, chat'));
+                        console.log('');
+                    }
                 }
+                continue;
+            }
 
-                // Check if waiting for approval
-                if (ctx.renderer.isWaitingForApproval()) {
-                    ctx.renderer.processApprovalInput(trimmed);
-                    setImmediate(promptUser);
-                    return;
-                }
+            // Check if waiting for approval
+            if (ctx.renderer.isWaitingForApproval()) {
+                ctx.renderer.processApprovalInput(trimmed);
+                continue;
+            }
 
-                try {
-                    await agent.run(trimmed);
-                } catch (error) {
-                    ctx.bus.emit({
-                        type: 'error',
-                        message: String(error)
-                    });
-                }
-
-                console.log('');
-                setImmediate(promptUser);
-            })().catch(error => {
-                ctx.bus.emit({ type: 'error', message: String(error) });
-                setImmediate(promptUser);
+            await agent.run(trimmed);
+            console.log('');
+        } catch (error) {
+            ctx.bus.emit({
+                type: 'error',
+                message: String(error)
             });
-        });
-    };
+        }
+    }
 
-    promptUser();
-
-    return new Promise((resolve) => {
-        rl.on('close', () => {
-            resolve(ExitCodes.SUCCESS);
-        });
-    });
+    inputManager.close();
+    return ExitCodes.SUCCESS;
 }
 
 // ============================================================================
@@ -413,9 +516,19 @@ export async function fixCommand(
 ): Promise<ExitCode> {
     const toolContext = buildToolContext(ctx);
     const agent = new GateFlowAgent(ctx.bus, toolContext);
-    const fixLoop = new FixLoop(ctx.bus, ctx.verilator, agent, ctx.tools.file, {
-        requireApproval: !ctx.options.yes
-    });
+
+    // Pass KnowledgeStore for auto-load/persist of fix patterns
+    const fixLoop = new FixLoop(
+        ctx.bus,
+        ctx.verilator,
+        agent,
+        ctx.tools.file,
+        { requireApproval: !ctx.options.yes },
+        ctx.memoryService.knowledge
+    );
+
+    // Initialize with historical patterns (auto-persist happens in run())
+    await fixLoop.init(file);
 
     const result = await fixLoop.run(file);
 
@@ -427,6 +540,67 @@ export async function fixCommand(
 }
 
 // ============================================================================
+// Watch Command - Knowledge Callback Setup
+// ============================================================================
+
+/**
+ * Configure WatchManager to update active context on file changes
+ *
+ * When files are re-indexed, this callback updates the active context IDs
+ * so that KnowledgeService queries reflect the current project state.
+ *
+ * NOTE: We no longer call extractFromIndex for structural data here because
+ * KnowledgeService now queries the indexer directly for structural knowledge.
+ * The WatchManager already handles re-indexing files when they change.
+ *
+ * @private
+ */
+function setupKnowledgeUpdateCallback(
+    ctx: CommandContext,
+    watcher: WatchManager
+): void {
+    // Check if memory service is available
+    if (!ctx.memoryService) {
+        return;  // No memory service, skip context updates
+    }
+
+    watcher.setKnowledgeUpdateCallback(async (filepath, _changeType) => {
+        try {
+            // Get the updated project from indexer
+            const project = ctx.indexer.getProject();
+            if (!project) {
+                return;
+            }
+
+            // Update the active context IDs so KnowledgeService queries
+            // use the correct define context and compile order
+            if (project.defineContextId) {
+                ctx.memoryService.setActiveContext(
+                    project.defineContextId,
+                    project.compileOrderId
+                );
+            }
+
+            // Emit success event - structural knowledge is now queried live from indexer
+            // via KnowledgeService, so no extraction needed
+            ctx.bus.emit({
+                type: 'tool_result',
+                tool: 'knowledge_update',
+                ok: true,
+                summary: `Index updated for ${path.basename(filepath)}`
+            });
+
+        } catch (error) {
+            // Non-fatal - just log
+            console.warn(
+                '[watchCommand] Context update failed:',
+                error instanceof Error ? error.message : error
+            );
+        }
+    });
+}
+
+// ============================================================================
 // Watch Command
 // ============================================================================
 
@@ -435,7 +609,7 @@ export async function watchCommand(
     patterns: string[]
 ): Promise<ExitCode> {
     const watchConfig = patterns.length > 0 ? { patterns } : undefined;
-    
+
     const watcher = new WatchManager(
         ctx.projectRoot,
         ctx.bus,
@@ -443,6 +617,9 @@ export async function watchCommand(
         ctx.verilator,
         watchConfig
     );
+
+    // Set up knowledge update callback for memory synchronization
+    setupKnowledgeUpdateCallback(ctx, watcher);
 
     watcher.start();
 
@@ -529,6 +706,68 @@ Requirements:
             type: 'error',
             message: String(error)
         });
+        return ExitCodes.TOOL_ERROR;
+    }
+}
+
+// ============================================================================
+// Setup Command
+// ============================================================================
+
+export async function setupCommand(ctx: CommandContext, tools?: string[]): Promise<ExitCode> {
+    const { runToolSetupFlow } = await import('../indexer/setup/setup-flow.js');
+
+    // Determine which tools to set up
+    const toolsToSetup: ('verible' | 'slang')[] = [];
+    if (!tools || tools.length === 0) {
+        toolsToSetup.push('verible', 'slang');
+    } else {
+        for (const tool of tools) {
+            if (tool === 'verible' || tool === 'slang') {
+                toolsToSetup.push(tool);
+            } else {
+                console.error(chalk.red(`Unknown tool: ${tool}. Valid options: verible, slang`));
+                return ExitCodes.CONFIG_ERROR;
+            }
+        }
+    }
+
+    console.log('\n' + chalk.blue.bold('SystemVerilog Tool Setup'));
+    console.log(chalk.dim('   Setting up: ' + toolsToSetup.join(', ') + '\n'));
+
+    try {
+        const result = await runToolSetupFlow(
+            ctx.bus,
+            ctx.policy,
+            ctx.projectRoot,
+            { interactive: true, tools: toolsToSetup }
+        );
+
+        if (result.success) {
+            console.log('\n' + chalk.green.bold('Setup Complete'));
+
+            if (result.tools.verible) {
+                const v = result.tools.verible;
+                const status = v.action === 'installed' || v.action === 'existing'
+                    ? chalk.green('✓') : chalk.yellow('○');
+                console.log(`   ${status} Verible: ${v.action}${v.version ? ` (${v.version})` : ''}`);
+            }
+
+            if (result.tools.slang) {
+                const s = result.tools.slang;
+                const status = s.action === 'built' || s.action === 'existing'
+                    ? chalk.green('✓') : chalk.yellow('○');
+                console.log(`   ${status} Slang: ${s.action}${s.version ? ` (${s.version})` : ''}`);
+            }
+
+            console.log('');
+            return ExitCodes.SUCCESS;
+        } else {
+            console.error(chalk.red('\nSetup failed: ' + (result.error || 'Unknown error')));
+            return ExitCodes.TOOL_ERROR;
+        }
+    } catch (error) {
+        console.error(chalk.red('\nSetup error: ' + String(error)));
         return ExitCodes.TOOL_ERROR;
     }
 }
@@ -681,8 +920,21 @@ export async function waveCommand(ctx: CommandContext, vcdPath: string): Promise
                     });
                 } else if (process.platform === 'darwin') {
                     // macOS: open new Terminal window
-                    // Escape paths for AppleScript to prevent injection
-                    const escapeAppleScript = (s: string) => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+                    // SECURITY: Validate paths to prevent shell/AppleScript injection
+                    // Only allow safe characters in paths
+                    const safePathRegex = /^[a-zA-Z0-9\-_./\\: ]+$/;
+                    if (!safePathRegex.test(cliPath) || !safePathRegex.test(resolvedPath)) {
+                        console.error(chalk.red('Invalid characters in file path.'));
+                        resolve(ExitCodes.TOOL_ERROR);
+                        return;
+                    }
+                    // Escape for AppleScript: backslash, double quote, dollar sign, backtick, newline
+                    const escapeAppleScript = (s: string) =>
+                        s.replace(/\\/g, '\\\\')
+                         .replace(/"/g, '\\"')
+                         .replace(/\$/g, '\\$')
+                         .replace(/`/g, '\\`')
+                         .replace(/\n/g, '');
                     const safeCliPath = escapeAppleScript(cliPath);
                     const safeResolvedPath = escapeAppleScript(resolvedPath);
                     child = spawn('osascript', ['-e',
@@ -758,6 +1010,13 @@ export async function waveWebCommand(ctx: CommandContext, vcdPath: string, port:
         });
 
         const url = `http://localhost:${port}`;
+
+        // SECURITY: Validate URL format before passing to shell
+        if (!/^https?:\/\/localhost:\d+$/.test(url)) {
+            console.error(chalk.red('Invalid URL generated'));
+            return ExitCodes.TOOL_ERROR;
+        }
+
         console.log(chalk.green(`\nViewer running at: ${chalk.bold(url)}`));
         console.log(chalk.dim('Press Ctrl+C to stop\n'));
 

@@ -7,9 +7,9 @@
  * ## Architecture
  *
  * ```
- * Layer A (Verible/regex)  ──┐
+ * Slang (primary)  ──────────┐
  *                            ├──► Index Merger ──► Merged Index ──► Query API
- * Layer B (slang)  ──────────┘
+ * Verible (directives)  ─────┘
  * ```
  *
  * ## Usage

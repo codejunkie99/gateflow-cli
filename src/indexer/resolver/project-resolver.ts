@@ -22,6 +22,7 @@ import type {
 } from '../types/index.js';
 import type { Recipe } from '../recipe/index.js';
 import { DeclarationIndex } from './declaration-index.js';
+import { MacroIndex } from './macro-index.js';
 import fs from 'fs/promises';
 import path from 'path';
 
@@ -70,8 +71,8 @@ export class ProjectResolver {
   /** Recipe for include path resolution */
   private recipe?: Recipe;
 
-  /** Macro index: macro name -> file where it's defined */
-  private macroIndex: Map<string, string> = new Map();
+  /** Macro index for resolving macro_usage references */
+  private macroIndex: MacroIndex = new MacroIndex();
 
   /**
    * Create a new project resolver.
@@ -93,6 +94,11 @@ export class ProjectResolver {
    * @param result - Result from FileUnderstander
    */
   addFile(result: FileUnderstanderResult): void {
+    // Check if file was already added (prevent duplicates)
+    if (this.files.has(result.file.path)) {
+      return;
+    }
+
     // Store file record
     this.files.set(result.file.path, result.file);
 
@@ -105,15 +111,8 @@ export class ProjectResolver {
     // Index declarations
     this.index.addAll(result.declarations);
 
-    // Index macro definitions for dependency tracking
-    for (const directive of result.directives) {
-      if (directive.data.kind === 'define' && directive.data.name) {
-        // Store first definition of each macro (later definitions would override)
-        if (!this.macroIndex.has(directive.data.name)) {
-          this.macroIndex.set(directive.data.name, directive.location.file);
-        }
-      }
-    }
+    // Index macro definitions for dependency tracking and reference resolution
+    this.macroIndex.addAll(result.directives);
   }
 
   /**
@@ -230,6 +229,20 @@ export class ProjectResolver {
     for (const reference of this.references) {
       // Skip if already resolved
       if (reference.resolvedId) continue;
+
+      // Handle macro references specially (they resolve to directives, not declarations)
+      if (reference.kind === 'macro_usage') {
+        const macro = this.macroIndex.getFirstByName(reference.targetName);
+        if (macro) {
+          reference.resolvedId = macro.directiveId;
+          reference.resolvedLocation = {
+            file: macro.file,
+            line: macro.line,
+            col: 1,
+          };
+        }
+        continue;
+      }
 
       // Find the target based on reference kind
       const target = this.findReferenceTarget(reference);
@@ -501,9 +514,9 @@ export class ProjectResolver {
     const newVisited = new Set(visited);
     newVisited.add(module.id);
 
-    // Find instances inside this module
+    // Find instances inside this module (use last scope element for immediate parent)
     const childInstances = this.instances.filter(
-      (i) => i.parentScope.length > 0 && i.parentScope[0] === module.name
+      (i) => i.parentScope.length > 0 && i.parentScope[i.parentScope.length - 1] === module.name
     );
 
     const children: HierarchyNode[] = [];
@@ -545,6 +558,9 @@ export class ProjectResolver {
       const target = this.index.getById(inst.resolvedId);
       if (!target) continue;
 
+      // Skip self-dependencies (same file)
+      if (inst.location.file === target.location.file) continue;
+
       const key = `${inst.location.file}|${target.location.file}|instantiates`;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -554,6 +570,31 @@ export class ProjectResolver {
         toFile: target.location.file,
         reason: 'instantiates',
         entityName: inst.targetName,
+        guard: inst.guard,
+      });
+    }
+
+    // From bind targets (the module being bound TO, not the bound module)
+    for (const inst of this.instances) {
+      if (inst.instanceKind !== 'bind' || !inst.bindTarget) continue;
+
+      // Look up the bind target module by name
+      const bindTargetModule = this.index.getByNameAndKind(inst.bindTarget, 'module');
+      if (!bindTargetModule) continue;
+
+      // Skip self-dependencies (same file)
+      if (inst.location.file === bindTargetModule.location.file) continue;
+
+      const key = `${inst.location.file}|${bindTargetModule.location.file}|instantiates`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+
+      deps.push({
+        fromFile: inst.location.file,
+        toFile: bindTargetModule.location.file,
+        reason: 'instantiates',
+        entityName: inst.bindTarget,
+        guard: inst.guard,
       });
     }
 
@@ -564,6 +605,9 @@ export class ProjectResolver {
       const target = this.index.getById(ref.resolvedId);
       if (!target) continue;
 
+      // Skip self-dependencies (same file)
+      if (ref.location.file === target.location.file) continue;
+
       const key = `${ref.location.file}|${target.location.file}|imports`;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -573,12 +617,20 @@ export class ProjectResolver {
         toFile: target.location.file,
         reason: 'imports',
         entityName: ref.targetName,
+        guard: ref.guard,
       });
     }
 
-    // From includes
+    // From includes (skip conditional includes inside ifdef blocks)
     for (const dir of this.directives) {
       if (dir.data.kind !== 'include' || !dir.data.resolvedPath) continue;
+
+      // Skip conditional includes (inside ifdef/ifndef blocks)
+      // These dependencies may not be required depending on compile-time macros
+      if (dir.guard) continue;
+
+      // Skip self-dependencies (same file)
+      if (dir.location.file === dir.data.resolvedPath) continue;
 
       const key = `${dir.location.file}|${dir.data.resolvedPath}|includes`;
       if (seen.has(key)) continue;
@@ -599,6 +651,9 @@ export class ProjectResolver {
       const target = this.index.getById(ref.resolvedId);
       if (!target) continue;
 
+      // Skip self-dependencies (same file)
+      if (ref.location.file === target.location.file) continue;
+
       const key = `${ref.location.file}|${target.location.file}|extends`;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -608,6 +663,7 @@ export class ProjectResolver {
         toFile: target.location.file,
         reason: 'extends',
         entityName: ref.targetName,
+        guard: ref.guard,
       });
     }
 
@@ -615,21 +671,22 @@ export class ProjectResolver {
     for (const ref of this.references) {
       if (ref.kind !== 'macro_usage') continue;
 
-      const macroFile = this.macroIndex.get(ref.targetName);
-      if (!macroFile) continue;
+      const macro = this.macroIndex.getFirstByName(ref.targetName);
+      if (!macro) continue;
 
       // Skip self-references (macro defined and used in same file)
-      if (macroFile === ref.location.file) continue;
+      if (macro.file === ref.location.file) continue;
 
-      const key = `${ref.location.file}|${macroFile}|uses_macro`;
+      const key = `${ref.location.file}|${macro.file}|uses_macro`;
       if (seen.has(key)) continue;
       seen.add(key);
 
       deps.push({
         fromFile: ref.location.file,
-        toFile: macroFile,
+        toFile: macro.file,
         reason: 'uses_macro',
         entityName: ref.targetName,
+        guard: ref.guard,
       });
     }
 

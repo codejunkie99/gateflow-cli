@@ -574,6 +574,25 @@ export class Verilator {
         return new Promise((resolve) => {
             let stdout = '';
             let stderr = '';
+            let resolved = false;
+
+            // Helper to safely resolve only once and clean up
+            const safeResolve = (result: SimulationResult) => {
+                if (resolved) return;
+                resolved = true;
+                clearTimeout(timeoutId);
+                // Ensure process is terminated to prevent zombies
+                if (!proc.killed) {
+                    proc.kill('SIGTERM');
+                    // Force kill after 5 seconds if still running
+                    setTimeout(() => {
+                        if (!proc.killed) {
+                            proc.kill('SIGKILL');
+                        }
+                    }, 5000);
+                }
+                resolve(result);
+            };
 
             const proc = spawn(exePath, simArgs, {
                 cwd: outputDir,
@@ -584,8 +603,7 @@ export class Verilator {
             });
 
             const timeoutId = setTimeout(() => {
-                proc.kill();
-                resolve({
+                safeResolve({
                     success: false,
                     stdout,
                     stderr: stderr + '\nSimulation timed out',
@@ -603,8 +621,6 @@ export class Verilator {
             });
 
             proc.on('close', async (code) => {
-                clearTimeout(timeoutId);
-
                 // Check for VCD file
                 let vcdExists = false;
                 try {
@@ -621,7 +637,7 @@ export class Verilator {
                     message: code === 0 ? 'Simulation complete' : `Exit code: ${code}`
                 });
 
-                resolve({
+                safeResolve({
                     success: code === 0,
                     stdout,
                     stderr,
@@ -632,8 +648,7 @@ export class Verilator {
             });
 
             proc.on('error', (error) => {
-                clearTimeout(timeoutId);
-                resolve({
+                safeResolve({
                     success: false,
                     stdout,
                     stderr: error.message,

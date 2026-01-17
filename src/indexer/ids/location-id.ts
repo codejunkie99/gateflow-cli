@@ -18,7 +18,7 @@
  * @module ids/location-id
  */
 
-import crypto from 'crypto';
+import { createHash } from 'crypto';
 
 // ============================================================================
 // Constants
@@ -36,6 +36,12 @@ const LOCATION_ID_PREFIX = 'loc:';
  */
 const HASH_LENGTH = 16;
 
+/**
+ * Separator used between fields (file, line, col).
+ * Using null byte to prevent collisions when file paths contain special chars.
+ */
+const FIELD_SEPARATOR = '\0';
+
 // ============================================================================
 // Main Function
 // ============================================================================
@@ -48,10 +54,11 @@ const HASH_LENGTH = 16;
  * - Compact representation (16 chars vs full path)
  * - Privacy (doesn't expose full file path in exports)
  *
- * @param file - Absolute file path
- * @param line - Line number (1-based)
- * @param col - Column number (1-based)
+ * @param file - Absolute file path (must be non-empty string)
+ * @param line - Line number (1-based, defaults to 1 if invalid)
+ * @param col - Column number (1-based, defaults to 1 if invalid)
  * @returns Location ID in format "loc:abcdef1234567890"
+ * @throws {Error} If file is not a non-empty string
  *
  * @example
  * ```typescript
@@ -69,13 +76,22 @@ const HASH_LENGTH = 16;
  * ```
  */
 export function locationId(file: string, line: number, col: number): string {
+  // Validate file is a non-empty string
+  if (typeof file !== 'string' || file.length === 0) {
+    throw new Error('locationId: file must be a non-empty string');
+  }
+
+  // Validate line and col are positive integers
+  // NaN, Infinity, negative, or non-integer values get normalized
+  const safeLine = Number.isInteger(line) && line > 0 ? line : 1;
+  const safeCol = Number.isInteger(col) && col > 0 ? col : 1;
+
   // Build the input string that uniquely identifies this location
-  // Using colon as separator (unlikely to appear in file paths)
-  const input = `${file}:${line}:${col}`;
+  // Using null byte as separator to prevent collisions with special chars in paths
+  const input = [file, safeLine, safeCol].join(FIELD_SEPARATOR);
 
   // Hash with SHA-256 for good distribution
-  const hash = crypto
-    .createHash('sha256')
+  const hash = createHash('sha256')
     .update(input)
     .digest('hex')
     .slice(0, HASH_LENGTH);
@@ -102,6 +118,11 @@ export function locationId(file: string, line: number, col: number): string {
  * ```
  */
 export function isLocationId(id: string): boolean {
+  // Guard against null/undefined
+  if (typeof id !== 'string') {
+    return false;
+  }
+
   // Must start with prefix
   if (!id.startsWith(LOCATION_ID_PREFIX)) {
     return false;

@@ -1,17 +1,17 @@
 /**
  * Index Merger Module
  *
- * Combines Layer A (Verible/regex) and Layer B (slang) results into a
- * unified index. This module is the heart of the two-layer architecture,
+ * Combines Slang (primary) and Verible (directives) results into a
+ * unified index. This module is the heart of the two-parser architecture,
  * taking the best of both worlds:
  *
- * - Layer A provides instant, syntactic-level indexing
- * - Layer B provides accurate, semantic-level resolution
+ * - Slang provides full semantic analysis (declarations, references, instances)
+ * - Verible provides directive extraction (the one thing Slang can't do)
  *
  * The merger:
- * 1. Takes Layer A as the base (always available)
- * 2. Overlays Layer B data where available (resolved references, evaluated params)
- * 3. Produces a unified view with the best possible data
+ * 1. Uses Slang results for semantics (when available)
+ * 2. Uses Verible results for directives (always)
+ * 3. Falls back to Verible for other data if Slang unavailable
  *
  * @module merge/index-merger
  */
@@ -23,13 +23,14 @@ import type { Directive } from '../types/directive.js';
 import type { FileUnderstanderResult, ResolvedProject, HierarchyNode, FileDependency } from '../types/result.js';
 import type { FileRecord, ParseError } from '../types/index.js';
 import type { SlangBackendResult } from '../slang/slang-backend.js';
+import { MacroIndex } from '../resolver/macro-index.js';
 
 // ============================================================================
 // Types
 // ============================================================================
 
 /**
- * Layer A result - syntactic parsing from Verible/regex.
+ * Layer A result - syntactic parsing from Verible (or Slang fallback).
  */
 export interface LayerAResult {
   /** File records */
@@ -119,10 +120,10 @@ export interface MergeMeta {
  *
  * @example
  * ```typescript
- * // Layer A from Verible/regex
+ * // Layer A from Verible
  * const layerA = combineFileResults(fileResults);
  *
- * // Layer B from slang (if available)
+ * // Layer B from Slang (if available)
  * const layerB = await slangBackend.analyzeRecipe(recipe);
  *
  * // Merge
@@ -507,6 +508,10 @@ export function buildDependencies(index: MergedIndex): FileDependency[] {
     declLocations.set(decl.id, decl.location.file);
   }
 
+  // Macro index (for macro_usage -> uses_macro file dependencies)
+  const macroIndex = new MacroIndex();
+  macroIndex.addAll(index.directives);
+
   // Instance dependencies
   for (const inst of index.instances) {
     if (inst.resolvedId) {
@@ -517,6 +522,7 @@ export function buildDependencies(index: MergedIndex): FileDependency[] {
           toFile,
           reason: 'instantiates',
           entityName: inst.targetName,
+          guard: inst.guard,
         });
       }
     }
@@ -532,6 +538,7 @@ export function buildDependencies(index: MergedIndex): FileDependency[] {
           toFile,
           reason: 'imports',
           entityName: ref.targetName,
+          guard: ref.guard,
         });
       }
     }
@@ -545,8 +552,26 @@ export function buildDependencies(index: MergedIndex): FileDependency[] {
           toFile,
           reason: 'extends',
           entityName: ref.targetName,
+          guard: ref.guard,
         });
       }
+    }
+
+    // Macro usage dependencies (best-effort: link to first seen `define)
+    if (ref.kind === 'macro_usage') {
+      const macro = macroIndex.getFirstByName(ref.targetName);
+      if (!macro) continue;
+
+      // Skip self-references (macro defined and used in same file)
+      if (macro.file === ref.location.file) continue;
+
+      dependencies.push({
+        fromFile: ref.location.file,
+        toFile: macro.file,
+        reason: 'uses_macro',
+        entityName: ref.targetName,
+        guard: ref.guard,
+      });
     }
   }
 
@@ -560,6 +585,7 @@ export function buildDependencies(index: MergedIndex): FileDependency[] {
           toFile: resolvedPath,
           reason: 'includes',
           entityName: dir.data.path,
+          guard: dir.guard,
         });
       }
     }

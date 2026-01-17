@@ -70,7 +70,8 @@ export interface GateFlowAgent {
     system: string;
     tools: Record<string, Tool>;
     toolChoice?: 'auto' | 'required' | 'none';
-    maxSteps?: number;
+    /** Maximum steps for tool loop (used with stopWhen: stepCountIs()) */
+    stepLimit?: number;
 }
 
 // ============= Routing Schema (for orchestrator) =============
@@ -176,4 +177,95 @@ export interface AgentResult {
         };
     };
 }
+
+/**
+ * Rich project context for planning
+ */
+export interface ProjectContext {
+    projectRoot: string;
+    modules: Array<{
+        name: string;
+        file: string;
+        ports: number;
+        instantiates: string[];
+    }>;
+    dependencies: {
+        topModules: string[];
+        leafModules: string[];
+        totalModules: number;
+    };
+    recentErrors?: Array<{
+        file: string;
+        line: number;
+        message: string;
+    }>;
+    defineContextId?: string;
+}
+
+/**
+ * Result of a task execution with context for dependent tasks
+ * Used to pass structured results between tasks in multi-agent workflows
+ */
+export interface TaskResult {
+    taskId: string;
+    agent: string;
+    success: boolean;
+    /** Full output (for logging/debugging) */
+    output: string;
+    /** Summarized output for dependent tasks (max ~500 tokens) */
+    summary: string;
+    /** Structured data extracted from output */
+    artifacts: {
+        filesCreated: string[];
+        filesModified: string[];
+        modulesFound: string[];
+        errorsDetected: string[];
+    };
+    /** Key insights for downstream tasks */
+    insights: string[];
+    /** Execution timing */
+    durationMs: number;
+    tokenUsage?: { input: number; output: number };
+}
+
+/**
+ * Context passed to each task during execution
+ */
+export interface TaskContext {
+    task: Task;
+    previousResults: Map<string, TaskResult>;
+    projectContext: ProjectContext;
+    orchestrationState: {
+        completedTasks: number;
+        totalTasks: number;
+        failedTasks: string[];
+    };
+}
+
+export interface TaskArtifact {
+    type: 'file' | 'code' | 'analysis' | 'error';
+    path?: string;
+    content?: string;
+    description: string;
+}
+
+/**
+ * Policy for handling dependency failures
+ * - 'skip': Skip the task if any dependency failed
+ * - 'continue-with-context': Run the task with failure context in prompt
+ * - 'abort': Stop the entire plan execution
+ */
+export type DependencyFailurePolicy = 'skip' | 'continue-with-context' | 'abort';
+
+/**
+ * Extended task definition with failure policy
+ */
+export interface TaskWithPolicy extends Task {
+    dependencyFailurePolicy?: DependencyFailurePolicy;
+}
+
+/**
+ * Map of task IDs to their results for dependency resolution
+ */
+export type TaskResultMap = Map<string, TaskResult>;
 

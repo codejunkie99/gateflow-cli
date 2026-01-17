@@ -18,7 +18,7 @@
  * @module types/directive
  */
 
-import type { Location } from './location.js';
+import type { Location, Guard } from './location.js';
 
 // ============================================================================
 // DirectiveKind - What type of directive
@@ -166,6 +166,19 @@ export interface Directive {
    * This is a discriminated union - check data.kind to narrow the type.
    */
   data: DirectiveData;
+
+  // -------------------------------------------------------------------------
+  // Conditional Compilation
+  // -------------------------------------------------------------------------
+
+  /**
+   * If this directive is inside an `ifdef/`ifndef block,
+   * this records the condition.
+   *
+   * Used to track conditional includes - dependencies from includes
+   * inside ifdef blocks may not always be required.
+   */
+  guard?: Guard;
 }
 
 // ============================================================================

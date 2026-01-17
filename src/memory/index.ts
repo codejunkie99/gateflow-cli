@@ -1,7 +1,27 @@
 /**
  * Memory Module
- * Persistent project context
+ * Persistent project context and learned knowledge
  */
 
-export * from './manager.js';
-
+export * from "./store/manager.js";
+export * from "./ParentKnowledgeStore.js";
+export * from "./MemoryService.js";
+export * from "./utils.js";
+// token-estimator exports are re-exported via utils.js to avoid naming conflicts
+// Only export non-conflicting symbols directly
+export {
+  detectContentType,
+  truncateToFit,
+  fitsInBudget,
+  estimateTokensTotal,
+  estimateTokensSimple,
+  DEFAULT_TOKEN_CONFIG,
+} from "./token-estimator.js";
+export * from "./tiered-store.js";
+// KnowledgeService for unified structural + learned knowledge queries
+export { KnowledgeService } from "./knowledge-service/index.js";
+export type {
+  UnifiedKnowledgeQuery,
+  UnifiedKnowledgeResult,
+  IKnowledgeService,
+} from "./knowledge-service/index.js";

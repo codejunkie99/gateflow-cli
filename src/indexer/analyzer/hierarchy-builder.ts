@@ -132,7 +132,7 @@ export function getHierarchyStats(
 
   return {
     topModuleCount: hierarchy.length,
-    uniqueModules: new Set(instances.filter((i) => i.resolvedId).map((i) => i.targetName)).size,
+    uniqueModules: new Set(instances.filter((i) => i.resolvedId).map((i) => i.resolvedId!)).size,
     totalInstances,
     maxDepth,
     unusedModules,
@@ -141,20 +141,41 @@ export function getHierarchyStats(
 }
 
 /**
- * Get the depth of a hierarchy node.
+ * Get the depth of a hierarchy node (iterative to avoid stack overflow).
  */
 function getNodeDepth(node: HierarchyNode): number {
-  if (node.children.length === 0) {
-    return 1;
+  let maxDepth = 0;
+  const stack: { node: HierarchyNode; depth: number }[] = [{ node, depth: 1 }];
+
+  while (stack.length > 0) {
+    const { node: current, depth } = stack.pop()!;
+    maxDepth = Math.max(maxDepth, depth);
+
+    for (const child of current.children) {
+      stack.push({ node: child, depth: depth + 1 });
+    }
   }
-  return 1 + Math.max(...node.children.map(getNodeDepth));
+
+  return maxDepth;
 }
 
 /**
- * Count total instances in a hierarchy subtree.
+ * Count total instances in a hierarchy subtree (iterative to avoid stack overflow).
  */
 function countInstances(node: HierarchyNode): number {
-  return 1 + node.children.reduce((sum, child) => sum + countInstances(child), 0);
+  let count = 0;
+  const stack: HierarchyNode[] = [node];
+
+  while (stack.length > 0) {
+    const current = stack.pop()!;
+    count++;
+
+    for (const child of current.children) {
+      stack.push(child);
+    }
+  }
+
+  return count;
 }
 
 /**
@@ -170,37 +191,43 @@ export function findModuleInHierarchy(
 ): HierarchyPath[] {
   const results: HierarchyPath[] = [];
 
-  for (const root of hierarchy) {
-    findModuleInNode(root, moduleName, [], [], results);
+  // Use iterative approach with explicit stack to avoid stack overflow
+  interface StackItem {
+    node: HierarchyNode;
+    path: string[];
+    instances: string[];
+  }
+
+  const stack: StackItem[] = hierarchy.map((root) => ({
+    node: root,
+    path: [],
+    instances: [],
+  }));
+
+  while (stack.length > 0) {
+    const { node, path, instances } = stack.pop()!;
+    const currentPath = [...path, node.moduleName];
+    const currentInstances = [...instances, node.instanceName];
+
+    if (node.moduleName === moduleName) {
+      results.push({
+        path: currentPath,
+        instances: currentInstances,
+        node,
+      });
+    }
+
+    // Add children to stack (reverse order to maintain traversal order)
+    for (let i = node.children.length - 1; i >= 0; i--) {
+      stack.push({
+        node: node.children[i],
+        path: currentPath,
+        instances: currentInstances,
+      });
+    }
   }
 
   return results;
-}
-
-/**
- * Recursive helper to find module in hierarchy.
- */
-function findModuleInNode(
-  node: HierarchyNode,
-  moduleName: string,
-  pathSoFar: string[],
-  instancesSoFar: string[],
-  results: HierarchyPath[]
-): void {
-  const currentPath = [...pathSoFar, node.moduleName];
-  const currentInstances = [...instancesSoFar, node.instanceName];
-
-  if (node.moduleName === moduleName) {
-    results.push({
-      path: currentPath,
-      instances: currentInstances,
-      node,
-    });
-  }
-
-  for (const child of node.children) {
-    findModuleInNode(child, moduleName, currentPath, currentInstances, results);
-  }
 }
 
 /**
@@ -215,35 +242,33 @@ export function getPathString(path: HierarchyPath): string {
 
 /**
  * Find all leaf modules (modules with no children).
+ * Uses iterative approach to avoid stack overflow.
  *
  * @param hierarchy - Hierarchy tree
  * @returns Array of leaf node names
  */
 export function findLeafModules(hierarchy: HierarchyNode[]): string[] {
   const leaves: string[] = [];
+  const stack: HierarchyNode[] = [...hierarchy];
 
-  for (const root of hierarchy) {
-    findLeavesInNode(root, leaves);
+  while (stack.length > 0) {
+    const node = stack.pop()!;
+
+    if (node.children.length === 0) {
+      leaves.push(node.moduleName);
+    } else {
+      for (const child of node.children) {
+        stack.push(child);
+      }
+    }
   }
 
   return [...new Set(leaves)];
 }
 
 /**
- * Recursive helper to find leaf modules.
- */
-function findLeavesInNode(node: HierarchyNode, leaves: string[]): void {
-  if (node.children.length === 0) {
-    leaves.push(node.moduleName);
-  } else {
-    for (const child of node.children) {
-      findLeavesInNode(child, leaves);
-    }
-  }
-}
-
-/**
  * Flatten the hierarchy to a list of all paths.
+ * Uses iterative approach to avoid stack overflow.
  *
  * @param hierarchy - Hierarchy tree
  * @returns Array of all paths to all nodes
@@ -251,38 +276,45 @@ function findLeavesInNode(node: HierarchyNode, leaves: string[]): void {
 export function flattenHierarchy(hierarchy: HierarchyNode[]): HierarchyPath[] {
   const results: HierarchyPath[] = [];
 
-  for (const root of hierarchy) {
-    flattenNode(root, [], [], results);
+  interface StackItem {
+    node: HierarchyNode;
+    path: string[];
+    instances: string[];
+  }
+
+  const stack: StackItem[] = hierarchy.map((root) => ({
+    node: root,
+    path: [],
+    instances: [],
+  }));
+
+  while (stack.length > 0) {
+    const { node, path, instances } = stack.pop()!;
+    const currentPath = [...path, node.moduleName];
+    const currentInstances = [...instances, node.instanceName];
+
+    results.push({
+      path: currentPath,
+      instances: currentInstances,
+      node,
+    });
+
+    // Add children to stack (reverse order to maintain traversal order)
+    for (let i = node.children.length - 1; i >= 0; i--) {
+      stack.push({
+        node: node.children[i],
+        path: currentPath,
+        instances: currentInstances,
+      });
+    }
   }
 
   return results;
 }
 
 /**
- * Recursive helper to flatten hierarchy.
- */
-function flattenNode(
-  node: HierarchyNode,
-  pathSoFar: string[],
-  instancesSoFar: string[],
-  results: HierarchyPath[]
-): void {
-  const currentPath = [...pathSoFar, node.moduleName];
-  const currentInstances = [...instancesSoFar, node.instanceName];
-
-  results.push({
-    path: currentPath,
-    instances: currentInstances,
-    node,
-  });
-
-  for (const child of node.children) {
-    flattenNode(child, currentPath, currentInstances, results);
-  }
-}
-
-/**
  * Print hierarchy as a tree string.
+ * Uses iterative approach to avoid stack overflow.
  *
  * @param hierarchy - Hierarchy tree
  * @returns Formatted tree string
@@ -290,35 +322,38 @@ function flattenNode(
 export function formatHierarchy(hierarchy: HierarchyNode[]): string {
   const lines: string[] = [];
 
-  for (const root of hierarchy) {
-    formatNode(root, '', true, lines);
+  interface StackItem {
+    node: HierarchyNode;
+    prefix: string;
+    isLast: boolean;
+  }
+
+  // Process roots in reverse order so they appear in correct order
+  const stack: StackItem[] = [];
+  for (let i = hierarchy.length - 1; i >= 0; i--) {
+    stack.push({ node: hierarchy[i], prefix: '', isLast: i === hierarchy.length - 1 });
+  }
+
+  while (stack.length > 0) {
+    const { node, prefix, isLast } = stack.pop()!;
+
+    const connector = isLast ? '└── ' : '├── ';
+    const label =
+      node.instanceName === 'root'
+        ? `${node.moduleName} (top)`
+        : `${node.instanceName} (${node.moduleName})`;
+
+    lines.push(`${prefix}${connector}${label}`);
+
+    const newPrefix = prefix + (isLast ? '    ' : '│   ');
+
+    // Add children in reverse order so they're processed in correct order
+    for (let i = node.children.length - 1; i >= 0; i--) {
+      const child = node.children[i];
+      const childIsLast = i === node.children.length - 1;
+      stack.push({ node: child, prefix: newPrefix, isLast: childIsLast });
+    }
   }
 
   return lines.join('\n');
-}
-
-/**
- * Recursive helper to format hierarchy as tree.
- */
-function formatNode(
-  node: HierarchyNode,
-  prefix: string,
-  isLast: boolean,
-  lines: string[]
-): void {
-  const connector = isLast ? '└── ' : '├── ';
-  const label =
-    node.instanceName === 'root'
-      ? `${node.moduleName} (top)`
-      : `${node.instanceName} (${node.moduleName})`;
-
-  lines.push(`${prefix}${connector}${label}`);
-
-  const newPrefix = prefix + (isLast ? '    ' : '│   ');
-
-  for (let i = 0; i < node.children.length; i++) {
-    const child = node.children[i];
-    const childIsLast = i === node.children.length - 1;
-    formatNode(child, newPrefix, childIsLast, lines);
-  }
 }

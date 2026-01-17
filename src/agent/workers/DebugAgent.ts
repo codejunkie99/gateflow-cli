@@ -32,7 +32,8 @@ export function createDebugAgent(tools: Record<string, Tool>): GateFlowAgent {
             run_simulation: tools.run_simulation,
             search_code: tools.search_code
         },
-        maxSteps: 15
+        toolChoice: 'required',
+        stepLimit: 15
     });
 }
 

@@ -4,91 +4,73 @@
  * The FileUnderstander is the main orchestrator that parses a single
  * SystemVerilog file and extracts all entities from it.
  *
- * ## Parser Backends
+ * ## Two-Parser Architecture
  *
- * Two parser backends are available:
+ * Uses both **Slang** and **Verible** in parallel:
+ * - **Slang** (primary): Full SystemVerilog compiler with semantic analysis
+ *   - Better type resolution, parameter evaluation, instance elaboration
+ *   - Handles checker constructs, generate blocks, complex preprocessor
+ * - **Verible** (directives): Production-grade parser for directive extraction
+ *   - Only source for `define, `include, `ifdef directives
+ *   - Slang evaluates preprocessor but doesn't report directives
  *
- * 1. **Verible** (recommended) - Uses Verible's production-grade parser
- *    - Full IEEE 1800-2017 compliance
- *    - Accurate syntax tree
- *    - Includes linting and formatting
- *
- * 2. **Regex** (fallback) - Uses pattern-based scanning
- *    - No external dependencies
- *    - Good for simple cases
- *    - Falls back automatically if Verible unavailable
- *
- * ## 7-Step Regex Pipeline (when Verible unavailable)
- *
- * 1. **Read File** - Read content, compute hash, build line index
- * 2. **Line Continuation** - Join backslash-continued lines
- * 3. **Strip Comments** - Remove // and block comments
- * 4. **Scan Directives** - Find define, include, ifdef, etc.
- * 5. **Scan Declarations** - Find module, class, function, etc.
- * 6. **Scan References** - Find imports, type usages, etc.
- * 7. **Scan Instances** - Find module instantiations
+ * Both tools can auto-download from GitHub releases if not installed.
+ * If Verible is unavailable after auto-download attempts, directives are skipped.
  *
  * The result contains:
  * - FileRecord with metadata
- * - All declarations found
- * - All references found
- * - All instances found
- * - All directives found
+ * - All declarations found (from Slang if available, else Verible)
+ * - All references found (from Slang if available, else Verible)
+ * - All instances found (from Slang if available, else Verible)
+ * - All directives found (always from Verible)
  * - Any parse errors
  * - Performance statistics
  *
  * @module understander/file-understander
  */
 
-import { createHash } from 'crypto';
+import { readFile } from 'fs/promises';
 import type {
   FileUnderstanderResult,
-  FileRecord,
   Declaration,
   Reference,
   Instance,
-  Directive,
   ParseError,
-  ParseStats,
 } from '../types/index.js';
-import { readFile } from '../reader/index.js';
-import { preprocess } from '../preprocessor/index.js';
-import {
-  scanDirectives,
-  scanDeclarations,
-  scanReferences,
-  scanInstances,
-  ScopeTracker,
-  buildScopeLookup,
-  buildGuardLookup,
-} from '../scanners/index.js';
+import { readFile as readSourceFile } from '../reader/index.js';
 import {
   VeribleAdapter,
   isVeribleAvailable,
-  type VeribleAdapterOptions,
 } from '../verible/index.js';
+import {
+  canUseSlang,
+  runSlangOnFiles,
+  mapSlangAst,
+} from '../slang/index.js';
+import {
+  FileResultCache,
+  getFileResultCache,
+  type FileResultCacheOptions,
+} from '../cache/index.js';
+
+/**
+ * Result from Slang parsing with errors included.
+ */
+interface SlangParseResult {
+  declarations: Declaration[];
+  references: Reference[];
+  instances: Instance[];
+  errors: ParseError[];
+}
 
 // ============================================================================
 // Types
 // ============================================================================
 
 /**
- * Parser backend to use.
- */
-export type ParserBackend = 'verible' | 'regex' | 'auto';
-
-/**
  * Options for FileUnderstander.
  */
 export interface FileUnderstanderOptions {
-  /**
-   * Parser backend to use.
-   * - 'verible': Use Verible parser (requires Verible installed)
-   * - 'regex': Use regex-based scanners (no dependencies)
-   * - 'auto': Try Verible first, fall back to regex (default)
-   */
-  backend?: ParserBackend;
-
   /**
    * Include lint results when using Verible.
    */
@@ -100,9 +82,19 @@ export interface FileUnderstanderOptions {
   lintRules?: string[];
 
   /**
-   * Timeout for Verible operations in milliseconds.
+   * Timeout for parser operations in milliseconds.
    */
   timeout?: number;
+
+  /**
+   * Enable caching (default: true).
+   */
+  caching?: boolean;
+
+  /**
+   * Custom cache instance (uses default if not provided).
+   */
+  cache?: FileResultCache;
 }
 
 // ============================================================================
@@ -110,20 +102,14 @@ export interface FileUnderstanderOptions {
 // ============================================================================
 
 /**
- * Parses SystemVerilog files and extracts all entities.
+ * Parses SystemVerilog files using Slang (primary) and Verible (directives).
  *
- * Supports two parser backends:
- * - **Verible** (default): Production-grade parser with full SV support
- * - **Regex**: Pattern-based fallback when Verible is unavailable
+ * Both parsers run in parallel for best performance. Slang provides better
+ * semantic analysis while Verible provides directive extraction.
  *
  * @example
  * ```typescript
- * // Use auto-detection (tries Verible first)
  * const understander = new FileUnderstander();
- *
- * // Or explicitly choose backend
- * const veribleOnly = new FileUnderstander({ backend: 'verible' });
- * const regexOnly = new FileUnderstander({ backend: 'regex' });
  *
  * // Parse a single file
  * const result = await understander.understand('/path/to/counter.sv');
@@ -142,15 +128,20 @@ export interface FileUnderstanderOptions {
  */
 export class FileUnderstander {
   private readonly options: FileUnderstanderOptions;
+  private readonly cache: FileResultCache | null;
   private verible?: VeribleAdapter;
   private veribleChecked = false;
   private veribleAvailable = false;
+  private slangChecked = false;
+  private slangAvailable = false;
 
   constructor(options: FileUnderstanderOptions = {}) {
-    this.options = {
-      backend: 'auto',
-      ...options,
-    };
+    this.options = options;
+
+    // Initialize cache (default: enabled)
+    this.cache = options.caching !== false
+      ? (options.cache ?? getFileResultCache())
+      : null;
   }
 
   // --------------------------------------------------------------------------
@@ -160,45 +151,202 @@ export class FileUnderstander {
   /**
    * Parse a file and extract all entities.
    *
+   * Runs Slang and Verible in parallel:
+   * - Slang: declarations, references, instances (better semantic analysis)
+   * - Verible: directives (only source for preprocessor directives)
+   *
    * @param filePath - Path to the SystemVerilog file
    * @returns Complete parse result with all entities
+   * @throws Error if Verible is not available (required for directives)
    */
   async understand(filePath: string): Promise<FileUnderstanderResult> {
-    const backend = await this.resolveBackend();
+    // Check cache first (if enabled)
+    if (this.cache) {
+      const content = await readFile(filePath, 'utf-8');
+      const contentHash = this.cache.hashContent(content);
 
-    if (backend === 'verible') {
-      return this.understandWithVerible(filePath);
-    } else {
-      return this.understandWithRegex(filePath);
+      const cachedResult = this.cache.get(contentHash);
+      if (cachedResult) {
+        // Cache hit - rebuild lineOffsets if needed
+        if (cachedResult.file.lineOffsets.length === 0) {
+          cachedResult.file.lineOffsets = this.buildLineOffsets(content);
+        }
+        return cachedResult;
+      }
+
+      // Cache miss - parse and cache
+      const result = await this.parseAndMerge(filePath);
+      this.cache.set(contentHash, filePath, result);
+      return result;
     }
+
+    // Caching disabled - just parse
+    return this.parseAndMerge(filePath);
   }
 
   /**
-   * Get the current parser backend being used.
+   * Build line offset array from content.
    */
-  async getBackend(): Promise<ParserBackend> {
-    return this.resolveBackend();
+  private buildLineOffsets(content: string): number[] {
+    const offsets: number[] = [0];
+    for (let i = 0; i < content.length; i++) {
+      if (content[i] === '\n') {
+        offsets.push(i + 1);
+      }
+    }
+    return offsets;
+  }
+
+  /**
+   * Parse a file using both parsers and merge results.
+   */
+  private async parseAndMerge(filePath: string): Promise<FileUnderstanderResult> {
+    const parseStart = Date.now();
+    const veribleAvailable = await this.isVeribleAvailable(true);
+
+    // Run parsers in parallel, skip Verible if unavailable
+    const [slangResult, veribleResult] = await Promise.allSettled([
+      this.parseWithSlang(filePath),
+      veribleAvailable ? this.parseWithVerible(filePath) : Promise.resolve(null),
+    ]);
+
+    // Extract results
+    const slang = slangResult.status === 'fulfilled' ? slangResult.value : null;
+    const verible = veribleResult.status === 'fulfilled' ? veribleResult.value : null;
+
+    if (!slang && !verible) {
+      const error = veribleResult.status === 'rejected' ? veribleResult.reason : 'Unknown error';
+      throw new Error(
+        `Parsing failed: Slang and Verible unavailable or failed.\n` +
+        `Verible error: ${error}\n` +
+        'Install Verible: https://github.com/chipsalliance/verible/releases\n' +
+        'Or use your package manager: brew install verible'
+      );
+    }
+
+    // Build file record (fallback to reader if Verible unavailable)
+    const fileRecord = verible?.file ?? (await readSourceFile(filePath)).file;
+
+    const parseErrors: ParseError[] = [];
+    if (verible?.errors?.length) {
+      parseErrors.push(...verible.errors);
+    }
+    if (slang?.errors?.length) {
+      parseErrors.push(...slang.errors);
+    }
+
+    if (!verible) {
+      const veribleFailure = veribleResult.status === 'rejected' ? veribleResult.reason : null;
+      const baseMessage = veribleAvailable
+        ? 'Verible parsing failed; directives will be skipped.'
+        : 'Verible not available after auto-download attempt; directives will be skipped.';
+      parseErrors.push({
+        message: `${baseMessage}${veribleFailure ? ` ${veribleFailure}` : ''}`.trim(),
+        location: {
+          file: filePath,
+          line: 1,
+          col: 1,
+        },
+        severity: 'warning',
+      });
+    }
+
+    const declarations = slang?.declarations ?? verible?.declarations ?? [];
+    const references = slang?.references ?? verible?.references ?? [];
+    const instances = slang?.instances ?? verible?.instances ?? [];
+    const directives = verible?.directives ?? [];
+
+    // Simple merge: Slang for semantics, Verible for directives
+    return {
+      file: fileRecord,
+      // Prefer Slang results (better semantic analysis)
+      declarations,
+      references,
+      instances,
+      // Only Verible provides directive tracking
+      directives,
+      // Combine errors from both parsers
+      errors: parseErrors,
+      stats: {
+        parseTimeMs: verible?.stats.parseTimeMs ?? Date.now() - parseStart,
+        declarationCount: declarations.length,
+        referenceCount: references.length,
+        instanceCount: instances.length,
+        directiveCount: directives.length,
+        slangUsed: !!slang,
+      },
+    };
   }
 
   /**
    * Check if Verible is available.
    */
-  async isVeribleAvailable(): Promise<boolean> {
-    if (!this.veribleChecked) {
-      this.veribleAvailable = await isVeribleAvailable();
+  async isVeribleAvailable(autoDownload = false): Promise<boolean> {
+    if (!this.veribleChecked || autoDownload) {
+      this.veribleAvailable = await isVeribleAvailable(autoDownload);
       this.veribleChecked = true;
     }
     return this.veribleAvailable;
   }
 
+  /**
+   * Check if Slang is available.
+   */
+  async isSlangAvailable(): Promise<boolean> {
+    if (!this.slangChecked) {
+      this.slangAvailable = await canUseSlang();
+      this.slangChecked = true;
+    }
+    return this.slangAvailable;
+  }
+
   // --------------------------------------------------------------------------
-  // Verible Backend
+  // Parser Methods
   // --------------------------------------------------------------------------
+
+  /**
+   * Parse a file using Slang.
+   * Returns null if Slang is unavailable or parsing fails.
+   */
+  private async parseWithSlang(filePath: string): Promise<SlangParseResult | null> {
+    try {
+      const slangOutput = await runSlangOnFiles([filePath]);
+
+      if (!slangOutput.success || !slangOutput.compilation) {
+        return null;
+      }
+
+      const mapped = mapSlangAst(slangOutput.compilation);
+
+      // Convert Slang diagnostics to our error format
+      const errors: ParseError[] = slangOutput.diagnostics
+        .filter((d) => d.severity === 'error')
+        .map((d) => ({
+          message: d.message,
+          location: {
+            file: d.location?.file || filePath,
+            line: d.location?.line || 0,
+            col: d.location?.column || 0,
+          },
+          severity: 'error' as const,
+        }));
+
+      return {
+        declarations: mapped.declarations,
+        references: mapped.references,
+        instances: mapped.instances,
+        errors,
+      };
+    } catch {
+      // Slang failed - will fall back to Verible
+      return null;
+    }
+  }
 
   /**
    * Parse a file using Verible.
    */
-  private async understandWithVerible(filePath: string): Promise<FileUnderstanderResult> {
+  private async parseWithVerible(filePath: string) {
     if (!this.verible) {
       this.verible = new VeribleAdapter({
         timeout: this.options.timeout,
@@ -207,211 +355,7 @@ export class FileUnderstander {
       });
     }
 
-    const result = await this.verible.parseFile(filePath);
-
-    return {
-      file: result.file,
-      declarations: result.declarations,
-      references: result.references,
-      instances: result.instances,
-      directives: result.directives,
-      errors: result.errors,
-      stats: result.stats,
-    };
-  }
-
-  // --------------------------------------------------------------------------
-  // Regex Backend
-  // --------------------------------------------------------------------------
-
-  /**
-   * Parse a file using regex-based scanners.
-   */
-  private async understandWithRegex(filePath: string): Promise<FileUnderstanderResult> {
-    const errors: ParseError[] = [];
-    const startTime = Date.now();
-
-    // -------------------------------------------------------------------------
-    // Step 1: Read File
-    // -------------------------------------------------------------------------
-
-    const { file, content } = await readFile(filePath);
-
-    // -------------------------------------------------------------------------
-    // Step 2 & 3: Preprocess (Line Continuation + Comment Stripping)
-    // -------------------------------------------------------------------------
-
-    const { cleaned, commentMap } = preprocess(content);
-
-    // -------------------------------------------------------------------------
-    // Step 4: Scan Directives
-    // -------------------------------------------------------------------------
-
-    const scopeTracker = new ScopeTracker();
-    const { directives, ifdefState } = scanDirectives(
-      cleaned,
-      filePath,
-      file.lineOffsets,
-      scopeTracker
-    );
-
-    // -------------------------------------------------------------------------
-    // Step 5: Scan Declarations
-    // -------------------------------------------------------------------------
-
-    const { declarations } = scanDeclarations(cleaned, filePath, file.lineOffsets);
-
-    // -------------------------------------------------------------------------
-    // Build Lookup Functions
-    // -------------------------------------------------------------------------
-
-    const scopeLookup = buildScopeLookup(declarations);
-    const guardLookup = buildGuardLookup(ifdefState);
-
-    // -------------------------------------------------------------------------
-    // Step 6: Scan References
-    // -------------------------------------------------------------------------
-
-    const { references } = scanReferences(
-      cleaned,
-      filePath,
-      file.lineOffsets,
-      declarations,
-      scopeLookup,
-      guardLookup
-    );
-
-    // -------------------------------------------------------------------------
-    // Step 7: Scan Instances
-    // -------------------------------------------------------------------------
-
-    const { instances } = scanInstances(
-      cleaned,
-      filePath,
-      file.lineOffsets,
-      declarations,
-      scopeLookup,
-      guardLookup
-    );
-
-    // -------------------------------------------------------------------------
-    // Build Result
-    // -------------------------------------------------------------------------
-
-    const parseTimeMs = Date.now() - startTime;
-
-    const stats: ParseStats = {
-      parseTimeMs,
-      declarationCount: declarations.length,
-      referenceCount: references.length,
-      instanceCount: instances.length,
-      directiveCount: directives.length,
-    };
-
-    return {
-      file,
-      declarations,
-      references,
-      instances,
-      directives,
-      errors,
-      stats,
-    };
-  }
-
-  // --------------------------------------------------------------------------
-  // Backend Resolution
-  // --------------------------------------------------------------------------
-
-  /**
-   * Resolve which backend to use based on options and availability.
-   */
-  private async resolveBackend(): Promise<'verible' | 'regex'> {
-    if (this.options.backend === 'regex') {
-      return 'regex';
-    }
-
-    if (this.options.backend === 'verible') {
-      const available = await this.isVeribleAvailable();
-      if (!available) {
-        throw new Error(
-          'Verible backend requested but Verible is not available. ' +
-          'Install Verible or use backend: "auto" to fall back to regex.'
-        );
-      }
-      return 'verible';
-    }
-
-    // Auto mode: try Verible first
-    const available = await this.isVeribleAvailable();
-    return available ? 'verible' : 'regex';
-  }
-
-  /**
-   * Parse file content directly (without reading from disk).
-   *
-   * Useful for testing or when content is already in memory.
-   *
-   * @param content - File content as string
-   * @param filePath - Path to use for the file record
-   * @param fileRecord - Optional pre-built file record
-   * @returns Complete parse result
-   */
-  understandContent(
-    content: string,
-    filePath: string,
-    fileRecord?: Partial<FileRecord>
-  ): FileUnderstanderResult {
-    const errors: ParseError[] = [];
-    const startTime = Date.now();
-
-    // Build line offsets
-    const lineOffsets = buildLineOffsets(content);
-
-    // Create file record
-    const file: FileRecord = {
-      id: fileRecord?.id || `file:${hashString(filePath + content).slice(0, 16)}`,
-      path: filePath,
-      hash: fileRecord?.hash || hashString(content),
-      size: fileRecord?.size || content.length,
-      lineCount: lineOffsets.length,
-      lineOffsets,
-      lastModified: fileRecord?.lastModified || Date.now(),
-      encoding: fileRecord?.encoding || 'utf-8',
-    };
-
-    // Preprocess
-    const { cleaned } = preprocess(content);
-
-    // Scan all entities
-    const scopeTracker = new ScopeTracker();
-    const { directives, ifdefState } = scanDirectives(cleaned, filePath, lineOffsets, scopeTracker);
-    const { declarations } = scanDeclarations(cleaned, filePath, lineOffsets);
-
-    // Build lookup functions
-    const scopeLookup = buildScopeLookup(declarations);
-    const guardLookup = buildGuardLookup(ifdefState);
-
-    const { references } = scanReferences(cleaned, filePath, lineOffsets, declarations, scopeLookup, guardLookup);
-    const { instances } = scanInstances(cleaned, filePath, lineOffsets, declarations, scopeLookup, guardLookup);
-
-    const parseTimeMs = Date.now() - startTime;
-
-    return {
-      file,
-      declarations,
-      references,
-      instances,
-      directives,
-      errors,
-      stats: {
-        parseTimeMs,
-        declarationCount: declarations.length,
-        referenceCount: references.length,
-        instanceCount: instances.length,
-        directiveCount: directives.length,
-      },
-    };
+    return this.verible.parseFile(filePath);
   }
 }
 
@@ -497,43 +441,6 @@ export type UnderstandFilesResult =
       path: string;
       error: string;
     };
-
-// ============================================================================
-// Helper Functions
-// ============================================================================
-
-/**
- * Build line offset index from content.
- */
-function buildLineOffsets(content: string): number[] {
-  const offsets: number[] = [0];
-
-  for (let i = 0; i < content.length; i++) {
-    if (content[i] === '\n') {
-      offsets.push(i + 1);
-    } else if (content[i] === '\r') {
-      if (content[i + 1] === '\n') {
-        offsets.push(i + 2);
-        i++;
-      } else {
-        offsets.push(i + 1);
-      }
-    }
-  }
-
-  return offsets;
-}
-
-/**
- * Generate a SHA-256 hash for a string.
- * Uses Node.js crypto module for production-grade hashing.
- *
- * @param str - String to hash
- * @returns 32-character hex hash
- */
-function hashString(str: string): string {
-  return createHash('sha256').update(str).digest('hex').slice(0, 32);
-}
 
 // ============================================================================
 // Factory Function

@@ -5,16 +5,15 @@
  * declarations, references, instances, and directives, then resolves
  * cross-file connections.
  *
- * ## Architecture: Two-Layer Indexing
+ * ## Architecture: Slang-Primary with Verible
  *
- * The indexer uses a two-layer architecture for optimal performance and accuracy:
+ * The indexer uses a two-parser architecture:
  *
- * - **Layer A (Verible/regex)**: Fast, syntactic parsing for instant feedback
- * - **Layer B (slang)**: Accurate semantic analysis when available
+ * - **Slang (primary)**: Full SV 2017 semantic analysis - declarations, references, instances
+ * - **Verible (directives)**: Fast CST parsing for preprocessor directives only
  *
- * Layer A always runs first, providing immediate results. If slang is available,
- * Layer B runs in parallel and its results are merged to provide accurate
- * reference resolution, evaluated parameters, and complete type information.
+ * Both parsers run in parallel. Slang provides better semantic analysis while
+ * Verible extracts directives (which Slang evaluates but doesn't report).
  *
  * ## Features
  *
@@ -113,18 +112,6 @@ export { locationId, declarationId, isLocationId, isDeclarationId } from './ids/
 // Reader
 export { readFile, readFiles, buildLineIndex, getLineNumber, getLocation } from './reader/index.js';
 
-// Preprocessor
-export { preprocess, stripComments, handleLineContinuation } from './preprocessor/index.js';
-
-// Scanners
-export {
-  scanDirectives,
-  scanDeclarations,
-  scanReferences,
-  scanInstances,
-  ScopeTracker,
-} from './scanners/index.js';
-
 // Understander
 export { FileUnderstander, understandFiles } from './understander/index.js';
 
@@ -154,6 +141,9 @@ import { ProjectResolver } from './resolver/index.js';
 import { DependencyGraph } from './analyzer/index.js';
 import { SlangBackend, type SlangBackendOptions, type SlangBackendResult } from './slang/index.js';
 import { mergeIndices, combineFileResults, toResolvedProject, type MergedIndex } from './merge/index.js';
+import { computeCompileOrderId, computeDefineContextId } from '../memory/context-id.js';
+
+const MFCU_TOOLCHAINS = new Set(['quartus-standard', 'vcs', 'modelsim', 'xcelium']);
 
 /**
  * Main entry point for indexing SystemVerilog projects.
@@ -202,6 +192,12 @@ export interface SVIndexerOptions {
    * Default: false
    */
   verbose?: boolean;
+
+  /**
+   * Toolchain identifier to determine compile-order sensitivity.
+   * Examples: 'quartus-standard', 'vcs', 'xcelium'
+   */
+  toolchain?: string;
 }
 
 export class SVIndexer {
@@ -217,6 +213,8 @@ export class SVIndexer {
     this.options = {
       enableSemanticAnalysis: options.enableSemanticAnalysis ?? true,
       slangOptions: options.slangOptions,
+      verbose: options.verbose ?? false,
+      toolchain: options.toolchain,
     };
   }
 
@@ -255,6 +253,10 @@ export class SVIndexer {
     // Parse filelist
     const parseStart = performance.now();
     const recipe = await this.filelistParser.parse(filelistPath);
+    const defineContextId = computeDefineContextId(recipe.defines, recipe.includePaths);
+    const toolchain = this.options.toolchain;
+    const isMFCU = toolchain ? MFCU_TOOLCHAINS.has(toolchain) : false;
+    const compileOrderId = isMFCU ? computeCompileOrderId(recipe.files) : undefined;
     const parseTime = performance.now() - parseStart;
 
     if (this.options.verbose) {
@@ -321,6 +323,8 @@ export class SVIndexer {
           },
         },
         hasSemanticAnalysis: true,
+        defineContextId,
+        compileOrderId,
       };
     }
 
@@ -345,6 +349,8 @@ export class SVIndexer {
     return {
       ...project,
       hasSemanticAnalysis: false,
+      defineContextId,
+      compileOrderId,
     };
   }
 
@@ -424,6 +430,13 @@ export class SVIndexer {
       nestedFilelists: [],
     };
 
+    const defineContextId = recipe
+      ? computeDefineContextId(recipe.defines, recipe.includePaths)
+      : 'default';
+    const toolchain = this.options.toolchain;
+    const isMFCU = toolchain ? MFCU_TOOLCHAINS.has(toolchain) : false;
+    const compileOrderId = recipe && isMFCU ? computeCompileOrderId(recipe.files) : undefined;
+
     // Run Layer A and Layer B in parallel
     const [layerAResults, layerBResult] = await Promise.all([
       this.parseFiles(filePaths),
@@ -454,6 +467,8 @@ export class SVIndexer {
           },
         },
         hasSemanticAnalysis: true,
+        defineContextId,
+        compileOrderId,
       };
     }
 
@@ -469,6 +484,8 @@ export class SVIndexer {
     return {
       ...project,
       hasSemanticAnalysis: false,
+      defineContextId,
+      compileOrderId,
     };
   }
 
