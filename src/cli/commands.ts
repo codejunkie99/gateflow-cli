@@ -16,7 +16,7 @@ import { GateFlowAgent, type ToolContext, type PromptMode, UIAgentCoordinator, t
 import { Verilator } from '../verification/index.js';
 import { FixLoop } from '../verification/fix-loop.js';
 import { WatchManager } from '../watch/index.js';
-import { TerminalRenderer, createRenderer, InputManager, initInputManager } from '../ui/index.js';
+import { TerminalRenderer, createRenderer, InputManager, initInputManager, getAvailableThemes, getCurrentTheme, setCurrentTheme } from '../ui/index.js';
 import { getConfigManager } from '../config/index.js';
 import {
     getToolRegistry,
@@ -320,9 +320,16 @@ export async function chatCommand(
     // Stop status
     ctx.bus.emit({ type: 'token_done' });
 
-    console.log('\n' + chalk.blue.bold('GateFlow') + ' - AI-powered SystemVerilog Assistant');
+    // Load saved theme preference
+    const projectMemory = ctx.memoryService.memory.getMemory();
+    if (projectMemory?.preferences.theme) {
+        setCurrentTheme(projectMemory.preferences.theme);
+    }
+    const theme = getCurrentTheme();
+
+    console.log('\n' + theme.colors.primary.bold('GateFlow') + ' - AI-powered SystemVerilog Assistant');
     if (indexingFailed) {
-        console.log(chalk.yellow('   Warning: Indexing failed. Some features may be limited.'));
+        console.log(theme.colors.warning('   Warning: Indexing failed. Some features may be limited.'));
     } else {
         console.log(`   Indexed ${stats.modules} modules in ${stats.files} files.`);
     }
@@ -347,11 +354,12 @@ export async function chatCommand(
     let running = true;
 
     while (running) {
-        const border = chalk.blue('─'.repeat(60));
+        const currentTheme = getCurrentTheme();
+        const border = currentTheme.colors.border('─'.repeat(60));
         console.log(border);
 
         try {
-            const input = await inputManager.getLine(chalk.blue('> '));
+            const input = await inputManager.getLine(currentTheme.colors.prompt('> '));
             console.log(border);
             console.log('');
             
@@ -401,6 +409,64 @@ export async function chatCommand(
                         console.log(chalk.dim('Valid modes: planning, execution, review, chat'));
                         console.log('');
                     }
+                }
+                continue;
+            }
+
+            // Theme selection command: /theme
+            if (trimmed.toLowerCase().startsWith('/theme')) {
+                const parts = trimmed.split(/\s+/);
+                const currentTheme = getCurrentTheme();
+
+                if (parts.length === 1) {
+                    // Show interactive theme dropdown
+                    const themes = getAvailableThemes();
+                    const themeOptions = themes.map(t => ({
+                        label: `${t.name} [${t.type}]`,
+                        value: t.name,
+                        description: t.name === currentTheme.name ? '(current)' : undefined
+                    }));
+
+                    const selected = await inputManager.selectFromList(
+                        'Select Theme',
+                        themeOptions,
+                        currentTheme.name
+                    );
+
+                    if (selected) {
+                        if (setCurrentTheme(selected.value)) {
+                            // Save to memory
+                            const memory = ctx.memoryService.memory.getMemory();
+                            if (memory) {
+                                memory.preferences.theme = selected.value;
+                                await ctx.memoryService.memory.save();
+                            }
+                            console.log(chalk.green(`Switched to theme: ${selected.value}`));
+                        }
+                    } else {
+                        console.log(chalk.gray('Theme selection cancelled'));
+                    }
+                    console.log('');
+                } else {
+                    // Direct theme name provided
+                    const themeName = parts[1].toLowerCase();
+                    const themes = getAvailableThemes();
+                    const validTheme = themes.find(t => t.name === themeName);
+
+                    if (validTheme) {
+                        setCurrentTheme(themeName);
+                        // Save to memory
+                        const memory = ctx.memoryService.memory.getMemory();
+                        if (memory) {
+                            memory.preferences.theme = themeName;
+                            await ctx.memoryService.memory.save();
+                        }
+                        console.log(chalk.green(`Switched to theme: ${themeName}`));
+                    } else {
+                        console.log(chalk.red(`Unknown theme: ${themeName}`));
+                        console.log(chalk.gray(`Available: ${themes.map(t => t.name).join(', ')}`));
+                    }
+                    console.log('');
                 }
                 continue;
             }

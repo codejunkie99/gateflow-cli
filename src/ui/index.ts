@@ -20,3 +20,6 @@ export * from './block-renderer.js';
 
 // Input management
 export * from './InputManager.js';
+
+// Theme system
+export * from './themes.js';

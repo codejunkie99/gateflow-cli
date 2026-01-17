@@ -17,6 +17,7 @@ import { DiffPreview, colorizeDiff } from '../diff/preview.js';
 import { ToolTree } from './tool-tree.js';
 import { DiffDisplay } from './diff-display.js';
 import { BlockRenderer } from './block-renderer.js';
+import { getCurrentTheme, themed } from './themes.js';
 
 // ============================================================================
 // Types
@@ -152,11 +153,15 @@ export class TerminalRenderer {
     private startSpinner(text: string, symbol?: string): void {
         if (this.inputPaused || !this.options.useSpinner) return;
 
+        const theme = getCurrentTheme();
+        // Map theme to ora color names
+        const spinnerColor = theme.type === 'light' ? 'blue' : 'cyan';
+
         if (!this.spinner) {
             this.spinner = ora({
                 text,
                 spinner: 'dots',
-                color: 'cyan',
+                color: spinnerColor,
                 hideCursor: true
             });
         }
@@ -611,9 +616,9 @@ export class TerminalRenderer {
         this.spinnerFail(message);
         this.clearStatus();
         console.log('');
-        this.log(chalk.red(`ERROR: ${message}`));
+        this.log(themed.error(`ERROR: ${message}`));
         if (code !== undefined) {
-            this.log(chalk.gray(`   Exit code: ${code}`));
+            this.log(themed.muted(`   Exit code: ${code}`));
         }
     }
 
@@ -623,7 +628,7 @@ export class TerminalRenderer {
 
         const duration = Date.now() - this.startTime;
         const status = exitCode === 0 ? 'SUCCESS' : 'FAILED';
-        const color = exitCode === 0 ? chalk.blue : chalk.red;
+        const color = exitCode === 0 ? getCurrentTheme().colors.success : getCurrentTheme().colors.error;
 
         // Show tool call summary if we have any
         if (this.options.useToolTree) {

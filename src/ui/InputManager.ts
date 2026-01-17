@@ -174,6 +174,124 @@ export class InputManager {
     }
 
     /**
+     * Show an interactive selection dropdown
+     * User can navigate with arrow keys and select with Enter
+     */
+    async selectFromList<T extends { label: string; value: string; description?: string }>(
+        title: string,
+        options: T[],
+        currentValue?: string
+    ): Promise<T | null> {
+        return new Promise((resolve) => {
+            // Ensure readline is initialized
+            if (!this.rl) {
+                this.initialize();
+            }
+
+            // Notify renderer to pause spinner
+            this.onPromptStart?.();
+
+            // Ensure stdin is flowing and in raw mode
+            if (process.stdin.isPaused()) {
+                process.stdin.resume();
+            }
+
+            let selectedIndex = currentValue
+                ? options.findIndex(o => o.value === currentValue)
+                : 0;
+            if (selectedIndex < 0) selectedIndex = 0;
+
+            const renderList = () => {
+                // Hide cursor
+                process.stdout.write('\x1B[?25l');
+
+                // Print title
+                console.log(chalk.cyan.bold(`\n${title}`));
+                console.log(chalk.gray('  Use arrow keys to navigate, Enter to select, Esc to cancel\n'));
+
+                // Print options
+                for (let i = 0; i < options.length; i++) {
+                    const opt = options[i];
+                    const isSelected = i === selectedIndex;
+                    const prefix = isSelected ? chalk.cyan('> ') : '  ';
+                    const label = isSelected
+                        ? chalk.cyan.bold(opt.label)
+                        : chalk.white(opt.label);
+                    const desc = opt.description
+                        ? chalk.gray(` - ${opt.description}`)
+                        : '';
+
+                    console.log(`${prefix}${label}${desc}`);
+                }
+            };
+
+            const clearList = () => {
+                // Move cursor up and clear lines
+                const linesToClear = options.length + 4; // title + instructions + blank + options
+                for (let i = 0; i < linesToClear; i++) {
+                    process.stdout.write('\x1B[1A\x1B[2K'); // Move up and clear line
+                }
+                process.stdout.write('\x1B[?25h'); // Show cursor
+            };
+
+            const cleanup = () => {
+                if (process.stdin.isTTY) {
+                    process.stdin.setRawMode(false);
+                }
+                process.stdin.removeListener('data', handleKeypress);
+                this.onPromptEnd?.();
+            };
+
+            const handleKeypress = (data: Buffer) => {
+                const key = data.toString();
+
+                // Arrow up
+                if (key === '\x1B[A' || key === 'k') {
+                    clearList();
+                    selectedIndex = (selectedIndex - 1 + options.length) % options.length;
+                    renderList();
+                }
+                // Arrow down
+                else if (key === '\x1B[B' || key === 'j') {
+                    clearList();
+                    selectedIndex = (selectedIndex + 1) % options.length;
+                    renderList();
+                }
+                // Enter
+                else if (key === '\r' || key === '\n') {
+                    clearList();
+                    cleanup();
+                    resolve(options[selectedIndex]);
+                }
+                // Escape or q
+                else if (key === '\x1B' || key === 'q') {
+                    clearList();
+                    cleanup();
+                    resolve(null);
+                }
+                // Number keys 1-9
+                else if (key >= '1' && key <= '9') {
+                    const index = parseInt(key) - 1;
+                    if (index < options.length) {
+                        clearList();
+                        cleanup();
+                        resolve(options[index]);
+                    }
+                }
+            };
+
+            // Set raw mode to capture individual keypresses
+            if (process.stdin.isTTY) {
+                process.stdin.setRawMode(true);
+            }
+            process.stdin.on('data', handleKeypress);
+
+            // Initial render
+            renderList();
+        });
+    }
+
+    /**
      * Process the prompt queue
      */
     private async processQueue(): Promise<void> {
