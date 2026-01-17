@@ -1,14 +1,22 @@
 /**
  * Terminal Renderer
- * Event-driven terminal output with token buffering
- * 
- * NO SPINNERS - uses simple status lines to avoid stdin/stdout conflicts.
- * This is the Claude Code approach: simple, reliable, no animation conflicts.
+ * Event-driven terminal output with animated spinners, tool tree, and token tracking
+ *
+ * Enhanced with:
+ * - Animated spinners via ora
+ * - Tool call tree display
+ * - Token counter with cost estimation
+ * - Diff preview with syntax highlighting
+ * - Warp-style block rendering
  */
 
 import chalk from 'chalk';
-import type { EventBus, UiEvent, Subscription } from '../events/index.js';
+import ora, { Ora } from 'ora';
+import type { EventBus, UiEvent, Subscription, AgentCompleteEvent } from '../events/index.js';
 import { DiffPreview, colorizeDiff } from '../diff/preview.js';
+import { ToolTree } from './tool-tree.js';
+import { DiffDisplay } from './diff-display.js';
+import { BlockRenderer } from './block-renderer.js';
 
 // ============================================================================
 // Types
@@ -22,6 +30,9 @@ export interface RendererOptions {
     verbose?: boolean;
     timestamps?: boolean;
     jsonMode?: boolean;
+    useSpinner?: boolean;
+    useToolTree?: boolean;
+    showTokens?: boolean;
 }
 
 interface PendingApproval {
@@ -29,6 +40,12 @@ interface PendingApproval {
     action: string;
     details: string;
     diff?: string;
+}
+
+interface TokenUsage {
+    input: number;
+    output: number;
+    cached: number;
 }
 
 // ============================================================================
@@ -49,6 +66,24 @@ export class TerminalRenderer {
     private lastStatusLine: string = '';
     private inputPaused: boolean = false;
 
+    // Enhanced UI components
+    private spinner: Ora | null = null;
+    private spinnerActive: boolean = false;
+    private toolTree: ToolTree = new ToolTree();
+    private diffDisplay: DiffDisplay = new DiffDisplay();
+    private blockRenderer: BlockRenderer = new BlockRenderer();
+
+    // Token tracking
+    private tokenUsage: TokenUsage = { input: 0, output: 0, cached: 0 };
+    private toolCallCount: number = 0;
+
+    // Cost per 1M tokens (Claude 3.5 Sonnet pricing)
+    private readonly pricing = {
+        input: 3.00,    // $3 per 1M input tokens
+        output: 15.00,  // $15 per 1M output tokens
+        cached: 0.30    // $0.30 per 1M cached tokens
+    };
+
     constructor(
         private bus: EventBus,
         options?: RendererOptions
@@ -60,7 +95,10 @@ export class TerminalRenderer {
             bufferSize: options?.bufferSize ?? 100,
             verbose: options?.verbose ?? false,
             timestamps: options?.timestamps ?? false,
-            jsonMode: options?.jsonMode ?? false
+            jsonMode: options?.jsonMode ?? false,
+            useSpinner: options?.useSpinner ?? true,
+            useToolTree: options?.useToolTree ?? true,
+            showTokens: options?.showTokens ?? true
         };
 
         this.diffPreview = new DiffPreview({
@@ -84,6 +122,7 @@ export class TerminalRenderer {
             this.subscription = null;
         }
         this.flushBuffer();
+        this.spinnerStop();
         this.clearStatus();
         if (this.bufferTimer) {
             clearTimeout(this.bufferTimer);
@@ -94,12 +133,168 @@ export class TerminalRenderer {
     /** Pause rendering for input */
     pauseForInput(): void {
         this.inputPaused = true;
+        this.spinnerStop();
         this.clearStatus();
     }
 
     /** Resume after input */
     resumeAfterInput(): void {
         this.inputPaused = false;
+    }
+
+    // ========================================================================
+    // Spinner Management
+    // ========================================================================
+
+    /**
+     * Start or update the spinner with a new message
+     */
+    private startSpinner(text: string, symbol?: string): void {
+        if (this.inputPaused || !this.options.useSpinner) return;
+
+        if (!this.spinner) {
+            this.spinner = ora({
+                text,
+                spinner: 'dots',
+                color: 'cyan',
+                hideCursor: true
+            });
+        }
+
+        if (symbol) {
+            this.spinner.prefixText = symbol;
+        } else {
+            this.spinner.prefixText = '';
+        }
+
+        this.spinner.text = text;
+
+        // Add token suffix if enabled
+        if (this.options.showTokens) {
+            const suffix = this.buildStatusSuffix();
+            if (suffix) {
+                this.spinner.suffixText = suffix;
+            }
+        }
+
+        if (!this.spinnerActive) {
+            this.spinner.start();
+            this.spinnerActive = true;
+        }
+    }
+
+    /**
+     * Stop spinner with success state
+     */
+    private spinnerSucceed(text?: string): void {
+        if (this.spinner && this.spinnerActive) {
+            this.spinner.succeed(text);
+            this.spinnerActive = false;
+        }
+    }
+
+    /**
+     * Stop spinner with failure state
+     */
+    private spinnerFail(text?: string): void {
+        if (this.spinner && this.spinnerActive) {
+            this.spinner.fail(text);
+            this.spinnerActive = false;
+        }
+    }
+
+    /**
+     * Stop spinner without status (just clear it)
+     */
+    private spinnerStop(): void {
+        if (this.spinner && this.spinnerActive) {
+            this.spinner.stop();
+            this.spinnerActive = false;
+        }
+    }
+
+    /**
+     * Update spinner text
+     */
+    private updateSpinnerText(text: string): void {
+        if (this.spinner && this.spinnerActive) {
+            this.spinner.text = text;
+        }
+    }
+
+    // ========================================================================
+    // Token Tracking
+    // ========================================================================
+
+    /**
+     * Format token count (e.g., 1234 -> "1.2k")
+     */
+    private formatTokens(count: number): string {
+        if (count >= 1000000) {
+            return `${(count / 1000000).toFixed(1)}M`;
+        }
+        if (count >= 1000) {
+            return `${(count / 1000).toFixed(1)}k`;
+        }
+        return String(count);
+    }
+
+    /**
+     * Calculate estimated cost
+     */
+    private calculateCost(): number {
+        const inputCost = (this.tokenUsage.input / 1_000_000) * this.pricing.input;
+        const outputCost = (this.tokenUsage.output / 1_000_000) * this.pricing.output;
+        const cachedCost = (this.tokenUsage.cached / 1_000_000) * this.pricing.cached;
+        return inputCost + outputCost + cachedCost;
+    }
+
+    /**
+     * Format cost (e.g., 0.0234 -> "$0.02")
+     */
+    private formatCost(cost: number): string {
+        if (cost < 0.01) {
+            return '<$0.01';
+        }
+        return `$${cost.toFixed(2)}`;
+    }
+
+    /**
+     * Build status suffix with token info
+     */
+    private buildStatusSuffix(): string {
+        const parts: string[] = [];
+
+        // Token counts
+        if (this.tokenUsage.input > 0 || this.tokenUsage.output > 0) {
+            const inputStr = chalk.blue(`\u{2191}${this.formatTokens(this.tokenUsage.input)}`); // ↑
+            const outputStr = chalk.green(`\u{2193}${this.formatTokens(this.tokenUsage.output)}`); // ↓
+            parts.push(`${inputStr} ${outputStr}`);
+        }
+
+        // Cost estimate
+        const cost = this.calculateCost();
+        if (cost > 0) {
+            parts.push(chalk.yellow(this.formatCost(cost)));
+        }
+
+        // Tool call count
+        if (this.toolCallCount > 0) {
+            parts.push(chalk.gray(`${this.toolCallCount} tools`));
+        }
+
+        if (parts.length === 0) return '';
+
+        return chalk.gray(' \u{2502} ') + parts.join(chalk.gray(' \u{2502} ')); // │
+    }
+
+    /**
+     * Reset stats for new run
+     */
+    private resetStats(): void {
+        this.tokenUsage = { input: 0, output: 0, cached: 0 };
+        this.toolCallCount = 0;
+        this.toolTree.clear();
     }
 
     // ========================================================================
@@ -173,7 +368,7 @@ export class TerminalRenderer {
                 this.handleAgentStart(event.agentName, event.task);
                 break;
             case 'agent_complete':
-                this.handleAgentComplete(event.agentName, event.success, event.durationMs);
+                this.handleAgentComplete(event.agentName, event.success, event.durationMs, event);
                 break;
             case 'delegation':
                 this.handleDelegation(event.from, event.to, event.taskType);
@@ -190,7 +385,9 @@ export class TerminalRenderer {
     // ========================================================================
 
     private handleToken(text: string): void {
+        // Stop spinner when streaming starts
         if (!this.isStreaming) {
+            this.spinnerStop();
             this.isStreaming = true;
             this.clearStatus();
         }
@@ -221,7 +418,7 @@ export class TerminalRenderer {
     }
 
     // ========================================================================
-    // Status (Simple text, no spinner)
+    // Status (with spinner)
     // ========================================================================
 
     private handleStatus(phase: string, label: string): void {
@@ -232,7 +429,28 @@ export class TerminalRenderer {
             return;
         }
 
-        this.writeStatus(`${chalk.cyan('•')} ${label}`);
+        // Map phases to spinner symbols (ASCII for compatibility)
+        const phaseSymbols: Record<string, string> = {
+            'thinking': '[?]',
+            'tool': '[>]',
+            'verifying': '[v]',
+            'fixing': '[~]',
+            'indexing': '[i]',
+            'watching': '[w]',
+            'setup': '[s]',
+            'downloading': '[d]',
+            'extracting': '[x]',
+            'executing': '[!]',
+            'memory': '[m]'
+        };
+
+        const symbol = phaseSymbols[phase] || '';
+
+        if (this.options.useSpinner) {
+            this.startSpinner(label, symbol);
+        } else {
+            this.writeStatus(`${chalk.cyan('\u{2022}')} ${label}`); // •
+        }
     }
 
     private writeStatus(text: string): void {
@@ -250,27 +468,55 @@ export class TerminalRenderer {
     }
 
     // ========================================================================
-    // Tool Events
+    // Tool Events (with tree)
     // ========================================================================
 
     private handleToolCall(tool: string, argsSummary: string): void {
+        this.spinnerStop();
         this.clearStatus();
-        this.log(
-            chalk.cyan('•') + ' ' +
-            chalk.blue.bold(tool) +
-            chalk.gray(` ${argsSummary}`)
-        );
+        this.toolCallCount++;
+
+        if (this.options.useToolTree) {
+            // Add to tree and render
+            this.toolTree.addToolCall(tool, argsSummary);
+            const toolLine = this.toolTree.renderToolCallLine(false);
+            if (toolLine) {
+                console.log(toolLine);
+            }
+        } else {
+            this.log(
+                chalk.cyan('\u{2022}') + ' ' + // •
+                chalk.blue.bold(tool) +
+                chalk.gray(` ${argsSummary}`)
+            );
+        }
+
+        // Start spinner for tool execution
+        if (this.options.useSpinner) {
+            this.startSpinner(`Running ${tool}...`);
+        }
     }
 
     private handleToolResult(tool: string, ok: boolean, summary: string, duration?: number): void {
-        const icon = ok ? '✓' : '✗';
-        const color = ok ? chalk.gray : chalk.red;
-        const durationStr = duration ? chalk.gray(` (${duration}ms)`) : '';
-        this.log(chalk.gray('  │ ') + color(`${icon} ${summary}`) + durationStr);
+        this.spinnerStop();
+
+        if (this.options.useToolTree) {
+            // Complete in tree and render result
+            this.toolTree.completeToolCall(ok, summary);
+            const resultLine = this.toolTree.renderResultLine(false);
+            if (resultLine) {
+                console.log(resultLine);
+            }
+        } else {
+            const icon = ok ? '\u{2713}' : '\u{2717}'; // ✓ or ✗
+            const color = ok ? chalk.gray : chalk.red;
+            const durationStr = duration ? chalk.gray(` (${duration}ms)`) : '';
+            this.log(chalk.gray('  \u{2502} ') + color(`${icon} ${summary}`) + durationStr); // │
+        }
     }
 
     // ========================================================================
-    // Diff Preview
+    // Diff Preview (enhanced)
     // ========================================================================
 
     private handleDiffPreview(
@@ -278,9 +524,12 @@ export class TerminalRenderer {
         unifiedDiff: string,
         stats: { added: number; removed: number }
     ): void {
+        this.spinnerStop();
         this.clearStatus();
+
         console.log('');
-        console.log(this.diffPreview.render(path, unifiedDiff, { ...stats, chunks: 1 }));
+        // Use the enhanced diff display for boxed rendering
+        console.log(this.diffDisplay.render(path, unifiedDiff));
     }
 
     // ========================================================================
@@ -293,13 +542,14 @@ export class TerminalRenderer {
         details: string,
         diff?: string
     ): void {
+        this.spinnerStop();
         this.clearStatus();
         this.pendingApproval = { id, action, details, diff };
 
         console.log('');
         console.log(chalk.yellow.bold('Approval Required'));
         console.log(chalk.white(`   ${action}: ${details}`));
-        
+
         if (diff) {
             console.log('');
             console.log(colorizeDiff(diff));
@@ -358,6 +608,7 @@ export class TerminalRenderer {
     // ========================================================================
 
     private handleError(message: string, code?: number): void {
+        this.spinnerFail(message);
         this.clearStatus();
         console.log('');
         this.log(chalk.red(`ERROR: ${message}`));
@@ -367,20 +618,39 @@ export class TerminalRenderer {
     }
 
     private handleFinal(summary: string, filesModified: string[], exitCode: number): void {
+        this.spinnerStop();
         this.clearStatus();
-        
+
         const duration = Date.now() - this.startTime;
         const status = exitCode === 0 ? 'SUCCESS' : 'FAILED';
         const color = exitCode === 0 ? chalk.blue : chalk.red;
 
+        // Show tool call summary if we have any
+        if (this.options.useToolTree) {
+            const stats = this.toolTree.getStats();
+            if (stats.total > 0) {
+                console.log(
+                    chalk.gray(`\n\u{2500}\u{2500}\u{2500} ${stats.total} tool calls: `) + // ───
+                    chalk.green(`${stats.success} \u{2713}`) + // ✓
+                    (stats.failed > 0 ? chalk.red(` ${stats.failed} \u{2717}`) : '') // ✗
+                );
+            }
+        }
+
         console.log('');
-        console.log(color.bold(`${status}: ${summary}`));
-        
+
+        // Build final status with token info
+        const suffix = this.options.showTokens ? this.buildStatusSuffix() : '';
+        console.log(color.bold(`${status}: ${summary}`) + suffix);
+
         if (filesModified.length > 0) {
             console.log(chalk.gray(`   Modified: ${filesModified.join(', ')}`));
         }
-        
+
         console.log(chalk.gray(`   Duration: ${this.formatDuration(duration)}`));
+
+        // Reset for next run
+        this.resetStats();
     }
 
     // ========================================================================
@@ -411,10 +681,13 @@ export class TerminalRenderer {
     // ========================================================================
 
     private handleSimStage(stage: string, status: string, message?: string): void {
-        this.clearStatus();
-        const prefix = status === 'started' ? '>' : status === 'completed' ? '+' : '-';
-        const color = status === 'failed' ? chalk.red : status === 'completed' ? chalk.blue : chalk.cyan;
-        console.log(color(`${prefix} ${stage}${message ? ': ' + message : ''}`));
+        if (status === 'started') {
+            this.startSpinner(`${stage}${message ? ': ' + message : ''}`, '[!]');
+        } else if (status === 'completed') {
+            this.spinnerSucceed(`${stage} complete`);
+        } else if (status === 'failed') {
+            this.spinnerFail(`${stage} failed${message ? ': ' + message : ''}`);
+        }
     }
 
     private handlePrereqStage(prereq: string, stage: string, status: string, message?: string): void {
@@ -428,27 +701,32 @@ export class TerminalRenderer {
 
         if (stage === 'checking') {
             if (status === 'started') {
-                // Show inline status for checking
-                this.writeStatus(`Checking ${displayName}...`);
+                this.startSpinner(`Checking ${displayName}...`, '[?]');
             } else if (status === 'completed') {
-                this.clearStatus();
-                console.log(chalk.blue(`+ ${displayName}`) + (message ? chalk.gray(` (${message})`) : ''));
+                this.spinnerSucceed(`${displayName}${message ? ` (${message})` : ''}`);
             } else if (status === 'failed') {
-                this.clearStatus();
-                console.log(chalk.red(`- ${displayName}`) + (message ? chalk.gray(` (${message})`) : ''));
+                this.spinnerFail(`${displayName}${message ? ` (${message})` : ''}`);
             }
         } else {
             // For other stages (detecting, installing, verifying, manual)
-            const prefix = status === 'started' ? '>' : status === 'completed' ? '+' : '-';
-            const color = status === 'failed' ? chalk.red : status === 'completed' ? chalk.blue : chalk.cyan;
-            this.clearStatus();
-            console.log(color(`${prefix} ${displayName}: ${stage}`) + (message ? chalk.gray(` ${message}`) : ''));
+            if (status === 'started') {
+                this.startSpinner(`${displayName}: ${stage}${message ? ` ${message}` : ''}`, '[*]');
+            } else if (status === 'completed') {
+                this.spinnerSucceed(`${displayName}: ${stage}`);
+            } else if (status === 'failed') {
+                this.spinnerFail(`${displayName}: ${stage}${message ? ` ${message}` : ''}`);
+            }
         }
     }
 
     private handleSimProgress(stage: string, percent: number, message: string): void {
-        const bar = this.makeProgressBar(percent);
-        this.writeStatus(`${stage} ${bar} ${message}`);
+        if (this.options.useSpinner && this.spinner && this.spinnerActive) {
+            const bar = this.makeProgressBar(percent);
+            this.spinner.text = `${stage} ${bar} ${message}`;
+        } else {
+            const bar = this.makeProgressBar(percent);
+            this.writeStatus(`${stage} ${bar} ${message}`);
+        }
     }
 
     // ========================================================================
@@ -460,7 +738,7 @@ export class TerminalRenderer {
         signalCount: number,
         timeRange: { start: bigint; end: bigint }
     ): void {
-        this.clearStatus();
+        this.spinnerSucceed('Waveform loaded');
         const fileName = path.split(/[/\\]/).pop() ?? path;
         const duration = timeRange.end - timeRange.start;
 
@@ -474,7 +752,7 @@ export class TerminalRenderer {
         coverage: { percentage: number },
         summary: string
     ): void {
-        this.clearStatus();
+        this.spinnerStop();
 
         console.log(chalk.cyan('~ ') + chalk.white.bold('Waveform Analysis'));
 
@@ -527,19 +805,39 @@ export class TerminalRenderer {
     }
 
     private handleAgentStart(agentName: string, task: string): void {
-        this.clearStatus();
+        this.spinnerStop();
         console.log(
             chalk.cyan('[') +
             chalk.white.bold(agentName) +
             chalk.cyan('] ') +
             chalk.white(task)
         );
+        this.startSpinner(`${agentName} working...`, '[A]');
     }
 
-    private handleAgentComplete(agentName: string, success: boolean, durationMs: number): void {
+    private handleAgentComplete(agentName: string, success: boolean, durationMs: number, event?: AgentCompleteEvent): void {
+        // Update token usage from event
+        if (event) {
+            if (event.inputTokens) {
+                this.tokenUsage.input += event.inputTokens;
+            }
+            if (event.outputTokens) {
+                this.tokenUsage.output += event.outputTokens;
+            }
+            if (event.cachedTokens) {
+                this.tokenUsage.cached += event.cachedTokens;
+            }
+        }
+
         const statusIcon = success ? '[OK]' : '[FAIL]';
         const statusColor = success ? chalk.green : chalk.red;
         const durationStr = this.formatDuration(durationMs);
+
+        if (success) {
+            this.spinnerSucceed(`${agentName} (${durationStr})`);
+        } else {
+            this.spinnerFail(`${agentName} (${durationStr})`);
+        }
 
         console.log(
             chalk.gray('  ') +
@@ -594,6 +892,45 @@ export class TerminalRenderer {
             typeof value === 'bigint' ? value.toString() : value
         );
         console.log(json);
+    }
+
+    // ========================================================================
+    // Public Accessors
+    // ========================================================================
+
+    /**
+     * Get the tool tree instance for external use
+     */
+    getToolTree(): ToolTree {
+        return this.toolTree;
+    }
+
+    /**
+     * Get the block renderer instance for external use
+     */
+    getBlockRenderer(): BlockRenderer {
+        return this.blockRenderer;
+    }
+
+    /**
+     * Get the diff display instance for external use
+     */
+    getDiffDisplay(): DiffDisplay {
+        return this.diffDisplay;
+    }
+
+    /**
+     * Get current token usage
+     */
+    getTokenUsage(): TokenUsage {
+        return { ...this.tokenUsage };
+    }
+
+    /**
+     * Get tool call count
+     */
+    getToolCallCount(): number {
+        return this.toolCallCount;
     }
 }
 
