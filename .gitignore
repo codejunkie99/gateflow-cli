@@ -104,3 +104,4 @@ test/
 scripts/test-*.ts
 ralph-claude-code/
 docs/
+CLAUDE.md
