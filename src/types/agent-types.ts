@@ -114,6 +114,62 @@ export interface CreateAgentOptions {
 }
 
 // ============================================================================
+// Runtime Call Options (per-request overrides)
+// ============================================================================
+
+/**
+ * Approval policy for tool execution
+ */
+export type ApprovalPolicy = 'always_ask' | 'auto_approve' | 'deny_writes';
+
+/**
+ * Stop condition function type (imported from stop-conditions.ts)
+ */
+export type StopConditionFn = (context: {
+    steps?: Array<{
+        toolCalls?: Array<{ toolName: string; args: unknown }>;
+        toolResults?: Array<{ toolName: string; result: unknown }>;
+    }>;
+    usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number };
+    finishReason?: string;
+}) => boolean;
+
+/**
+ * Per-request runtime options for agent execution.
+ * These override the defaults set during agent creation.
+ *
+ * @example
+ * // Run with custom step limit and token budget
+ * agent.run("Fix all lint errors", {
+ *     stepLimit: 50,
+ *     maxTokens: 8000,
+ *     stopConditions: [tokenBudgetExhausted(100000)]
+ * });
+ */
+export interface RuntimeCallOptions {
+    /** Abort signal for cancellation */
+    signal?: AbortSignal;
+
+    /** Override step limit for this request */
+    stepLimit?: number;
+
+    /** Override max output tokens for this request */
+    maxTokens?: number;
+
+    /** Override temperature for this request */
+    temperature?: number;
+
+    /** Additional stop conditions to combine with defaults */
+    stopConditions?: StopConditionFn[];
+
+    /** Override approval policy for this request */
+    approvalPolicy?: ApprovalPolicy;
+
+    /** Custom metadata to pass through the request */
+    metadata?: Record<string, unknown>;
+}
+
+// ============================================================================
 // UI Message Types (for type-safe streaming)
 // ============================================================================
 

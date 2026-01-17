@@ -10,6 +10,7 @@
  */
 
 import { generateObject, streamText, stepCountIs } from 'ai';
+import { createModeStopCondition, type StopCondition } from '../stop-conditions.js';
 import { createAnthropicClient } from '../anthropic-client.js';
 import type { EventBus } from '../../events/index.js';
 import type {
@@ -191,13 +192,19 @@ Select the most appropriate agent and describe the task.`
         try {
             let lastUsage: { inputTokens?: number; outputTokens?: number } | undefined;
 
+            // Use mode-aware stop condition based on worker's name
+            const workerStopCondition = this.getWorkerStopCondition(
+                worker.name,
+                worker.stepLimit || 10
+            );
+
             const result = await streamText({
                 model: createAnthropicClient(this.modelName) as any,
                 system: worker.system,
                 prompt: routing.taskDescription,
                 tools: worker.tools,
                 toolChoice: worker.toolChoice,
-                stopWhen: stepCountIs(worker.stepLimit || 10),
+                stopWhen: workerStopCondition,
                 onStepFinish: (step) => {
                     this.thinkingChain.onStepFinish(step);
                 },
@@ -516,13 +523,19 @@ Select the most appropriate agent and describe the task.`
         let lastUsage: { inputTokens?: number; outputTokens?: number } | undefined;
         let stepCount = 0;
 
+        // Use mode-aware stop condition based on worker's name
+        const workerStopCondition = this.getWorkerStopCondition(
+            worker.name,
+            worker.stepLimit || 10
+        );
+
         const result = await streamText({
             model: createAnthropicClient(this.modelName) as any,
             system: worker.system,
             prompt: enhancedPrompt,
             tools: worker.tools,
             toolChoice: worker.toolChoice,
-            stopWhen: stepCountIs(worker.stepLimit || 10),
+            stopWhen: workerStopCondition,
             abortSignal: signal,
             onStepFinish: (step) => {
                 stepCount += 1;
@@ -1217,5 +1230,27 @@ Select the most appropriate agent and describe the task.`
         if (obj.lines !== undefined) return `${obj.lines} lines`;
 
         return 'Done';
+    }
+
+    /**
+     * Get the appropriate stop condition for a worker based on its name.
+     * Uses mode-aware stop conditions for enhanced stopping behavior.
+     *
+     * @param agentName - The name of the agent (understanding, codegen, testbench, debug, refactoring)
+     * @param stepLimit - Maximum steps before stopping
+     * @returns Stop condition function
+     */
+    private getWorkerStopCondition(agentName: string | undefined, stepLimit: number): StopCondition {
+        // Map agent names to prompt modes for stop condition selection
+        const agentNameToMode: Record<string, string> = {
+            understanding: 'general',
+            codegen: 'generate',
+            testbench: 'testbench',
+            debug: 'debug',
+            refactoring: 'refactoring'
+        };
+
+        const mode = agentName ? agentNameToMode[agentName] ?? 'general' : 'general';
+        return createModeStopCondition(mode, stepLimit);
     }
 }
