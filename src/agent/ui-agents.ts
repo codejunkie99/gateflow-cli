@@ -11,7 +11,7 @@
 import { generateObject, generateText, streamText } from 'ai';
 import { z } from 'zod';
 import type { Tool } from 'ai';
-import { createAnthropicClient } from './anthropic-client.js';
+import { createModel, parseModelString } from './model-provider.js';
 import type { EventBus } from '../events/index.js';
 import {
     combinePrepareSteps,
@@ -104,11 +104,18 @@ export abstract class UIAgent {
     }
 
     /**
+     * Update the model used by this agent.
+     */
+    setModel(model: string): void {
+        this.model = model;
+    }
+
+    /**
      * Check if the agent should transition to a different mode.
      */
     async shouldTransition(userMessage: string): Promise<TransitionRequest | null> {
         const { object } = await generateObject({
-            model: createAnthropicClient(this.model) as any,
+            model: createModel(parseModelString(this.model)) as any,
             schema: TransitionSchema,
             prompt: `Current mode: ${this.mode}
 Current context: ${JSON.stringify(this.state.context)}
@@ -182,7 +189,7 @@ ${this.state.context.plan ? this.state.context.plan.map((s, i) => `${i + 1}. ${s
      */
     async createPlan(task: string): Promise<z.infer<typeof PlanSchema>> {
         const { object: plan } = await generateObject({
-            model: createAnthropicClient(this.model) as any,
+            model: createModel(parseModelString(this.model)) as any,
             schema: PlanSchema,
             system: this.systemPrompt,
             prompt: `Create a detailed plan for this task:
@@ -380,7 +387,7 @@ export class UIAgentCoordinator {
 
         // Generate response with current agent
         const { text } = await generateText({
-            model: createAnthropicClient(this.currentAgent['model']) as any,
+            model: createModel(parseModelString(this.currentAgent['model'])) as any,
             system: this.currentAgent.systemPrompt,
             prompt: userMessage
         });
@@ -440,6 +447,15 @@ export class UIAgentCoordinator {
         const agent = this.agents.get(mode);
         if (agent) {
             this.currentAgent = agent;
+        }
+    }
+
+    /**
+     * Update the model for all agents.
+     */
+    setModel(model: string): void {
+        for (const agent of this.agents.values()) {
+            agent.setModel(model);
         }
     }
 }

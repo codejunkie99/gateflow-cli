@@ -8,8 +8,8 @@
  * 3. Support both current streamText and future ToolLoopAgent patterns
  */
 
-import { stepCountIs, type Tool } from 'ai';
-import { createAnthropicClient } from './anthropic-client.js';
+import { stepCountIs, type Tool, type LanguageModel } from 'ai';
+import { createModel, parseModelString, type ModelConfig } from './model-provider.js';
 import { getToolSpecs, createToolExecutors, TOOL_APPROVAL_CONFIG, type ToolContext, type ToolSpec } from './tools.js';
 import { getSystemPrompt, type PromptMode } from './prompts.js';
 import type { CreateAgentOptions } from '../types/agent-types.js';
@@ -37,14 +37,16 @@ export interface ApprovalAwareTool {
  */
 export interface AgentBundle {
     /** Model instance */
-    model: ReturnType<typeof createAnthropicClient>;
+    model: LanguageModel;
+    /** Model configuration (provider + model name) */
+    modelConfig: ModelConfig;
     /** System prompt */
     instructions: string;
     /** Tools with approval-aware execute functions */
     tools: Record<string, Tool>;
     /** Stop condition - can be composed with stopWhenAny/stopWhenAll */
     stopWhen: StopCondition;
-    /** Model name for reference */
+    /** Model name for reference (format: provider/model) */
     modelName: string;
     /** Current mode */
     mode: PromptMode;
@@ -76,9 +78,13 @@ export function createAgentBundle(
     const {
         mode,
         model = 'claude-sonnet-4-20250514',
+        modelConfig: providedModelConfig,
         stepLimit = 25,
         autoApprove = false,
     } = options;
+
+    // Resolve model config: use provided config or parse from model string
+    const modelConfig: ModelConfig = providedModelConfig ?? parseModelString(model);
 
     const specs = getToolSpecs();
     const executors = createToolExecutors(toolContext);
@@ -125,12 +131,13 @@ export function createAgentBundle(
     }
 
     return {
-        model: createAnthropicClient(model) as ReturnType<typeof createAnthropicClient>,
+        model: createModel(modelConfig),
+        modelConfig,
         instructions: getSystemPrompt(mode),
         tools,
         // Use mode-aware stop condition (e.g., lint_fix stops when lint passes)
         stopWhen: createModeStopCondition(mode, stepLimit),
-        modelName: model,
+        modelName: `${modelConfig.provider}/${modelConfig.model}`,
         mode,
         autoApprove,
     };

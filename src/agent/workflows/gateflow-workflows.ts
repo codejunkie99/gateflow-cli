@@ -7,7 +7,7 @@
 
 import { generateText, generateObject } from 'ai';
 import { z } from 'zod';
-import { createAnthropicClient } from '../anthropic-client.js';
+import { createModel, parseModelString } from '../model-provider.js';
 import {
     evaluatorOptimizer,
     executeChain,
@@ -93,7 +93,7 @@ export async function lintFixWorkflow(
         lintFunction
     } = config;
 
-    const client = createAnthropicClient(model);
+    const client = createModel(parseModelString(model));
     const fixesApplied: string[] = [];
     const originalCode = code;
 
@@ -206,7 +206,7 @@ export async function moduleGenerationWorkflow(
         qualityThreshold = 8
     } = config ?? {};
 
-    const client = createAnthropicClient(model);
+    const client = createModel(parseModelString(model));
 
     const QualitySchema = z.object({
         score: z.number().min(1).max(10),
@@ -380,7 +380,7 @@ export async function testbenchWorkflow(
         model = 'claude-sonnet-4-20250514'
     } = config;
 
-    const client = createAnthropicClient(model);
+    const client = createModel(parseModelString(model));
 
     // Step 1: Analyze the module
     interface AnalysisResult {

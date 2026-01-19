@@ -7,7 +7,7 @@
 
 import { generateObject } from 'ai';
 import { z } from 'zod';
-import { createAnthropicClient } from '../anthropic-client.js';
+import { createModel, parseModelString } from '../model-provider.js';
 import {
     executeChain,
     executeParallel,
@@ -110,7 +110,7 @@ export async function classifyWorkflow(
     context?: { hasLintErrors?: boolean; hasCode?: boolean; fileName?: string },
     model: string = 'claude-sonnet-4-20250514'
 ): Promise<WorkflowSelection> {
-    const client = createAnthropicClient(model);
+    const client = createModel(parseModelString(model));
 
     const { object } = await generateObject({
         model: client as any,
@@ -378,7 +378,7 @@ async function executeIterativeImproveWorkflow(
     selection: WorkflowSelection,
     model: string
 ): Promise<WorkflowResult> {
-    const client = createAnthropicClient(model);
+    const client = createModel(parseModelString(model));
     const { generateText, generateObject } = await import('ai');
 
     try {
@@ -443,7 +443,7 @@ async function executeParallelAnalysisWorkflow(
     model: string
 ): Promise<WorkflowResult> {
     const { generateText } = await import('ai');
-    const client = createAnthropicClient(model);
+    const client = createModel(parseModelString(model));
 
     const perspectives = ['technical', 'practical', 'alternative'];
 
@@ -487,7 +487,7 @@ async function executeSequentialWorkflow(
     model: string
 ): Promise<WorkflowResult> {
     const { generateText, generateObject } = await import('ai');
-    const client = createAnthropicClient(model);
+    const client = createModel(parseModelString(model));
 
     try {
         // First, break down into steps
@@ -536,7 +536,7 @@ async function executeSimpleGeneration(
     model: string
 ): Promise<WorkflowResult> {
     const { generateText } = await import('ai');
-    const client = createAnthropicClient(model);
+    const client = createModel(parseModelString(model));
 
     try {
         const { text } = await generateText({

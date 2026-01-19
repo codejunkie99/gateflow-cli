@@ -14,7 +14,7 @@
 
 import { generateText, generateObject, streamText } from 'ai';
 import { z, type ZodSchema } from 'zod';
-import { createAnthropicClient } from '../anthropic-client.js';
+import { createModel, parseModelString } from '../model-provider.js';
 
 // ============================================================================
 // Types
@@ -195,7 +195,7 @@ export async function generateWithQualityCheck<TQuality extends Record<string, u
         maxRetries = 2
     } = config;
 
-    const client = createAnthropicClient(model);
+    const client = createModel(parseModelString(model));
 
     // Initial generation
     const { text: initialOutput } = await generateText({
@@ -327,7 +327,7 @@ export async function parallelReview<TReview extends Record<string, unknown>>(
     summary?: string;
 }> {
     const { model = 'claude-sonnet-4-20250514', perspectives, reviewSchema, summarize } = config;
-    const client = createAnthropicClient(model);
+    const client = createModel(parseModelString(model));
 
     // Parallel review calls
     const reviewPromises = perspectives.map(async (perspective) => {
@@ -449,7 +449,7 @@ export async function translateWithFeedback(
         qualityThreshold = 8
     } = config ?? {};
 
-    const client = createAnthropicClient(model);
+    const client = createModel(parseModelString(model));
 
     const EvaluationSchema = z.object({
         qualityScore: z.number().min(1).max(10),
@@ -571,7 +571,7 @@ export async function routeByClassification<
     output: TOutput;
 }> {
     const { model = 'claude-sonnet-4-20250514', routes, classificationPrompt, handlers } = config;
-    const client = createAnthropicClient(model);
+    const client = createModel(parseModelString(model));
 
     // Create dynamic schema for routes
     const ClassificationSchema = z.object({
@@ -638,7 +638,7 @@ export async function routeByComplexity(
         system
     } = config;
 
-    const classifier = createAnthropicClient(classifierModel);
+    const classifier = createModel(parseModelString(classifierModel));
 
     // Classify complexity
     const { object: complexity } = await generateObject({
@@ -660,7 +660,7 @@ Consider:
 
     // Select model based on complexity
     const selectedModel = complexity.score >= complexityThreshold ? complexModel : simpleModel;
-    const client = createAnthropicClient(selectedModel);
+    const client = createModel(parseModelString(selectedModel));
 
     // Generate response with selected model
     const { text: response } = await generateText({

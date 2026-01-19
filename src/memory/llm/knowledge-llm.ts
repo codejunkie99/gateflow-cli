@@ -5,7 +5,7 @@
 
 import { generateObject } from 'ai';
 import { z } from 'zod';
-import { createAnthropicClient } from '../../agent/anthropic-client.js';
+import { createModel, parseModelString } from '../../agent/model-provider.js';
 import type { KnowledgeItem, KnowledgeLlmConfig } from '../knowledge-types.js';
 
 type EnrichmentResult = {
@@ -149,7 +149,7 @@ export class KnowledgeLlmService {
 
         try {
             const { object } = await generateObject({
-                model: createAnthropicClient(this.modelName) as any,
+                model: createModel(parseModelString(this.modelName)) as any,
                 schema: z.object({
                     keywords: z.array(z.string()).max(10),
                     concepts: z.array(z.string()).max(10).optional(),
@@ -207,7 +207,7 @@ Return JSON with:
         this.inflightQueries.add(query);
         try {
             const { object } = await generateObject({
-                model: createAnthropicClient(this.modelName) as any,
+                model: createModel(parseModelString(this.modelName)) as any,
                 schema: z.object({
                     terms: z.array(z.string()).max(10)
                 }),
@@ -250,7 +250,7 @@ Return JSON with:
 - summary: one-sentence summary (<= 200 chars)`;
 
         const { object } = await generateObject({
-            model: createAnthropicClient(this.modelName) as any,
+            model: createModel(parseModelString(this.modelName)) as any,
             schema: z.object({
                 tags: z.array(z.string()).max(12),
                 summary: z.string().max(200)

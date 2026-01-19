@@ -5,6 +5,7 @@
 
 import { z } from 'zod';
 import type { PromptMode } from '../agent/prompts.js';
+import type { ModelConfig } from '../agent/model-provider.js';
 
 // ============================================================================
 // Tool Approval Types
@@ -105,8 +106,10 @@ export type StreamPartType =
 export interface CreateAgentOptions {
     /** Execution mode (affects system prompt) */
     mode: PromptMode;
-    /** Model name (default: claude-sonnet-4-20250514) */
+    /** Model name (default: claude-sonnet-4-20250514) - can be "model" or "provider/model" */
     model?: string;
+    /** Model configuration (provider + model name) - takes precedence over model string */
+    modelConfig?: ModelConfig;
     /** Maximum steps for tool loop (default: 25, used with stopWhen: stepCountIs()) */
     stepLimit?: number;
     /** Whether to auto-approve all tool calls */
