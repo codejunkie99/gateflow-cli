@@ -10,7 +10,13 @@
 
 import { streamText, generateObject, stepCountIs, type StepResult, type Tool, type ModelMessage } from 'ai';
 import { z } from 'zod';
-import { createModel, parseModelString, type ModelConfig } from './model-provider.js';
+import {
+    createModel,
+    parseModelString,
+    getVariantProviderOptions,
+    type ModelConfig,
+    type ModelConfigWithVariant,
+} from './model-provider.js';
 import type { EventBus } from '../events/index.js';
 import type { ToolContext } from './tools.js';
 import { createToolExecutors, getToolSpecs as getToolDefinitions, TOOL_APPROVAL_CONFIG } from './tools.js';
@@ -59,7 +65,7 @@ import {
 
 export interface AgentConfig {
     model: string;
-    modelConfig?: ModelConfig;
+    modelConfig?: ModelConfigWithVariant;
     maxTokens: number;
     temperature: number;
     maxToolCalls: number;
@@ -257,9 +263,12 @@ export class GateFlowAgent {
      * Set the model configuration for runtime switching.
      * Invalidates the agent bundle and orchestrator to force recreation with new model.
      */
-    setModelConfig(config: ModelConfig): void {
+    setModelConfig(config: ModelConfigWithVariant): void {
         this.config.modelConfig = config;
-        this.config.model = `${config.provider}/${config.model}`;
+        // Build model string with optional variant suffix
+        this.config.model = config.variant
+            ? `${config.provider}/${config.model}:${config.variant}`
+            : `${config.provider}/${config.model}`;
         this.agentBundle = null; // Force bundle recreation
         // Reinitialize orchestrator with new model
         this.initializeOrchestrator();
@@ -268,7 +277,7 @@ export class GateFlowAgent {
     /**
      * Get the current model configuration.
      */
-    getModelConfig(): ModelConfig | undefined {
+    getModelConfig(): ModelConfigWithVariant | undefined {
         return this.config.modelConfig;
     }
 
@@ -446,6 +455,10 @@ export class GateFlowAgent {
             // AI SDK 6: Use generateObject for complexity detection
             // Ensure modelConfig is defined (fallback to parsing model string)
             const effectiveModelConfig = this.config.modelConfig ?? parseModelString(this.config.model);
+            const complexityVariantOptions = getVariantProviderOptions(
+                effectiveModelConfig.provider,
+                effectiveModelConfig.variant
+            );
             const { object: complexity } = await generateObject({
                 model: createModel(effectiveModelConfig) as any,
                 schema: ComplexityDetectionSchema,
@@ -459,7 +472,9 @@ Multi-agent is needed for:
 - Requests with explicit planning language
 - Multi-step operations requiring different agents
 
-Return needsMultiAgent: true only for genuinely complex requests.`
+Return needsMultiAgent: true only for genuinely complex requests.`,
+                // Apply variant options for consistency
+                ...complexityVariantOptions,
             });
 
             // Check if request matches a specialized workflow pattern
@@ -542,6 +557,7 @@ ${contextBlock}
             const prepareStep = this.createPrepareStep(mode);
 
             // AI SDK 6: Use bundle configuration with stopWhen and runtime overrides
+            // Spread variantOptions to apply extended thinking, reasoning effort, etc.
             const result = streamText({
                 model: bundle.model as any,
                 system: systemPrompt,
@@ -552,6 +568,8 @@ ${contextBlock}
                 abortSignal: runtime?.signal ?? options?.signal,
                 stopWhen: effectiveStopWhen,  // AI SDK handles the loop automatically
                 prepareStep: prepareStep as any,  // Dynamic step control (cast for AI SDK compatibility)
+                // Apply variant options (extended thinking for Anthropic, reasoning effort for OpenAI, etc.)
+                ...bundle.variantOptions,
 
                 // Thinking visibility via onStepFinish
                 // Note: Tool call/result events are emitted from the stream loop for real-time updates

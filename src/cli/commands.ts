@@ -51,6 +51,12 @@ import {
     type ProviderName
 } from '../agent/model-provider.js';
 import {
+    getSupportedVariants,
+    getVariantDescription,
+    type VariantName,
+    type ModelConfigWithVariant
+} from '../agent/model-variants.js';
+import {
     showSectionedMenu,
     showTextInput,
     type MenuSection,
@@ -1162,6 +1168,7 @@ interface ModelSelectorResult {
     switched: boolean;
     cancelled: boolean;
     model?: string;
+    variant?: VariantName;
 }
 
 interface ModelMenuItem {
@@ -1302,11 +1309,60 @@ async function showInteractiveModelSelector(
         setProviderApiKey(selectedItem.provider, apiKey);
     }
 
+    // Check if provider supports variants (reasoning modes)
+    let selectedVariant: VariantName | undefined;
+    const supportedVariants = getSupportedVariants(selectedItem.provider);
+
+    if (supportedVariants.length > 0) {
+        // Build variant menu items
+        const variantItems: MenuItem<VariantName | null>[] = [
+            {
+                label: 'Default (no variant)',
+                value: null,
+                description: chalk.dim('Standard model behavior')
+            },
+            ...supportedVariants.map(variant => ({
+                label: variant.charAt(0).toUpperCase() + variant.slice(1),
+                value: variant as VariantName | null,
+                description: chalk.dim(getVariantDescription(variant))
+            }))
+        ];
+
+        // Pause renderer for variant selection
+        renderer.pauseForInput();
+
+        console.log('');
+        const variantResult = await showSectionedMenu<VariantName | null>(
+            [{
+                title: 'Select Reasoning Mode',
+                headerColor: chalk.cyan,
+                items: variantItems
+            }],
+            {
+                title: `${PROVIDERS[selectedItem.provider].name} supports extended thinking/reasoning`,
+                showHelp: true,
+                maxVisibleItems: 10,
+                onPromptStart: () => renderer.pauseForInput(),
+                onPromptEnd: () => renderer.resumeAfterInput()
+            }
+        );
+
+        // Resume renderer
+        renderer.resumeAfterInput();
+
+        if (!variantResult.selected) {
+            return { switched: false, cancelled: true };
+        }
+
+        selectedVariant = variantResult.value ?? undefined;
+    }
+
     // Switch to the selected model
     try {
-        const newConfig: ModelConfig = {
+        const newConfig: ModelConfigWithVariant = {
             provider: selectedItem.provider,
-            model: selectedItem.model
+            model: selectedItem.model,
+            variant: selectedVariant
         };
 
         // Validate the model can be created
@@ -1314,12 +1370,16 @@ async function showInteractiveModelSelector(
 
         // Update agent and UI coordinator
         agent.setModelConfig(newConfig);
-        uiCoordinator.setModel(`${newConfig.provider}/${newConfig.model}`);
+        const modelString = selectedVariant
+            ? `${newConfig.provider}/${newConfig.model}:${selectedVariant}`
+            : `${newConfig.provider}/${newConfig.model}`;
+        uiCoordinator.setModel(modelString);
 
         return {
             switched: true,
             cancelled: false,
-            model: `${newConfig.provider}/${newConfig.model}`
+            model: modelString,
+            variant: selectedVariant
         };
     } catch (error) {
         console.log(chalk.red(`\nFailed to switch model: ${error instanceof Error ? error.message : error}`));

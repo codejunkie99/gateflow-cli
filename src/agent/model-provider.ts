@@ -937,3 +937,45 @@ export function hasApiKey(provider: ProviderName): boolean {
     if (!providerInfo) return false;
     return Boolean(process.env[providerInfo.envVar]);
 }
+
+// ============================================================================
+// Model + Variant Bundle Helper
+// ============================================================================
+
+/**
+ * Result of creating a model with variant options.
+ * Used to simplify calls to generateText/streamText/generateObject.
+ */
+export interface ModelWithVariant {
+    /** The language model instance */
+    model: LanguageModel;
+    /** Provider options to spread into API calls */
+    variantOptions: Record<string, unknown>;
+    /** Parsed model configuration */
+    config: ModelConfigWithVariant;
+}
+
+/**
+ * Parse a model string and create both the model and variant options.
+ *
+ * This is a convenience function that combines parseModelString, createModel,
+ * and getVariantProviderOptions into a single call.
+ *
+ * @param modelSpec - Model specification string (e.g., "anthropic/claude-sonnet-4:high")
+ * @returns Object with model, variantOptions, and parsed config
+ *
+ * @example
+ * const { model, variantOptions } = createModelWithVariant("anthropic/claude-sonnet-4:high");
+ * await generateText({
+ *   model,
+ *   prompt: "Hello",
+ *   ...variantOptions  // Applies extended thinking for Anthropic
+ * });
+ */
+export function createModelWithVariant(modelSpec: string): ModelWithVariant {
+    const config = parseModelString(modelSpec);
+    const model = createModel(config);
+    const variantOptions = getVariantProviderOptions(config.provider, config.variant);
+
+    return { model, variantOptions, config };
+}

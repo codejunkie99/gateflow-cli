@@ -7,7 +7,7 @@
 
 import { generateText, generateObject } from 'ai';
 import { z } from 'zod';
-import { createModel, parseModelString } from '../model-provider.js';
+import { createModelWithVariant } from '../model-provider.js';
 import {
     evaluatorOptimizer,
     executeChain,
@@ -93,7 +93,7 @@ export async function lintFixWorkflow(
         lintFunction
     } = config;
 
-    const client = createModel(parseModelString(model));
+    const { model: client, variantOptions } = createModelWithVariant(model);
     const fixesApplied: string[] = [];
     const originalCode = code;
 
@@ -116,7 +116,8 @@ ${initialErrors.map(e => `- ${e}`).join('\n')}
 Code:
 \`\`\`systemverilog
 ${code}
-\`\`\``
+\`\`\``,
+                    ...variantOptions
                 });
 
                 // Extract code from markdown if present
@@ -151,7 +152,8 @@ ${evaluation.issues.map(e => `- ${e}`).join('\n')}
 Current code:
 \`\`\`systemverilog
 ${currentCode}
-\`\`\``
+\`\`\``,
+                    ...variantOptions
                 });
 
                 const codeMatch = improvedCode.match(/```(?:systemverilog|sv|verilog)?\n?([\s\S]*?)```/);
@@ -206,7 +208,7 @@ export async function moduleGenerationWorkflow(
         qualityThreshold = 8
     } = config ?? {};
 
-    const client = createModel(parseModelString(model));
+    const { model: client, variantOptions } = createModelWithVariant(model);
 
     const QualitySchema = z.object({
         score: z.number().min(1).max(10),
@@ -246,7 +248,8 @@ Description: ${spec.description}
 Ports: ${portSpec}
 ${paramSpec ? `Parameters: ${paramSpec}` : ''}
 
-Return ONLY the module code, no explanations.`
+Return ONLY the module code, no explanations.`,
+                    ...variantOptions
                 });
 
                 const codeMatch = moduleCode.match(/```(?:systemverilog|sv|verilog)?\n?([\s\S]*?)```/);
@@ -268,7 +271,8 @@ Consider:
 1. Is it synthesizable? (no unsynthesizable constructs)
 2. Is it well documented? (comments, parameter descriptions)
 3. Does it follow conventions? (naming, coding style)
-4. Overall quality (1-10)`
+4. Overall quality (1-10)`,
+                    ...variantOptions
                 });
 
                 return {
@@ -300,7 +304,8 @@ ${evaluation.issues.map(i => `- ${i}`).join('\n')}
 Suggestions:
 ${evaluation.suggestions.map(s => `- ${s}`).join('\n')}
 
-Return ONLY the improved code.`
+Return ONLY the improved code.`,
+                    ...variantOptions
                 });
 
                 const codeMatch = improvedCode.match(/```(?:systemverilog|sv|verilog)?\n?([\s\S]*?)```/);
@@ -380,7 +385,7 @@ export async function testbenchWorkflow(
         model = 'claude-sonnet-4-20250514'
     } = config;
 
-    const client = createModel(parseModelString(model));
+    const { model: client, variantOptions } = createModelWithVariant(model);
 
     // Step 1: Analyze the module
     interface AnalysisResult {
@@ -430,7 +435,8 @@ Identify:
 1. All ports with directions and widths
 2. Parameters
 3. Core functionality
-4. Recommended test scenarios for thorough verification`
+4. Recommended test scenarios for thorough verification`,
+                    ...variantOptions
                 });
                 return object;
             }
@@ -480,7 +486,8 @@ Include:
 4. Self-checking assertions
 5. Coverage points
 
-Return ONLY the testbench code.`
+Return ONLY the testbench code.`,
+                    ...variantOptions
                 });
 
                 const codeMatch = tbCode.match(/```(?:systemverilog|sv|verilog)?\n?([\s\S]*?)```/);
@@ -521,7 +528,8 @@ Consider:
 1. Coverage of test scenarios
 2. Self-checking capability
 3. Code quality
-4. Completeness`
+4. Completeness`,
+        ...variantOptions
     });
 
     return {

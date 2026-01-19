@@ -9,7 +9,14 @@
  */
 
 import { stepCountIs, type Tool, type LanguageModel } from 'ai';
-import { createModel, parseModelString, type ModelConfig } from './model-provider.js';
+import {
+    createModel,
+    parseModelString,
+    getVariantProviderOptions,
+    type ModelConfig,
+    type ModelConfigWithVariant,
+    type VariantName,
+} from './model-provider.js';
 import { getToolSpecs, createToolExecutors, TOOL_APPROVAL_CONFIG, type ToolContext, type ToolSpec } from './tools.js';
 import { getSystemPrompt, type PromptMode } from './prompts.js';
 import type { CreateAgentOptions } from '../types/agent-types.js';
@@ -38,20 +45,33 @@ export interface ApprovalAwareTool {
 export interface AgentBundle {
     /** Model instance */
     model: LanguageModel;
-    /** Model configuration (provider + model name) */
-    modelConfig: ModelConfig;
+    /** Model configuration (provider + model name + optional variant) */
+    modelConfig: ModelConfigWithVariant;
     /** System prompt */
     instructions: string;
     /** Tools with approval-aware execute functions */
     tools: Record<string, Tool>;
     /** Stop condition - can be composed with stopWhenAny/stopWhenAll */
     stopWhen: StopCondition;
-    /** Model name for reference (format: provider/model) */
+    /** Model name for reference (format: provider/model[:variant]) */
     modelName: string;
     /** Current mode */
     mode: PromptMode;
     /** Whether auto-approve is enabled */
     autoApprove: boolean;
+    /**
+     * Provider options for variant support.
+     * Apply these in streamText/generateText calls to enable extended thinking,
+     * reasoning effort, or other provider-specific features.
+     *
+     * @example
+     * streamText({
+     *   model: bundle.model,
+     *   ...bundle.variantOptions,  // Apply variant options
+     *   // ... other options
+     * });
+     */
+    variantOptions: Record<string, unknown>;
 }
 
 // ============================================================================
@@ -84,7 +104,11 @@ export function createAgentBundle(
     } = options;
 
     // Resolve model config: use provided config or parse from model string
-    const modelConfig: ModelConfig = providedModelConfig ?? parseModelString(model);
+    // parseModelString now returns ModelConfigWithVariant (includes variant)
+    const modelConfig: ModelConfigWithVariant = providedModelConfig ?? parseModelString(model);
+
+    // Get variant options for providerOptions (used in streamText/generateText)
+    const variantOptions = getVariantProviderOptions(modelConfig.provider, modelConfig.variant);
 
     const specs = getToolSpecs();
     const executors = createToolExecutors(toolContext);
@@ -130,6 +154,11 @@ export function createAgentBundle(
         }
     }
 
+    // Build model name string (include variant if present)
+    const modelName = modelConfig.variant
+        ? `${modelConfig.provider}/${modelConfig.model}:${modelConfig.variant}`
+        : `${modelConfig.provider}/${modelConfig.model}`;
+
     return {
         model: createModel(modelConfig),
         modelConfig,
@@ -137,9 +166,10 @@ export function createAgentBundle(
         tools,
         // Use mode-aware stop condition (e.g., lint_fix stops when lint passes)
         stopWhen: createModeStopCondition(mode, stepLimit),
-        modelName: `${modelConfig.provider}/${modelConfig.model}`,
+        modelName,
         mode,
         autoApprove,
+        variantOptions,
     };
 }
 
