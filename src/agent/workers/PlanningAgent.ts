@@ -5,7 +5,7 @@
  */
 
 import { generateObject } from 'ai';
-import { createModel, parseModelString } from '../model-provider.js';
+import { createModelWithVariant } from '../model-provider.js';
 import type { ExecutionPlan } from '../../types/agent-shared.js';
 import { ExecutionPlanSchema } from '../../types/agent-shared.js';
 
@@ -18,10 +18,14 @@ export async function createPlan(
     projectContext: string = '',
     modelName: string = 'claude-sonnet-4-20250514'
 ): Promise<ExecutionPlan> {
+    // Parse model and get variant options for extended thinking support
+    const { model, variantOptions } = createModelWithVariant(modelName);
+
     // FIX A: Explicitly list valid agents in prompt to avoid 'planning' being assigned
     const { object: plan } = await generateObject({
-        model: createModel(parseModelString(modelName)) as any,
+        model: model as any,
         schema: ExecutionPlanSchema,
+        ...variantOptions,
         prompt: `Analyze this request and create an execution plan:
 
 User Request: ${userRequest}

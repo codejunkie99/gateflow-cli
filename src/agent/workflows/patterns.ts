@@ -14,7 +14,7 @@
 
 import { generateText, generateObject, streamText } from 'ai';
 import { z, type ZodSchema } from 'zod';
-import { createModel, parseModelString } from '../model-provider.js';
+import { createModelWithVariant } from '../model-provider.js';
 
 // ============================================================================
 // Types
@@ -195,20 +195,22 @@ export async function generateWithQualityCheck<TQuality extends Record<string, u
         maxRetries = 2
     } = config;
 
-    const client = createModel(parseModelString(model));
+    const { model: client, variantOptions } = createModelWithVariant(model);
 
     // Initial generation
     const { text: initialOutput } = await generateText({
         model: client as any,
         system,
-        prompt
+        prompt,
+        ...variantOptions
     });
 
     // Quality evaluation
     const { object: qualityMetrics } = await generateObject({
         model: client as any,
         schema: qualitySchema,
-        prompt: `Evaluate this output:\n\n${initialOutput}\n\nProvide quality metrics.`
+        prompt: `Evaluate this output:\n\n${initialOutput}\n\nProvide quality metrics.`,
+        ...variantOptions
     });
 
     // Check if quality meets threshold
@@ -226,13 +228,15 @@ export async function generateWithQualityCheck<TQuality extends Record<string, u
         const { text: improvedOutput } = await generateText({
             model: client as any,
             system,
-            prompt: improvedPrompt
+            prompt: improvedPrompt,
+            ...variantOptions
         });
 
         const { object: newMetrics } = await generateObject({
             model: client as any,
             schema: qualitySchema,
-            prompt: `Evaluate this output:\n\n${improvedOutput}\n\nProvide quality metrics.`
+            prompt: `Evaluate this output:\n\n${improvedOutput}\n\nProvide quality metrics.`,
+            ...variantOptions
         });
 
         currentOutput = improvedOutput;
@@ -327,7 +331,7 @@ export async function parallelReview<TReview extends Record<string, unknown>>(
     summary?: string;
 }> {
     const { model = 'claude-sonnet-4-20250514', perspectives, reviewSchema, summarize } = config;
-    const client = createModel(parseModelString(model));
+    const { model: client, variantOptions } = createModelWithVariant(model);
 
     // Parallel review calls
     const reviewPromises = perspectives.map(async (perspective) => {
@@ -335,7 +339,8 @@ export async function parallelReview<TReview extends Record<string, unknown>>(
             model: client as any,
             schema: reviewSchema,
             system: perspective.system,
-            prompt: `Review this content:\n\n${content}`
+            prompt: `Review this content:\n\n${content}`,
+            ...variantOptions
         });
         return { name: perspective.name, review: object };
     });
@@ -357,7 +362,8 @@ export async function parallelReview<TReview extends Record<string, unknown>>(
         const { text } = await generateText({
             model: client as any,
             system: 'You are synthesizing multiple expert reviews into a concise summary.',
-            prompt: `Synthesize these reviews into actionable insights:\n\n${reviewSummary}`
+            prompt: `Synthesize these reviews into actionable insights:\n\n${reviewSummary}`,
+            ...variantOptions
         });
         summary = text;
     }
@@ -449,7 +455,7 @@ export async function translateWithFeedback(
         qualityThreshold = 8
     } = config ?? {};
 
-    const client = createModel(parseModelString(model));
+    const { model: client, variantOptions } = createModelWithVariant(model);
 
     const EvaluationSchema = z.object({
         qualityScore: z.number().min(1).max(10),
@@ -469,7 +475,8 @@ export async function translateWithFeedback(
                 const { text: translation } = await generateText({
                     model: client as any,
                     system: 'You are an expert literary translator.',
-                    prompt: `Translate this text to ${targetLanguage}, preserving tone and cultural nuances:\n\n${text}`
+                    prompt: `Translate this text to ${targetLanguage}, preserving tone and cultural nuances:\n\n${text}`,
+                    ...variantOptions
                 });
                 return translation;
             },
@@ -488,7 +495,8 @@ Consider:
 1. Overall quality (1-10)
 2. Preservation of tone
 3. Preservation of nuance
-4. Cultural accuracy`
+4. Cultural accuracy`,
+                    ...variantOptions
                 });
 
                 return {
@@ -518,7 +526,8 @@ ${evaluation.issues.map(i => `- ${i}`).join('\n')}
 Suggestions:
 ${evaluation.suggestions.map(s => `- ${s}`).join('\n')}
 
-Provide an improved translation.`
+Provide an improved translation.`,
+                    ...variantOptions
                 });
                 return improved;
             }
@@ -571,7 +580,7 @@ export async function routeByClassification<
     output: TOutput;
 }> {
     const { model = 'claude-sonnet-4-20250514', routes, classificationPrompt, handlers } = config;
-    const client = createModel(parseModelString(model));
+    const { model: client, variantOptions } = createModelWithVariant(model);
 
     // Create dynamic schema for routes
     const ClassificationSchema = z.object({
@@ -584,7 +593,8 @@ export async function routeByClassification<
     const { object: classification } = await generateObject({
         model: client as any,
         schema: ClassificationSchema,
-        prompt: `${classificationPrompt}\n\nInput: ${JSON.stringify(input)}\n\nAvailable routes: ${routes.join(', ')}`
+        prompt: `${classificationPrompt}\n\nInput: ${JSON.stringify(input)}\n\nAvailable routes: ${routes.join(', ')}`,
+        ...variantOptions
     });
 
     // Get the handler for the selected route
@@ -638,7 +648,7 @@ export async function routeByComplexity(
         system
     } = config;
 
-    const classifier = createModel(parseModelString(classifierModel));
+    const { model: classifier, variantOptions: classifierVariantOptions } = createModelWithVariant(classifierModel);
 
     // Classify complexity
     const { object: complexity } = await generateObject({
@@ -655,18 +665,20 @@ Consider:
 - Number of steps required
 - Domain expertise needed
 - Ambiguity in the request
-- Potential for errors`
+- Potential for errors`,
+        ...classifierVariantOptions
     });
 
     // Select model based on complexity
     const selectedModel = complexity.score >= complexityThreshold ? complexModel : simpleModel;
-    const client = createModel(parseModelString(selectedModel));
+    const { model: client, variantOptions } = createModelWithVariant(selectedModel);
 
     // Generate response with selected model
     const { text: response } = await generateText({
         model: client as any,
         system,
-        prompt
+        prompt,
+        ...variantOptions
     });
 
     return {

@@ -5,9 +5,9 @@
  * based on the user's request. Integrates with GateFlowAgent.
  */
 
-import { generateObject } from 'ai';
+import { generateObject, generateText } from 'ai';
 import { z } from 'zod';
-import { createModel, parseModelString } from '../model-provider.js';
+import { createModelWithVariant } from '../model-provider.js';
 import {
     executeChain,
     executeParallel,
@@ -110,7 +110,7 @@ export async function classifyWorkflow(
     context?: { hasLintErrors?: boolean; hasCode?: boolean; fileName?: string },
     model: string = 'claude-sonnet-4-20250514'
 ): Promise<WorkflowSelection> {
-    const client = createModel(parseModelString(model));
+    const { model: client, variantOptions } = createModelWithVariant(model);
 
     const { object } = await generateObject({
         model: client as any,
@@ -137,7 +137,8 @@ Available workflows:
 Select the BEST workflow and extract any relevant parameters from the request.
 For module_generation, extract the module name.
 For testbench, extract test scenarios if mentioned.
-For code_review, extract which aspects to review.`
+For code_review, extract which aspects to review.`,
+        ...variantOptions
     });
 
     return object;
@@ -378,7 +379,7 @@ async function executeIterativeImproveWorkflow(
     selection: WorkflowSelection,
     model: string
 ): Promise<WorkflowResult> {
-    const client = createModel(parseModelString(model));
+    const { model: client, variantOptions } = createModelWithVariant(model);
     const { generateText, generateObject } = await import('ai');
 
     try {
@@ -389,7 +390,8 @@ async function executeIterativeImproveWorkflow(
             generate: async () => {
                 const { text } = await generateText({
                     model: client as any,
-                    prompt: request
+                    prompt: request,
+                    ...variantOptions
                 });
                 return text;
             },
@@ -402,7 +404,8 @@ async function executeIterativeImproveWorkflow(
                         issues: z.array(z.string()),
                         suggestions: z.array(z.string())
                     }),
-                    prompt: `Evaluate this output for quality (1-10):\n\n${output}`
+                    prompt: `Evaluate this output for quality (1-10):\n\n${output}`,
+                    ...variantOptions
                 });
 
                 return {
@@ -416,7 +419,8 @@ async function executeIterativeImproveWorkflow(
             improve: async (output, evaluation) => {
                 const { text } = await generateText({
                     model: client as any,
-                    prompt: `Improve this based on feedback:\n\n${output}\n\nIssues: ${evaluation.issues.join(', ')}\nSuggestions: ${evaluation.suggestions.join(', ')}`
+                    prompt: `Improve this based on feedback:\n\n${output}\n\nIssues: ${evaluation.issues.join(', ')}\nSuggestions: ${evaluation.suggestions.join(', ')}`,
+                    ...variantOptions
                 });
                 return text;
             }
@@ -443,7 +447,7 @@ async function executeParallelAnalysisWorkflow(
     model: string
 ): Promise<WorkflowResult> {
     const { generateText } = await import('ai');
-    const client = createModel(parseModelString(model));
+    const { model: client, variantOptions } = createModelWithVariant(model);
 
     const perspectives = ['technical', 'practical', 'alternative'];
 
@@ -455,7 +459,8 @@ async function executeParallelAnalysisWorkflow(
                     const { text } = await generateText({
                         model: client as any,
                         system: `Analyze from a ${perspective} perspective.`,
-                        prompt: request
+                        prompt: request,
+                        ...variantOptions
                     });
                     return text;
                 }
@@ -487,7 +492,7 @@ async function executeSequentialWorkflow(
     model: string
 ): Promise<WorkflowResult> {
     const { generateText, generateObject } = await import('ai');
-    const client = createModel(parseModelString(model));
+    const { model: client, variantOptions } = createModelWithVariant(model);
 
     try {
         // First, break down into steps
@@ -499,7 +504,8 @@ async function executeSequentialWorkflow(
                     description: z.string()
                 }))
             }),
-            prompt: `Break this request into sequential steps:\n\n${request}`
+            prompt: `Break this request into sequential steps:\n\n${request}`,
+            ...variantOptions
         });
 
         // Execute each step
@@ -508,7 +514,8 @@ async function executeSequentialWorkflow(
             execute: async (previousOutput: string) => {
                 const { text } = await generateText({
                     model: client as any,
-                    prompt: `${step.description}\n\nPrevious context:\n${previousOutput}`
+                    prompt: `${step.description}\n\nPrevious context:\n${previousOutput}`,
+                    ...variantOptions
                 });
                 return text;
             }
@@ -536,12 +543,13 @@ async function executeSimpleGeneration(
     model: string
 ): Promise<WorkflowResult> {
     const { generateText } = await import('ai');
-    const client = createModel(parseModelString(model));
+    const { model: client, variantOptions } = createModelWithVariant(model);
 
     try {
         const { text } = await generateText({
             model: client as any,
-            prompt: request
+            prompt: request,
+            ...variantOptions
         });
 
         return {

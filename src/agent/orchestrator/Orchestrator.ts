@@ -11,7 +11,7 @@
 
 import { generateObject, streamText, stepCountIs } from 'ai';
 import { createModeStopCondition, type StopCondition } from '../stop-conditions.js';
-import { createModel, parseModelString } from '../model-provider.js';
+import { createModelWithVariant, type ModelWithVariant } from '../model-provider.js';
 import type { EventBus } from '../../events/index.js';
 import type {
     GateFlowAgent,
@@ -74,6 +74,8 @@ export class Orchestrator {
     private resilienceLayer: AgentResilienceLayer;
     private indexer?: SVIndexerAdapter;
     private memoryService?: MemoryService;
+    /** Model bundle with variant options for API calls */
+    private modelBundle: ModelWithVariant;
     private config: {
         dependencyFailurePolicy: DependencyFailurePolicy;
         concurrencyLimit: number;
@@ -92,6 +94,9 @@ export class Orchestrator {
 
         this.indexer = config?.indexer;
         this.memoryService = config?.memoryService;
+
+        // Parse model and create bundle with variant options
+        this.modelBundle = createModelWithVariant(modelName);
 
         const concurrencyLimit = config?.concurrencyLimit ?? DEFAULT_ORCHESTRATOR_CONFIG.concurrencyLimit;
         const rawThreshold = config?.planConfidenceThreshold ?? DEFAULT_ORCHESTRATOR_CONFIG.planConfidenceThreshold;
@@ -154,7 +159,7 @@ export class Orchestrator {
         );
 
         const { object: routing } = await generateObject({
-            model: createModel(parseModelString(this.modelName)) as any,
+            model: this.modelBundle.model as any,
             schema: AgentRoutingSchema,
             prompt: `Route this request to the best agent:
 
@@ -167,7 +172,8 @@ Available agents:
 - debug: For diagnosing simulation failures
 - refactoring: For modifying existing code
 
-Select the most appropriate agent and describe the task.`
+Select the most appropriate agent and describe the task.`,
+            ...this.modelBundle.variantOptions
         });
 
         this.thinkingChain.addCoordinationStep(
@@ -199,12 +205,13 @@ Select the most appropriate agent and describe the task.`
             );
 
             const result = await streamText({
-                model: createModel(parseModelString(this.modelName)) as any,
+                model: this.modelBundle.model as any,
                 system: worker.system,
                 prompt: routing.taskDescription,
                 tools: worker.tools,
                 toolChoice: worker.toolChoice,
                 stopWhen: workerStopCondition,
+                ...this.modelBundle.variantOptions,
                 onStepFinish: (step) => {
                     this.thinkingChain.onStepFinish(step);
                 },
@@ -530,13 +537,14 @@ Select the most appropriate agent and describe the task.`
         );
 
         const result = await streamText({
-            model: createModel(parseModelString(this.modelName)) as any,
+            model: this.modelBundle.model as any,
             system: worker.system,
             prompt: enhancedPrompt,
             tools: worker.tools,
             toolChoice: worker.toolChoice,
             stopWhen: workerStopCondition,
             abortSignal: signal,
+            ...this.modelBundle.variantOptions,
             onStepFinish: (step) => {
                 stepCount += 1;
                 this.thinkingChain.onStepFinish(step);
