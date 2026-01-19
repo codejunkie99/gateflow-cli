@@ -57,6 +57,13 @@ import {
     type ModelConfigWithVariant
 } from '../agent/model-variants.js';
 import {
+    fetchOpenRouterModels,
+    getAllModelIds,
+    formatModelName,
+    getModelPricing,
+    cachedModels
+} from '../agent/model-provider-openrouter.js';
+import {
     showSectionedMenu,
     showTextInput,
     type MenuSection,
@@ -1203,20 +1210,98 @@ async function showInteractiveModelSelector(
         items: []
     };
 
-    // Populate sections with all providers
+    // Separate section for OpenRouter models
+    const openRouterSection: MenuSection<ModelMenuItem> = {
+        title: 'OpenRouter',
+        headerColor: chalk.cyan,
+        items: []
+    };
+
+    // Fetch OpenRouter models (always fetch - uses fallback if no API key)
+    let openRouterModels: Map<string, any> | null = null;
+    
+    // Always try to fetch OpenRouter models (will use fallback if no API key)
+    try {
+        openRouterModels = await fetchOpenRouterModels();
+        // fetchOpenRouterModels() should always return a Map (either from API or fallback)
+        if (!openRouterModels || openRouterModels.size === 0) {
+            console.log(chalk.yellow(`⚠️  No OpenRouter models available`));
+        }
+    } catch (error) {
+        console.log(chalk.yellow(`⚠️  Error fetching OpenRouter models: ${error}`));
+        // Try to get from cache as fallback
+        openRouterModels = cachedModels;
+        // If still null, fetchOpenRouterModels() should have returned fallback, so this is unexpected
+        if (!openRouterModels) {
+            console.log(chalk.yellow(`⚠️  OpenRouter models not available`));
+        }
+    }
+
+    // Populate OpenRouter section separately with all fetched models
+    if (openRouterModels && openRouterModels.size > 0) {
+        console.log(chalk.dim(`  Adding ${openRouterModels.size} OpenRouter models to menu...`));
+        const isCurrent = currentConfig?.provider === 'openrouter';
+        const openRouterInfo = PROVIDERS.openrouter;
+        
+        const modelIds = Array.from(openRouterModels.keys());
+        console.log(chalk.dim(`  Model IDs (first 5): ${modelIds.slice(0, 5).join(', ')}`));
+        
+        for (const modelId of modelIds) {
+            const isCurrentModel = isCurrent && currentConfig?.model === modelId;
+            const modelData = openRouterModels.get(modelId);
+            
+            // Format display name and get pricing
+            const displayName = modelData ? formatModelName(modelId) : modelId;
+            let priceHint: string | undefined;
+            
+            if (modelData?.pricing) {
+                const { prompt, completion } = modelData.pricing;
+                priceHint = `$${prompt}/$${completion}`;
+            }
+            
+            const item: MenuItem<ModelMenuItem> = {
+                label: displayName,
+                value: { provider: 'openrouter', model: modelId, needsApiKey: !availableProviders.includes('openrouter') },
+                description: isCurrentModel ? chalk.green('(current)') : priceHint,
+                disabled: isCurrentModel,
+                hint: availableProviders.includes('openrouter')
+                    ? undefined
+                    : `Requires ${openRouterInfo.envVar}. Get key at: ${openRouterInfo.docUrl}`
+            };
+
+            openRouterSection.items.push(item);
+        }
+    }
+
+    // Populate sections with all other providers (excluding OpenRouter)
     for (const [providerName, info] of Object.entries(PROVIDERS)) {
         const provider = providerName as ProviderName;
+        
+        // Skip OpenRouter - it has its own section
+        if (provider === 'openrouter') {
+            continue;
+        }
+        
         const isConfigured = availableProviders.includes(provider);
         const isCurrent = currentConfig?.provider === provider;
 
+        // Use static list for other providers
+        const modelsForProvider = info.models;
+
+        // Skip if no models available
+        if (modelsForProvider.length === 0) {
+            continue;
+        }
+
         // Add each model as a menu item
-        for (const modelName of info.models) {
+        for (const modelName of modelsForProvider) {
             const isCurrentModel = isCurrent && currentConfig?.model === modelName;
+            
             const item: MenuItem<ModelMenuItem> = {
                 label: `${info.name} - ${modelName}`,
                 value: { provider, model: modelName, needsApiKey: !isConfigured },
                 description: isCurrentModel ? chalk.green('(current)') : undefined,
-                disabled: isCurrentModel, // Can't switch to current model
+                disabled: isCurrentModel,
                 hint: isConfigured
                     ? undefined
                     : `Requires ${info.envVar}. Get key at: ${info.docUrl}`
@@ -1230,8 +1315,15 @@ async function showInteractiveModelSelector(
         }
     }
 
-    // Filter out empty sections
+    // Filter out empty sections and add OpenRouter section first
     const sections: MenuSection<ModelMenuItem>[] = [];
+    
+    // Add OpenRouter section first (if it has models)
+    if (openRouterSection.items.length > 0) {
+        sections.push(openRouterSection);
+    }
+    
+    // Add other provider sections
     if (includedSection.items.length > 0) {
         sections.push(includedSection);
     }
@@ -1266,6 +1358,128 @@ async function showInteractiveModelSelector(
 
     const selectedItem = result.value;
 
+    // For OpenRouter: First select variant, then ask for API key
+    if (selectedItem.provider === 'openrouter') {
+        // Step 1: Select variant/thinking mode (if supported)
+        let selectedVariant: VariantName | undefined;
+        const supportedVariants = getSupportedVariants('openrouter');
+        
+        if (supportedVariants.length > 0) {
+            // Build variant menu items
+            const variantItems: MenuItem<VariantName | null>[] = [
+                {
+                    label: 'Default (no variant)',
+                    value: null,
+                    description: chalk.dim('Standard model behavior')
+                },
+                ...supportedVariants.map(variant => ({
+                    label: variant.charAt(0).toUpperCase() + variant.slice(1),
+                    value: variant as VariantName | null,
+                    description: chalk.dim(getVariantDescription(variant))
+                }))
+            ];
+
+            renderer.pauseForInput();
+
+            console.log('');
+            const variantResult = await showSectionedMenu<VariantName | null>(
+                [{
+                    title: 'Select Reasoning Mode',
+                    headerColor: chalk.cyan,
+                    items: variantItems
+                }],
+                {
+                    title: `OpenRouter model supports extended thinking/reasoning`,
+                    showHelp: true,
+                    maxVisibleItems: 10,
+                    onPromptStart: () => renderer.pauseForInput(),
+                    onPromptEnd: () => renderer.resumeAfterInput()
+                }
+            );
+
+            renderer.resumeAfterInput();
+
+            if (!variantResult.selected) {
+                return { switched: false, cancelled: true };
+            }
+
+            selectedVariant = variantResult.value ?? undefined;
+        }
+
+        // Step 2: Ask for API key (if not already configured)
+        if (selectedItem.needsApiKey) {
+            const providerInfo = PROVIDERS.openrouter;
+
+            console.log('');
+            console.log(chalk.cyan(`Setting up ${providerInfo.name}`));
+            console.log(chalk.dim(`Get your API key at: ${providerInfo.docUrl}`));
+
+            // Prompt for API key
+            const apiKeyResult = await showTextInput({
+                prompt: chalk.yellow(`Enter ${providerInfo.envVar}:`),
+                mask: true,
+                onPromptStart: () => renderer.pauseForInput(),
+                onPromptEnd: () => renderer.resumeAfterInput()
+            });
+
+            if (!apiKeyResult.submitted || !apiKeyResult.value) {
+                return { switched: false, cancelled: true };
+            }
+
+            const apiKey = apiKeyResult.value.trim();
+
+            // Test the API key
+            console.log(chalk.dim('\nValidating API key...'));
+            console.log(chalk.dim(`Key length: ${apiKey.length} chars`));
+
+            const validationResult = await testApiKey('openrouter', apiKey);
+
+            if (!validationResult.valid) {
+                console.log(chalk.red(`\n✗ ${validationResult.error}`));
+                if (validationResult.hint) {
+                    console.log(chalk.yellow(`  Hint: ${validationResult.hint}`));
+                }
+                console.log(chalk.dim(`\n  Get your API key at: ${providerInfo.docUrl}`));
+                return { switched: false, cancelled: false };
+            }
+
+            console.log(chalk.green('API key validated successfully!'));
+
+            // Save the API key to process.env
+            setProviderApiKey('openrouter', apiKey);
+        }
+
+        // Step 3: Switch to the selected model
+        try {
+            const newConfig: ModelConfigWithVariant = {
+                provider: 'openrouter',
+                model: selectedItem.model,
+                variant: selectedVariant
+            };
+
+            // Validate the model can be created
+            createModel(newConfig);
+
+            // Update agent and UI coordinator
+            agent.setModelConfig(newConfig);
+            const modelString = selectedVariant
+                ? `openrouter/${selectedItem.model}:${selectedVariant}`
+                : `openrouter/${selectedItem.model}`;
+            uiCoordinator.setModel(modelString);
+
+            return {
+                switched: true,
+                cancelled: false,
+                model: modelString,
+                variant: selectedVariant
+            };
+        } catch (error) {
+            console.log(chalk.red(`\nFailed to switch model: ${error instanceof Error ? error.message : error}`));
+            return { switched: false, cancelled: false };
+        }
+    }
+
+    // For other providers: Ask for API key first, then variant
     // If provider needs API key, prompt for it
     if (selectedItem.needsApiKey) {
         const providerInfo = PROVIDERS[selectedItem.provider];

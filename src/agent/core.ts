@@ -58,6 +58,7 @@ import {
     type PrepareStepFn,
     type StepSettings
 } from './loop-control.js';
+import { prefetchOpenRouterModels } from './model-provider-openrouter.js';
 
 // ============================================================================
 // Types
@@ -184,6 +185,14 @@ export class GateFlowAgent {
 
         // Initialize orchestrator with worker agents
         this.initializeOrchestrator();
+
+        // Prefetch OpenRouter models in background for faster model switching
+        prefetchOpenRouterModels().catch(err => {
+            // Silently fail - this is just an optimization
+            if (process.env.VERBOSE) {
+                console.warn('⚠️  Failed to prefetch OpenRouter models:', err);
+            }
+        });
     }
 
     /**
