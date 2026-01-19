@@ -10,7 +10,7 @@
 
 import { streamText, generateObject, stepCountIs, type StepResult, type Tool, type ModelMessage } from 'ai';
 import { z } from 'zod';
-import { createAnthropicClient } from './anthropic-client.js';
+import { createModel, parseModelString, type ModelConfig } from './model-provider.js';
 import type { EventBus } from '../events/index.js';
 import type { ToolContext } from './tools.js';
 import { createToolExecutors, getToolSpecs as getToolDefinitions, TOOL_APPROVAL_CONFIG } from './tools.js';
@@ -59,6 +59,7 @@ import {
 
 export interface AgentConfig {
     model: string;
+    modelConfig?: ModelConfig;
     maxTokens: number;
     temperature: number;
     maxToolCalls: number;
@@ -138,8 +139,27 @@ export class GateFlowAgent {
         toolContext: ToolContext,
         config?: Partial<AgentConfig>
     ) {
+        // Resolve model config from provided config or model string
+        let resolvedModelConfig: ModelConfig | undefined = config?.modelConfig;
+        let resolvedModelString = config?.model;
+
+        if (resolvedModelConfig) {
+            // If modelConfig is provided, derive the model string from it
+            resolvedModelString = `${resolvedModelConfig.provider}/${resolvedModelConfig.model}`;
+        } else if (resolvedModelString) {
+            // If only model string is provided, parse it to get modelConfig
+            resolvedModelConfig = parseModelString(resolvedModelString);
+            resolvedModelString = `${resolvedModelConfig.provider}/${resolvedModelConfig.model}`;
+        } else {
+            // Neither provided - use default
+            resolvedModelString = 'claude-sonnet-4-20250514';
+            resolvedModelConfig = parseModelString(resolvedModelString);
+            resolvedModelString = `${resolvedModelConfig.provider}/${resolvedModelConfig.model}`;
+        }
+
         this.config = {
-            model: config?.model ?? 'claude-sonnet-4-20250514',
+            model: resolvedModelString,
+            modelConfig: resolvedModelConfig,
             maxTokens: config?.maxTokens ?? 8192,
             temperature: config?.temperature ?? 0.7,
             maxToolCalls: config?.maxToolCalls ?? 25,
@@ -223,6 +243,7 @@ export class GateFlowAgent {
                 {
                     mode,
                     model: this.config.model,
+                    modelConfig: this.config.modelConfig,
                     stepLimit: this.config.maxToolCalls,
                     autoApprove: this.toolContext.autoApprove,
                 },
@@ -230,6 +251,25 @@ export class GateFlowAgent {
             );
         }
         return this.agentBundle;
+    }
+
+    /**
+     * Set the model configuration for runtime switching.
+     * Invalidates the agent bundle and orchestrator to force recreation with new model.
+     */
+    setModelConfig(config: ModelConfig): void {
+        this.config.modelConfig = config;
+        this.config.model = `${config.provider}/${config.model}`;
+        this.agentBundle = null; // Force bundle recreation
+        // Reinitialize orchestrator with new model
+        this.initializeOrchestrator();
+    }
+
+    /**
+     * Get the current model configuration.
+     */
+    getModelConfig(): ModelConfig | undefined {
+        return this.config.modelConfig;
     }
 
     /**
@@ -404,8 +444,10 @@ export class GateFlowAgent {
             );
 
             // AI SDK 6: Use generateObject for complexity detection
+            // Ensure modelConfig is defined (fallback to parsing model string)
+            const effectiveModelConfig = this.config.modelConfig ?? parseModelString(this.config.model);
             const { object: complexity } = await generateObject({
-                model: createAnthropicClient(this.config.model) as any,
+                model: createModel(effectiveModelConfig) as any,
                 schema: ComplexityDetectionSchema,
                 prompt: `Does this request need multi-agent coordination?
 

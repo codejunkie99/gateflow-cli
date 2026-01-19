@@ -8,6 +8,7 @@
  * - DiffDisplay: Syntax-highlighted diff rendering with box decoration
  * - BlockRenderer: Warp-style block rendering for grouped output
  * - InputManager: User input handling
+ * - InteractiveMenu: Arrow-key navigable selection menus
  */
 
 // Core renderer
@@ -20,3 +21,6 @@ export * from './block-renderer.js';
 
 // Input management
 export * from './InputManager.js';
+
+// Interactive menus
+export * from './InteractiveMenu.js';

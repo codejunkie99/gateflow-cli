@@ -39,6 +39,23 @@ import {
     type SemanticSummarizer
 } from '../context/index.js';
 import { createMemoryService, setGlobalMemoryService, type MemoryService } from '../memory/index.js';
+import {
+    parseModelString,
+    createModel,
+    detectAvailableProviders,
+    PROVIDERS,
+    testApiKey,
+    setProviderApiKey,
+    hasApiKey,
+    type ModelConfig,
+    type ProviderName
+} from '../agent/model-provider.js';
+import {
+    showSectionedMenu,
+    showTextInput,
+    type MenuSection,
+    type MenuItem
+} from '../ui/InteractiveMenu.js';
 
 // ============================================================================
 // Types
@@ -50,6 +67,7 @@ export interface GlobalOptions {
     json: boolean;
     verbose: boolean;
     cwd: string;
+    model?: string;
 }
 
 export interface CommandContext {
@@ -272,22 +290,44 @@ function buildToolContext(ctx: CommandContext): ToolContext {
     };
 }
 
+function resolveModelConfig(modelSpec?: string): { modelConfig?: ModelConfig; error?: string } {
+    if (!modelSpec) {
+        return {};
+    }
+
+    try {
+        const modelConfig = parseModelString(modelSpec);
+        console.log(chalk.dim(`Using model: ${modelConfig.provider}/${modelConfig.model}`));
+        return { modelConfig };
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        console.log(chalk.red(`Invalid model: ${message}`));
+        return { error: message };
+    }
+}
+
 // ============================================================================
 // Chat Command (REPL)
 // ============================================================================
 
 export async function chatCommand(
     ctx: CommandContext,
-    initialQuery?: string
+    initialQuery?: string,
+    modelSpec?: string
 ): Promise<ExitCode> {
     const toolContext = buildToolContext(ctx);
 
-    // Create agent
-    const agent = new GateFlowAgent(ctx.bus, toolContext);
+    const { modelConfig, error } = resolveModelConfig(modelSpec);
+    if (error) {
+        return ExitCodes.CONFIG_ERROR;
+    }
+
+    // Create agent with optional model config
+    const agent = new GateFlowAgent(ctx.bus, toolContext, { modelConfig });
 
     // Create UI coordinator for mode transitions
     const uiCoordinator = new UIAgentCoordinator({
-        model: 'claude-sonnet-4-20250514',
+        model: modelConfig ? `${modelConfig.provider}/${modelConfig.model}` : 'claude-sonnet-4-20250514',
         tools: {},  // Tools are managed by GateFlowAgent
         bus: ctx.bus
     });
@@ -378,6 +418,43 @@ export async function chatCommand(
                 console.log('\nSession:', sessionStats);
                 console.log('Index:', indexStats);
                 console.log('');
+                continue;
+            }
+
+            // Model switching command: /model [provider/model]
+            // NOTE: Must check /model BEFORE /mode since /model starts with /mode
+            if (trimmed.toLowerCase().startsWith('/model')) {
+                const parts = trimmed.split(/\s+/);
+                if (parts.length === 1) {
+                    // Interactive model selection menu
+                    const result = await showInteractiveModelSelector(
+                        agent,
+                        uiCoordinator,
+                        ctx.renderer
+                    );
+                    if (result.switched) {
+                        console.log(chalk.green(`\nSwitched to ${result.model}`));
+                    } else if (result.cancelled) {
+                        console.log(chalk.dim('\nModel selection cancelled.'));
+                    }
+                    console.log('');
+                } else {
+                    // Switch to specified model (direct command)
+                    const spec = parts.slice(1).join(' ');
+                    try {
+                        const newConfig = parseModelString(spec);
+                        // Validate the model can be created
+                        createModel(newConfig); // Throws if API key missing
+                        agent.setModelConfig(newConfig);
+                        // Also update the UI coordinator
+                        uiCoordinator.setModel(`${newConfig.provider}/${newConfig.model}`);
+                        console.log(chalk.green(`Switched to ${newConfig.provider}/${newConfig.model}`));
+                        console.log('');
+                    } catch (error) {
+                        console.log(chalk.red(`Failed: ${error instanceof Error ? error.message : error}`));
+                        console.log('');
+                    }
+                }
                 continue;
             }
 
@@ -512,10 +589,15 @@ export async function lintCommand(
 
 export async function fixCommand(
     ctx: CommandContext,
-    file: string
+    file: string,
+    modelSpec?: string
 ): Promise<ExitCode> {
     const toolContext = buildToolContext(ctx);
-    const agent = new GateFlowAgent(ctx.bus, toolContext);
+    const { modelConfig, error } = resolveModelConfig(modelSpec);
+    if (error) {
+        return ExitCodes.CONFIG_ERROR;
+    }
+    const agent = new GateFlowAgent(ctx.bus, toolContext, { modelConfig });
 
     // Pass KnowledgeStore for auto-load/persist of fix patterns
     const fixLoop = new FixLoop(
@@ -647,10 +729,15 @@ export async function generateCommand(
     ctx: CommandContext,
     type: 'module' | 'testbench' | 'package',
     name: string,
-    options: { output?: string }
+    options: { output?: string },
+    modelSpec?: string
 ): Promise<ExitCode> {
     const toolContext = buildToolContext(ctx);
-    const agent = new GateFlowAgent(ctx.bus, toolContext);
+    const { modelConfig, error } = resolveModelConfig(modelSpec);
+    if (error) {
+        return ExitCodes.CONFIG_ERROR;
+    }
+    const agent = new GateFlowAgent(ctx.bus, toolContext, { modelConfig });
 
     // Build generation prompt and select mode
     const outputPath = options.output ?? `${name}.sv`;
@@ -1064,6 +1151,179 @@ export async function waveWebCommand(ctx: CommandContext, vcdPath: string, port:
     } catch (error) {
         console.error(chalk.red(`Failed to start viewer: ${error}`));
         return ExitCodes.TOOL_ERROR;
+    }
+}
+
+// ============================================================================
+// Interactive Model Selector
+// ============================================================================
+
+interface ModelSelectorResult {
+    switched: boolean;
+    cancelled: boolean;
+    model?: string;
+}
+
+interface ModelMenuItem {
+    provider: ProviderName;
+    model: string;
+    needsApiKey: boolean;
+}
+
+/**
+ * Show an interactive model selector with two sections:
+ * - Included: Providers with API keys already configured
+ * - Supported: Providers without API keys (need setup)
+ */
+async function showInteractiveModelSelector(
+    agent: GateFlowAgent,
+    uiCoordinator: UIAgentCoordinator,
+    renderer: TerminalRenderer
+): Promise<ModelSelectorResult> {
+    const currentConfig = agent.getModelConfig();
+    const availableProviders = detectAvailableProviders();
+
+    // Build menu sections
+    const includedSection: MenuSection<ModelMenuItem> = {
+        title: 'Configured Providers',
+        headerColor: chalk.green,
+        items: []
+    };
+
+    const supportedSection: MenuSection<ModelMenuItem> = {
+        title: 'Available Providers (needs API key)',
+        headerColor: chalk.yellow,
+        items: []
+    };
+
+    // Populate sections with all providers
+    for (const [providerName, info] of Object.entries(PROVIDERS)) {
+        const provider = providerName as ProviderName;
+        const isConfigured = availableProviders.includes(provider);
+        const isCurrent = currentConfig?.provider === provider;
+
+        // Add each model as a menu item
+        for (const modelName of info.models) {
+            const isCurrentModel = isCurrent && currentConfig?.model === modelName;
+            const item: MenuItem<ModelMenuItem> = {
+                label: `${info.name} - ${modelName}`,
+                value: { provider, model: modelName, needsApiKey: !isConfigured },
+                description: isCurrentModel ? chalk.green('(current)') : undefined,
+                disabled: isCurrentModel, // Can't switch to current model
+                hint: isConfigured
+                    ? undefined
+                    : `Requires ${info.envVar}. Get key at: ${info.docUrl}`
+            };
+
+            if (isConfigured) {
+                includedSection.items.push(item);
+            } else {
+                supportedSection.items.push(item);
+            }
+        }
+    }
+
+    // Filter out empty sections
+    const sections: MenuSection<ModelMenuItem>[] = [];
+    if (includedSection.items.length > 0) {
+        sections.push(includedSection);
+    }
+    if (supportedSection.items.length > 0) {
+        sections.push(supportedSection);
+    }
+
+    if (sections.length === 0) {
+        console.log(chalk.red('\nNo AI providers available.'));
+        console.log(chalk.dim('Configure at least one API key to use AI features.'));
+        return { switched: false, cancelled: true };
+    }
+
+    // Pause renderer during menu
+    renderer.pauseForInput();
+
+    // Show the menu
+    const result = await showSectionedMenu(sections, {
+        title: `Select Model ${currentConfig ? chalk.dim(`(current: ${currentConfig.provider}/${currentConfig.model})`) : ''}`,
+        showHelp: true,
+        maxVisibleItems: 12,
+        onPromptStart: () => renderer.pauseForInput(),
+        onPromptEnd: () => renderer.resumeAfterInput()
+    });
+
+    // Resume renderer
+    renderer.resumeAfterInput();
+
+    if (!result.selected || !result.value) {
+        return { switched: false, cancelled: true };
+    }
+
+    const selectedItem = result.value;
+
+    // If provider needs API key, prompt for it
+    if (selectedItem.needsApiKey) {
+        const providerInfo = PROVIDERS[selectedItem.provider];
+
+        console.log('');
+        console.log(chalk.cyan(`Setting up ${providerInfo.name}`));
+        console.log(chalk.dim(`Get your API key at: ${providerInfo.docUrl}`));
+
+        // Prompt for API key
+        const apiKeyResult = await showTextInput({
+            prompt: chalk.yellow(`Enter ${providerInfo.envVar}:`),
+            mask: true,
+            onPromptStart: () => renderer.pauseForInput(),
+            onPromptEnd: () => renderer.resumeAfterInput()
+        });
+
+        if (!apiKeyResult.submitted || !apiKeyResult.value) {
+            return { switched: false, cancelled: true };
+        }
+
+        const apiKey = apiKeyResult.value.trim();
+
+        // Test the API key
+        console.log(chalk.dim('\nValidating API key...'));
+        console.log(chalk.dim(`Key length: ${apiKey.length} chars`));
+
+        const validationResult = await testApiKey(selectedItem.provider, apiKey);
+
+        if (!validationResult.valid) {
+            console.log(chalk.red(`\n✗ ${validationResult.error}`));
+            if (validationResult.hint) {
+                console.log(chalk.yellow(`  Hint: ${validationResult.hint}`));
+            }
+            console.log(chalk.dim(`\n  Get your API key at: ${PROVIDERS[selectedItem.provider].docUrl}`));
+            return { switched: false, cancelled: false };
+        }
+
+        console.log(chalk.green('API key validated successfully!'));
+
+        // Save the API key to process.env
+        setProviderApiKey(selectedItem.provider, apiKey);
+    }
+
+    // Switch to the selected model
+    try {
+        const newConfig: ModelConfig = {
+            provider: selectedItem.provider,
+            model: selectedItem.model
+        };
+
+        // Validate the model can be created
+        createModel(newConfig);
+
+        // Update agent and UI coordinator
+        agent.setModelConfig(newConfig);
+        uiCoordinator.setModel(`${newConfig.provider}/${newConfig.model}`);
+
+        return {
+            switched: true,
+            cancelled: false,
+            model: `${newConfig.provider}/${newConfig.model}`
+        };
+    } catch (error) {
+        console.log(chalk.red(`\nFailed to switch model: ${error instanceof Error ? error.message : error}`));
+        return { switched: false, cancelled: false };
     }
 }
 

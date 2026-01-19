@@ -11,7 +11,7 @@
 
 import { generateObject, streamText, stepCountIs } from 'ai';
 import { createModeStopCondition, type StopCondition } from '../stop-conditions.js';
-import { createAnthropicClient } from '../anthropic-client.js';
+import { createModel, parseModelString } from '../model-provider.js';
 import type { EventBus } from '../../events/index.js';
 import type {
     GateFlowAgent,
@@ -154,7 +154,7 @@ export class Orchestrator {
         );
 
         const { object: routing } = await generateObject({
-            model: createAnthropicClient(this.modelName) as any,
+            model: createModel(parseModelString(this.modelName)) as any,
             schema: AgentRoutingSchema,
             prompt: `Route this request to the best agent:
 
@@ -199,7 +199,7 @@ Select the most appropriate agent and describe the task.`
             );
 
             const result = await streamText({
-                model: createAnthropicClient(this.modelName) as any,
+                model: createModel(parseModelString(this.modelName)) as any,
                 system: worker.system,
                 prompt: routing.taskDescription,
                 tools: worker.tools,
@@ -530,7 +530,7 @@ Select the most appropriate agent and describe the task.`
         );
 
         const result = await streamText({
-            model: createAnthropicClient(this.modelName) as any,
+            model: createModel(parseModelString(this.modelName)) as any,
             system: worker.system,
             prompt: enhancedPrompt,
             tools: worker.tools,

@@ -25,6 +25,8 @@ import {
 } from './commands.js';
 import { startMCPServer } from '../waveform/mcp-server.js';
 
+import { hasAnyProvider, PROVIDERS } from '../agent/model-provider.js';
+
 /**
  * Validate required environment variables
  * Returns list of missing required vars
@@ -33,9 +35,12 @@ function validateEnvVars(): { missing: string[]; warnings: string[] } {
     const missing: string[] = [];
     const warnings: string[] = [];
 
-    // Required for AI functionality
-    if (!process.env.ANTHROPIC_API_KEY) {
-        missing.push('ANTHROPIC_API_KEY');
+    // Check for at least one AI provider API key
+    if (!hasAnyProvider()) {
+        const providerList = Object.entries(PROVIDERS)
+            .map(([_, info]) => `  - ${info.envVar} (${info.name})`)
+            .join('\n');
+        missing.push(`At least one AI provider API key:\n${providerList}`);
     }
 
     // Optional but recommended
@@ -82,6 +87,7 @@ program
     .option('--json', 'Output results as JSON', false)
     .option('-v, --verbose', 'Enable verbose output', false)
     .option('-C, --cwd <path>', 'Set working directory', process.cwd())
+    .option('-m, --model <spec>', 'Model to use (format: provider/model, e.g., openai/gpt-4o)')
     .hook('preAction', (thisCommand) => {
         const opts = program.opts();
 
@@ -130,13 +136,15 @@ program
 program
     .command('chat [query...]')
     .description('Start interactive chat session (or run a single query)')
-    .action(async (queryParts: string[]) => {
-        const opts = program.opts() as GlobalOptions;
+    .option('-m, --model <spec>', 'Model to use (format: provider/model)')
+    .action(async (queryParts: string[], cmdOpts: { model?: string }) => {
+        const opts = program.opts() as GlobalOptions & { model?: string };
         const ctx = await setupContext(opts);
-        
+
         const query = queryParts.length > 0 ? queryParts.join(' ') : undefined;
-        const exitCode = await chatCommand(ctx, query);
-        
+        const modelSpec = cmdOpts.model || opts.model; // Command option takes precedence
+        const exitCode = await chatCommand(ctx, query, modelSpec);
+
         process.exit(exitCode);
     });
 
@@ -144,12 +152,12 @@ program
 program
     .argument('[query...]', 'Query to send to the assistant')
     .action(async (queryParts: string[]) => {
-        const opts = program.opts() as GlobalOptions;
+        const opts = program.opts() as GlobalOptions & { model?: string };
         const ctx = await setupContext(opts);
-        
+
         const query = queryParts.length > 0 ? queryParts.join(' ') : undefined;
-        const exitCode = await chatCommand(ctx, query);
-        
+        const exitCode = await chatCommand(ctx, query, opts.model);
+
         process.exit(exitCode);
     });
 
@@ -188,10 +196,12 @@ program
 program
     .command('fix <file>')
     .description('Auto-fix lint errors in a file using AI')
-    .action(async (file: string) => {
+    .option('-m, --model <spec>', 'Model to use (format: provider/model)')
+    .action(async (file: string, cmdOpts: { model?: string }) => {
         const opts = program.opts() as GlobalOptions;
         const ctx = await setupContext(opts);
-        const exitCode = await fixCommand(ctx, file);
+        const modelSpec = cmdOpts.model || opts.model;
+        const exitCode = await fixCommand(ctx, file, modelSpec);
         process.exit(exitCode);
     });
 
@@ -217,7 +227,8 @@ program
     .command('gen <type> <name>')
     .description('Generate SystemVerilog code (module, testbench, or package)')
     .option('-o, --output <path>', 'Output file path')
-    .action(async (type: string, name: string, cmdOpts: { output?: string }) => {
+    .option('-m, --model <spec>', 'Model to use (format: provider/model)')
+    .action(async (type: string, name: string, cmdOpts: { output?: string; model?: string }) => {
         if (!['module', 'testbench', 'package'].includes(type)) {
             console.error(`Invalid type: ${type}. Must be module, testbench, or package.`);
             process.exit(ExitCodes.CONFIG_ERROR);
@@ -225,11 +236,13 @@ program
         
         const opts = program.opts() as GlobalOptions;
         const ctx = await setupContext(opts);
+        const modelSpec = cmdOpts.model || opts.model;
         const exitCode = await generateCommand(
             ctx,
             type as 'module' | 'testbench' | 'package',
             name,
-            cmdOpts
+            cmdOpts,
+            modelSpec
         );
         process.exit(exitCode);
     });
