@@ -51,6 +51,7 @@ export class SVIndexerAdapter {
   private legacyIndex: ProjectIndex;
   private filePaths: string[] = [];
   private projectCache: ProjectIndexCache;
+  private warnedAboutContextFallback = false;
 
   constructor(
     private rootPath: string,
@@ -544,6 +545,15 @@ export class SVIndexerAdapter {
             this.project.compileOrderId,
           );
         } else {
+          if (!this.warnedAboutContextFallback) {
+            this.warnedAboutContextFallback = true;
+            this.bus.emit({
+              type: "status",
+              phase: "memory",
+              label:
+                "MemoryService unavailable; using KnowledgeStore context fallback.",
+            });
+          }
           knowledgeStore.setActiveContext(
             this.project.defineContextId,
             this.project.compileOrderId,

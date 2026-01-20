@@ -1,7 +1,7 @@
 /**
  * Orchestrator
  * Coordinates multiple specialized agents using AI SDK 6 patterns
- * Uses generateObject for intelligent routing to worker agents
+ * Executes multi-agent plans; routing decisions stay in GateFlowAgent
  *
  * AI SDK 6 Features:
  * - Tool approval is handled at the executor level via TOOL_APPROVAL_CONFIG
@@ -9,12 +9,12 @@
  * - Future: Will use ToolLoopAgent when available for cleaner agent management
  */
 
-import { generateObject, streamText, stepCountIs } from 'ai';
+import { streamText, type StepResult } from 'ai';
 import { createModeStopCondition, type StopCondition } from '../stop-conditions.js';
 import { createModelWithVariant, type ModelWithVariant } from '../model-provider.js';
 import type { EventBus } from '../../events/index.js';
 import type {
-    GateFlowAgent,
+    WorkerProfile,
     ExecutionPlan,
     Task,
     TaskContext,
@@ -22,7 +22,6 @@ import type {
     ProjectContext,
     DependencyFailurePolicy
 } from '../../types/agent-shared.js';
-import { AgentRoutingSchema } from '../../types/agent-shared.js';
 import { createPlan } from '../workers/PlanningAgent.js';
 import { ThinkingChain } from '../reasoning/ThinkingChain.js';
 import type { SVIndexerAdapter } from '../../indexer/sv-indexer-adapter.js';
@@ -67,7 +66,7 @@ class OrchestratorAbortError extends Error {
 }
 
 export class Orchestrator {
-    private workers: Map<string, GateFlowAgent> = new Map();
+    private workers: Map<string, WorkerProfile> = new Map();
     private thinkingChain: ThinkingChain;
     private taskResults: Map<string, TaskResult> = new Map();
     private abortControllers: Map<string, AbortController> = new Map();
@@ -121,7 +120,7 @@ export class Orchestrator {
     /**
      * Register a worker agent
      */
-    registerWorker(name: string, agent: GateFlowAgent): void {
+    registerWorker(name: string, agent: WorkerProfile): void {
         this.workers.set(name, agent);
     }
 
@@ -146,187 +145,6 @@ export class Orchestrator {
             controller.abort();
         }
         this.abortControllers.clear();
-    }
-
-    /**
-     * Execute a simple request with single agent routing
-     */
-    async execute(userRequest: string): Promise<string> {
-        this.thinkingChain.addCoordinationStep(
-            'Routing request to appropriate agent',
-            { request: userRequest },
-            0.9
-        );
-
-        const { object: routing } = await generateObject({
-            model: this.modelBundle.model as any,
-            schema: AgentRoutingSchema,
-            prompt: `Route this request to the best agent:
-
-Request: "${userRequest}"
-
-Available agents:
-- understanding: For reading/analyzing existing code
-- codegen: For creating new SystemVerilog modules
-- testbench: For generating testbenches
-- debug: For diagnosing simulation failures
-- refactoring: For modifying existing code
-
-Select the most appropriate agent and describe the task.`,
-            ...this.modelBundle.variantOptions
-        });
-
-        this.thinkingChain.addCoordinationStep(
-            `Selected agent: ${routing.selectedAgent}`,
-            { routing },
-            0.95
-        );
-
-        const worker = this.workers.get(routing.selectedAgent);
-        if (!worker) {
-            throw new Error(`Unknown agent: ${routing.selectedAgent}`);
-        }
-
-        this.bus.emit({
-            type: 'agent_start',
-            agentName: routing.selectedAgent,
-            task: routing.taskDescription
-        });
-
-        const startTime = Date.now();
-
-        try {
-            let lastUsage: { inputTokens?: number; outputTokens?: number } | undefined;
-
-            // Use mode-aware stop condition based on worker's name
-            const workerStopCondition = this.getWorkerStopCondition(
-                worker.name,
-                worker.stepLimit || 10
-            );
-
-            const result = await streamText({
-                model: this.modelBundle.model as any,
-                system: worker.system,
-                prompt: routing.taskDescription,
-                tools: worker.tools,
-                toolChoice: worker.toolChoice,
-                stopWhen: workerStopCondition,
-                ...this.modelBundle.variantOptions,
-                onStepFinish: (step) => {
-                    this.thinkingChain.onStepFinish(step);
-                },
-                onError: ({ error }) => {
-                    this.bus.emit({
-                        type: 'error',
-                        message: error instanceof Error ? error.message : String(error)
-                    });
-                },
-                onAbort: ({ steps }) => {
-                    this.bus.emit({
-                        type: 'status',
-                        phase: 'thinking',
-                        label: `Agent aborted after ${steps.length} steps`
-                    });
-                },
-                onFinish: ({ totalUsage }) => {
-                    lastUsage = totalUsage;
-                }
-            });
-
-            let output = '';
-            for await (const part of result.fullStream) {
-                switch (part.type) {
-                    case 'text-delta':
-                        output += part.text;
-                        this.bus.emit({
-                            type: 'token',
-                            text: part.text
-                        });
-                        break;
-
-                    case 'tool-call':
-                        this.bus.emit({
-                            type: 'tool_call',
-                            tool: part.toolName,
-                            argsSummary: this.summarizeToolArgs(part.input),
-                            args: part.input as Record<string, unknown>
-                        });
-                        break;
-
-                    case 'tool-result': {
-                        const hasError = part.output && typeof part.output === 'object' &&
-                            part.output !== null && 'error' in part.output;
-                        this.bus.emit({
-                            type: 'tool_result',
-                            tool: part.toolName,
-                            ok: !hasError,
-                            summary: this.summarizeToolResult(part.output)
-                        });
-                        break;
-                    }
-
-                    case 'error': {
-                        const errorMsg = (part as any).error instanceof Error
-                            ? (part as any).error.message
-                            : String((part as any).error);
-                        this.bus.emit({
-                            type: 'error',
-                            message: `Stream error: ${errorMsg}`
-                        });
-                        break;
-                    }
-
-                    case 'tool-error': {
-                        const toolError = part as any;
-                        const errorMsg = toolError.error instanceof Error
-                            ? toolError.error.message
-                            : String(toolError.error);
-                        this.bus.emit({
-                            type: 'error',
-                            message: `Tool ${toolError.toolName} failed: ${errorMsg}`
-                        });
-                        break;
-                    }
-                }
-            }
-
-            const finalText = await result.text;
-            const duration = Date.now() - startTime;
-
-            this.bus.emit({
-                type: 'agent_complete',
-                agentName: routing.selectedAgent,
-                success: true,
-                result: finalText,
-                durationMs: duration,
-                inputTokens: lastUsage?.inputTokens,
-                outputTokens: lastUsage?.outputTokens
-            });
-
-            return finalText || output;
-        } catch (error) {
-            const duration = Date.now() - startTime;
-            const errorMsg = error instanceof Error ? error.message : String(error);
-
-            this.thinkingChain.addAnalysisStep(
-                `Agent ${routing.selectedAgent} failed: ${errorMsg}`,
-                { error: errorMsg },
-                0
-            );
-
-            this.bus.emit({
-                type: 'error',
-                message: `Agent ${routing.selectedAgent} failed: ${errorMsg}`
-            });
-
-            this.bus.emit({
-                type: 'agent_complete',
-                agentName: routing.selectedAgent,
-                success: false,
-                durationMs: duration
-            });
-            throw error;
-        }
     }
 
     /**
@@ -520,8 +338,48 @@ Select the most appropriate agent and describe the task.`,
         }
     }
 
+    private async runWorkerTask(
+        worker: WorkerProfile,
+        prompt: string,
+        signal: AbortSignal,
+        callbacks: {
+            onStepFinish: (step: unknown) => void;
+            onError: ({ error }: { error: unknown }) => void;
+            onAbort: ({ steps }: { steps: unknown[] }) => void;
+            onFinish: ({ totalUsage }: { totalUsage?: { inputTokens?: number; outputTokens?: number } }) => void;
+        }
+    ) {
+        const workerStopCondition = this.getWorkerStopCondition(
+            worker.name,
+            worker.stepLimit || 10
+        );
+        const modelBundle = worker.modelName
+            ? createModelWithVariant(worker.modelName)
+            : this.modelBundle;
+        const runtimeOverrides: { maxOutputTokens?: number; temperature?: number } = {};
+        if (worker.maxOutputTokens !== undefined) {
+            runtimeOverrides.maxOutputTokens = worker.maxOutputTokens;
+        }
+        if (worker.temperature !== undefined) {
+            runtimeOverrides.temperature = worker.temperature;
+        }
+
+        return streamText({
+            model: modelBundle.model as any,
+            system: worker.system,
+            prompt,
+            tools: worker.tools,
+            toolChoice: worker.toolChoice,
+            stopWhen: workerStopCondition,
+            abortSignal: signal,
+            ...modelBundle.variantOptions,
+            ...runtimeOverrides,
+            ...callbacks
+        });
+    }
+
     private async runTaskStream(
-        worker: GateFlowAgent,
+        worker: WorkerProfile,
         task: Task,
         context: TaskContext,
         signal: AbortSignal
@@ -530,24 +388,10 @@ Select the most appropriate agent and describe the task.`,
         let lastUsage: { inputTokens?: number; outputTokens?: number } | undefined;
         let stepCount = 0;
 
-        // Use mode-aware stop condition based on worker's name
-        const workerStopCondition = this.getWorkerStopCondition(
-            worker.name,
-            worker.stepLimit || 10
-        );
-
-        const result = await streamText({
-            model: this.modelBundle.model as any,
-            system: worker.system,
-            prompt: enhancedPrompt,
-            tools: worker.tools,
-            toolChoice: worker.toolChoice,
-            stopWhen: workerStopCondition,
-            abortSignal: signal,
-            ...this.modelBundle.variantOptions,
+        const result = await this.runWorkerTask(worker, enhancedPrompt, signal, {
             onStepFinish: (step) => {
                 stepCount += 1;
-                this.thinkingChain.onStepFinish(step);
+                this.thinkingChain.onStepFinish(step as StepResult<any>);
             },
             onError: ({ error }) => {
                 this.bus.emit({

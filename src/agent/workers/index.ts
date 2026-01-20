@@ -3,7 +3,7 @@
  * Specialized agents for different tasks
  */
 
-export { createAgent } from './agentFactory.js';
+export { createAgent } from './workerFactory.js';
 export { createPlan, parsePlan } from './PlanningAgent.js';
 export { createUnderstandingAgent } from './UnderstandingAgent.js';
 export { createCodeGenAgent } from './CodeGenerationAgent.js';

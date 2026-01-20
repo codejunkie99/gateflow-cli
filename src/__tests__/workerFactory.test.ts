@@ -1,12 +1,12 @@
 /**
- * Agent Factory Unit Tests
+ * Worker Factory Unit Tests
  */
 
 import { describe, it, expect } from 'vitest';
-import { createAgent } from '../agent/workers/agentFactory.js';
+import { createAgent } from '../agent/workers/workerFactory.js';
 import { z } from 'zod';
 
-describe('Agent Factory', () => {
+describe('Worker Factory', () => {
     it('should create agent with required fields', () => {
         const agent = createAgent({
             name: 'test',

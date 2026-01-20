@@ -5,13 +5,13 @@
  */
 
 import type { Tool } from 'ai';
-import type { GateFlowAgent } from '../../types/agent-shared.js';
-import { createAgent } from './agentFactory.js';
+import type { WorkerProfile } from '../../types/agent-shared.js';
+import { createAgent } from './workerFactory.js';
 
 /**
  * Create understanding agent with analysis tools
  */
-export function createUnderstandingAgent(tools: Record<string, Tool>): GateFlowAgent {
+export function createUnderstandingAgent(tools: Record<string, Tool>): WorkerProfile {
     return createAgent({
         name: 'understanding',
         role: 'Code Analysis Specialist',
@@ -36,4 +36,3 @@ export function createUnderstandingAgent(tools: Record<string, Tool>): GateFlowA
         toolChoice: 'required'
     });
 }
-
