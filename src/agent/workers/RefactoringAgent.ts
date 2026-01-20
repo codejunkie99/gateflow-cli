@@ -5,13 +5,13 @@
  */
 
 import type { Tool } from 'ai';
-import type { GateFlowAgent } from '../../types/agent-shared.js';
-import { createAgent } from './agentFactory.js';
+import type { WorkerProfile } from '../../types/agent-shared.js';
+import { createAgent } from './workerFactory.js';
 
 /**
  * Create refactoring agent with edit tools
  */
-export function createRefactoringAgent(tools: Record<string, Tool>): GateFlowAgent {
+export function createRefactoringAgent(tools: Record<string, Tool>): WorkerProfile {
     return createAgent({
         name: 'refactoring',
         role: 'Code Refactoring Specialist',

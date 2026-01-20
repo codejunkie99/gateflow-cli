@@ -71,8 +71,6 @@ export class MemoryService {
   private initialized = false;
   private initMutex = new AsyncMutex();
   private contextTokenBudget: number;
-  private activeDefineContextId?: string;
-  private activeCompileOrderId?: string;
 
   constructor(
     private projectRoot: string,
@@ -181,22 +179,20 @@ export class MemoryService {
     const adjustedKnowledgeBudget =
       knowledgeBudget + (memoryBudget - actualMemoryTokens);
 
-    const enrichedQuery = this.enrichQuery(query);
-
     // Use KnowledgeService for combined structural + learned knowledge context
     // Method signature: getContextForAI(query?, filePath?, moduleName?, maxTokens?)
     const knowledgeContext = this.knowledgeService.getContextForAI(
       {
-        query: enrichedQuery?.query,
-        filePath: enrichedQuery?.filePath,
-        moduleName: enrichedQuery?.moduleName,
-        knowledgeTypes: enrichedQuery?.types,
-        tags: enrichedQuery?.tags,
-        maxResults: enrichedQuery?.maxResults,
-        minConfidence: enrichedQuery?.minConfidence,
-        defineContextId: enrichedQuery?.defineContextId,
-        compileOrderId: enrichedQuery?.compileOrderId,
-        relaxedScope: enrichedQuery?.relaxedScope,
+        query: query?.query,
+        filePath: query?.filePath,
+        moduleName: query?.moduleName,
+        knowledgeTypes: query?.types,
+        tags: query?.tags,
+        maxResults: query?.maxResults,
+        minConfidence: query?.minConfidence,
+        defineContextId: query?.defineContextId,
+        compileOrderId: query?.compileOrderId,
+        relaxedScope: query?.relaxedScope,
       },
       adjustedKnowledgeBudget,
     );
@@ -348,19 +344,7 @@ export class MemoryService {
    * Set active context to be used for knowledge queries.
    */
   setActiveContext(defineContextId?: string, compileOrderId?: string): void {
-    this.activeDefineContextId = defineContextId;
-    this.activeCompileOrderId = compileOrderId;
     this.knowledgeStore.setActiveContext(defineContextId, compileOrderId);
-  }
-
-  private enrichQuery(query?: KnowledgeQuery): KnowledgeQuery | undefined {
-    if (!query) return query;
-    if (!this.activeDefineContextId && !this.activeCompileOrderId) return query;
-    return {
-      ...query,
-      defineContextId: query.defineContextId ?? this.activeDefineContextId,
-      compileOrderId: query.compileOrderId ?? this.activeCompileOrderId,
-    };
   }
 }
 

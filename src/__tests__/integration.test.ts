@@ -59,6 +59,7 @@ describe('Integration Tests', () => {
 
             const understanding = createUnderstandingAgent(mockTools as any);
             expect(understanding.name).toBe('understanding');
+            expect(understanding.system).toContain('Do not write or modify files; describe findings only');
 
             const codegen = createCodeGenAgent(mockTools as any);
             expect(codegen.name).toBe('codegen');

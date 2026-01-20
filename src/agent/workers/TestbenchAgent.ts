@@ -5,13 +5,13 @@
  */
 
 import type { Tool } from 'ai';
-import type { GateFlowAgent } from '../../types/agent-shared.js';
-import { createAgent } from './agentFactory.js';
+import type { WorkerProfile } from '../../types/agent-shared.js';
+import { createAgent } from './workerFactory.js';
 
 /**
  * Create testbench agent with verification tools
  */
-export function createTestbenchAgent(tools: Record<string, Tool>): GateFlowAgent {
+export function createTestbenchAgent(tools: Record<string, Tool>): WorkerProfile {
     return createAgent({
         name: 'testbench',
         role: 'Verification Engineer',

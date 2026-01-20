@@ -28,7 +28,7 @@ GateFlow CLI is a production-grade command-line interface that integrates AI-pow
 ### Multi-Agent AI System
 
 - **Specialized Worker Agents** — Five purpose-built agents for understanding, code generation, testbench creation, debugging, and refactoring
-- **Intelligent Orchestration** — Automatic complexity detection with dynamic task routing
+- **Intelligent Orchestration** — Automatic complexity detection with multi-agent plan execution
 - **Execution Planning** — Multi-step task decomposition with dependency resolution
 - **Transparent Reasoning** — Real-time visibility into agent decision-making processes
 
@@ -214,7 +214,7 @@ GateFlow CLI implements a multi-agent architecture designed for complex hardware
                             ▼
 ┌─────────────────────────────────────────────────────────┐
 │               Complexity Detection                       │
-│         Determines routing strategy for query           │
+│      GateFlowAgent selects single vs multi-agent flow    │
 └─────────────────────────────────────────────────────────┘
                             │
            ┌────────────────┴────────────────┐
@@ -232,6 +232,8 @@ GateFlow CLI implements a multi-agent architecture designed for complex hardware
 │   Worker Execution  │         │  Sequential Execution   │
 └─────────────────────┘         └─────────────────────────┘
 ```
+
+GateFlowAgent owns routing decisions; Orchestrator only executes approved multi-agent plans.
 
 ### Core Components
 

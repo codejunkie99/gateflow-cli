@@ -8,13 +8,13 @@
  */
 
 import type { Tool } from 'ai';
-import type { GateFlowAgent } from '../../types/agent-shared.js';
-import { createAgent } from './agentFactory.js';
+import type { WorkerProfile } from '../../types/agent-shared.js';
+import { createAgent } from './workerFactory.js';
 
 /**
  * Create a ToolSetupAgent for configuring Verible and Slang.
  */
-export function createToolSetupAgent(tools: Record<string, Tool>): GateFlowAgent {
+export function createToolSetupAgent(tools: Record<string, Tool>): WorkerProfile {
   return createAgent({
     name: 'tool_setup',
     role: 'SystemVerilog Tool Setup Specialist',

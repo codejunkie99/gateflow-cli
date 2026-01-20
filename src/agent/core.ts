@@ -47,7 +47,7 @@ import type { RuntimeCallOptions } from '../types/agent-types.js';
 import {
     classifyWorkflow,
     executeWorkflow,
-    type WorkflowSelection,
+    type WorkflowType,
     type WorkflowContext
 } from './workflows/index.js';
 import {
@@ -59,6 +59,7 @@ import {
     type StepSettings
 } from './loop-control.js';
 import { prefetchOpenRouterModels } from './model-provider-openrouter.js';
+import { truncateToFit } from '../memory/token-estimator.js';
 
 // ============================================================================
 // Types
@@ -82,6 +83,11 @@ export interface AgentSession {
     hasErrors: boolean; // Tracks if we've seen lint errors this session
     thinkingChain: ThinkingChain; // NEW: Thinking visibility
 }
+
+type WorkflowOutcome =
+    | { status: 'applied'; output: string; workflow: WorkflowType }
+    | { status: 'not_applicable'; reason: string }
+    | { status: 'failed'; workflow: WorkflowType | 'unknown'; error: string };
 
 /**
  * AI SDK 6: Type-safe call options for context injection
@@ -124,6 +130,7 @@ export interface RunOptions {
 // ============================================================================
 
 const DEFAULT_SYSTEM_PROMPT = getSystemPrompt('general');
+const ARCHIVE_INSTRUCTIONS_TOKEN_BUDGET = 200;
 
 // ============================================================================
 // Agent Class
@@ -407,9 +414,13 @@ export class GateFlowAgent {
 
                 // Add history reference as a system-like context at the start
                 if (archiveResult.historyRef) {
+                    const instructions = truncateToFit(
+                        archiveResult.historyRef.agentInstructions,
+                        ARCHIVE_INSTRUCTIONS_TOKEN_BUDGET
+                    );
                     this.session.messages.unshift({
                         role: 'system',
-                        content: archiveResult.historyRef.agentInstructions
+                        content: instructions
                     });
                 }
             }
@@ -487,9 +498,29 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
             });
 
             // Check if request matches a specialized workflow pattern
-            const workflowResult = await this.tryWorkflowExecution(userMessage, mode);
-            if (workflowResult) {
-                return workflowResult;
+            const workflowOutcome = await this.tryWorkflowExecution(userMessage, mode);
+            switch (workflowOutcome.status) {
+                case 'applied':
+                    return workflowOutcome.output;
+                case 'failed': {
+                    const workflowLabel = workflowOutcome.workflow === 'unknown'
+                        ? 'workflow'
+                        : workflowOutcome.workflow;
+                    const errorMessage = `${workflowLabel} workflow failed: ${workflowOutcome.error}. ` +
+                        'Falling back to standard agent.';
+                    this.bus.emit({
+                        type: 'error',
+                        message: errorMessage
+                    });
+                    this.session.thinkingChain.addAnalysisStep(
+                        `Workflow failed: ${workflowLabel}`,
+                        { workflow: workflowOutcome.workflow, error: workflowOutcome.error },
+                        0.3
+                    );
+                    break;
+                }
+                case 'not_applicable':
+                    break;
             }
 
             if (complexity.needsMultiAgent && this.orchestrator) {
@@ -793,7 +824,7 @@ ${contextBlock}
 
     /**
      * Try to execute the request using a specialized workflow pattern.
-     * Returns null if no workflow matches, otherwise returns the result.
+     * Returns an outcome indicating whether a workflow was applied, skipped, or failed.
      *
      * Workflow patterns provide structured execution for specific task types:
      * - lint_fix: Iterative error fixing
@@ -804,12 +835,14 @@ ${contextBlock}
     private async tryWorkflowExecution(
         userMessage: string,
         mode: PromptMode
-    ): Promise<string | null> {
+    ): Promise<WorkflowOutcome> {
         // Only try workflows for specific modes that benefit from structured patterns
         const workflowModes: PromptMode[] = ['lint_fix', 'generate', 'testbench', 'edit'];
         if (!workflowModes.includes(mode)) {
-            return null;
+            return { status: 'not_applicable', reason: 'mode_not_supported' };
         }
+
+        let selectedWorkflow: WorkflowType | 'unknown' = 'unknown';
 
         try {
             // Classify the request to see if a workflow pattern fits
@@ -821,15 +854,16 @@ ${contextBlock}
                 },
                 this.config.model
             );
+            selectedWorkflow = selection.workflow;
 
             // Only use workflow if confidence is high enough
             if (selection.confidence < 0.7) {
-                return null;
+                return { status: 'not_applicable', reason: 'low_confidence' };
             }
 
             // Skip simple_generation - let the normal agent handle it
             if (selection.workflow === 'simple_generation') {
-                return null;
+                return { status: 'not_applicable', reason: 'simple_generation' };
             }
 
             this.session.thinkingChain.addCoordinationStep(
@@ -888,15 +922,11 @@ ${contextBlock}
                 content: result.output
             });
 
-            return result.output;
+            return { status: 'applied', output: result.output, workflow: selection.workflow };
 
         } catch (error) {
-            // If workflow execution fails, fall back to normal agent
-            this.bus.emit({
-                type: 'error',
-                message: `Workflow failed, falling back: ${error instanceof Error ? error.message : error}`
-            });
-            return null;
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            return { status: 'failed', workflow: selectedWorkflow, error: errorMessage };
         }
     }
 

@@ -104,3 +104,25 @@ test/
 scripts/test-*.ts
 ralph-claude-code/
 docs/
+
+# Personal demo/experiment files (keep locally, don't commit)
+BRAINROT-*.md
+brainrot-*
+run-brainrot.js
+setup-brainrot.sh
+test-brainrot.ps1
+
+# Personal notes and findings
+FINDINGS.md
+
+# Example/test SystemVerilog files (personal experiments)
+adder_*.sv
+tb_*.sv
+testbench_*.sv
+
+# Windows null device
+nul
+
+# Test VCD files
+*.vcd
+test.vcd

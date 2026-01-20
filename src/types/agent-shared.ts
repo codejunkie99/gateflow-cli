@@ -63,27 +63,21 @@ export const ExecutionPlanSchema = z.object({
 export type ExecutionPlan = z.infer<typeof ExecutionPlanSchema>;
 export type Task = ExecutionPlan['tasks'][number];
 
-// ============= AI SDK 6 Agent Interface =============
+// ============= Worker Profile Interface =============
 
-export interface GateFlowAgent {
+export interface WorkerProfile {
     name: string;
     system: string;
     tools: Record<string, Tool>;
     toolChoice?: 'auto' | 'required' | 'none';
     /** Maximum steps for tool loop (used with stopWhen: stepCountIs()) */
     stepLimit?: number;
+    /** Optional model override (format: provider/model[:variant]) */
+    modelName?: string;
+    /** Optional generation overrides for this worker */
+    maxOutputTokens?: number;
+    temperature?: number;
 }
-
-// ============= Routing Schema (for orchestrator) =============
-
-export const AgentRoutingSchema = z.object({
-    // FIX A: Remove 'planning' from routing - planning is handled by Orchestrator.executeWithPlan()
-    selectedAgent: z.enum(['understanding', 'codegen', 'testbench', 'debug', 'refactoring']),
-    taskDescription: z.string(),
-    reasoning: z.string()
-});
-
-export type AgentRouting = z.infer<typeof AgentRoutingSchema>;
 
 // ============= Complexity Detection Schema =============
 
