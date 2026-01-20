@@ -8,6 +8,7 @@
 import { generateObject, generateText } from 'ai';
 import { z } from 'zod';
 import { createModelWithVariant } from '../model-provider.js';
+import { PromptBuilder } from '../prompts/PromptBuilder.js';
 import {
     executeChain,
     executeParallel,
@@ -112,19 +113,14 @@ export async function classifyWorkflow(
 ): Promise<WorkflowSelection> {
     const { model: client, variantOptions } = createModelWithVariant(model);
 
-    const { object } = await generateObject({
-        model: client as any,
-        schema: WorkflowClassificationSchema,
-        prompt: `Classify this SystemVerilog development request to select the best workflow pattern.
-
-Request: "${request}"
-
-Context:
+    const prompt = new PromptBuilder()
+        .addRaw('Classify this SystemVerilog development request to select the best workflow pattern.')
+        .addRaw(`Request: "${request}"`)
+        .addRaw(`Context:
 - Has lint errors: ${context?.hasLintErrors ?? 'unknown'}
 - Has existing code: ${context?.hasCode ?? 'unknown'}
-- File: ${context?.fileName ?? 'none'}
-
-Available workflows:
+- File: ${context?.fileName ?? 'none'}`)
+        .addRaw(`Available workflows:
 1. lint_fix - Fix lint/compile errors iteratively until clean
 2. module_generation - Generate a new SV module with quality checks
 3. testbench - Generate a testbench for a module
@@ -132,12 +128,17 @@ Available workflows:
 5. iterative_improve - Improve something iteratively until quality threshold met
 6. sequential_steps - Execute multiple steps in sequence
 7. parallel_analysis - Analyze something from multiple angles simultaneously
-8. simple_generation - One-shot generation, no special workflow needed
-
-Select the BEST workflow and extract any relevant parameters from the request.
+8. simple_generation - One-shot generation, no special workflow needed`)
+        .addRaw(`Select the BEST workflow and extract any relevant parameters from the request.
 For module_generation, extract the module name.
 For testbench, extract test scenarios if mentioned.
-For code_review, extract which aspects to review.`,
+For code_review, extract which aspects to review.`)
+        .build();
+
+    const { object } = await generateObject({
+        model: client as any,
+        schema: WorkflowClassificationSchema,
+        prompt,
         ...variantOptions
     });
 

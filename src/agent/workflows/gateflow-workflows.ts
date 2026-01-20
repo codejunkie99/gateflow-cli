@@ -8,6 +8,7 @@
 import { generateText, generateObject } from 'ai';
 import { z } from 'zod';
 import { createModelWithVariant } from '../model-provider.js';
+import { PromptBuilder } from '../prompts/PromptBuilder.js';
 import {
     evaluatorOptimizer,
     executeChain,
@@ -103,12 +104,12 @@ export async function lintFixWorkflow(
             qualityThreshold: 10, // 10 = no errors
 
             generate: async () => {
-                // Initial fix attempt
-                const { text: fixedCode } = await generateText({
-                    model: client as any,
-                    system: `You are an expert SystemVerilog engineer fixing lint errors.
-Fix the code to resolve the errors. Return ONLY the fixed code, no explanations.`,
-                    prompt: `Fix these lint errors in the code:
+                const systemPrompt = new PromptBuilder()
+                    .addRaw(`You are an expert SystemVerilog engineer fixing lint errors.
+Fix the code to resolve the errors. Return ONLY the fixed code, no explanations.`)
+                    .build();
+                const prompt = new PromptBuilder()
+                    .addRaw(`Fix these lint errors in the code:
 
 Errors:
 ${initialErrors.map(e => `- ${e}`).join('\n')}
@@ -116,7 +117,14 @@ ${initialErrors.map(e => `- ${e}`).join('\n')}
 Code:
 \`\`\`systemverilog
 ${code}
-\`\`\``,
+\`\`\``)
+                    .build();
+
+                // Initial fix attempt
+                const { text: fixedCode } = await generateText({
+                    model: client as any,
+                    system: systemPrompt,
+                    prompt,
                     ...variantOptions
                 });
 
@@ -140,11 +148,12 @@ ${code}
             },
 
             improve: async (currentCode, evaluation) => {
-                const { text: improvedCode } = await generateText({
-                    model: client as any,
-                    system: `You are an expert SystemVerilog engineer fixing lint errors.
-Fix the remaining errors. Return ONLY the fixed code, no explanations.`,
-                    prompt: `Fix these remaining lint errors:
+                const systemPrompt = new PromptBuilder()
+                    .addRaw(`You are an expert SystemVerilog engineer fixing lint errors.
+Fix the remaining errors. Return ONLY the fixed code, no explanations.`)
+                    .build();
+                const prompt = new PromptBuilder()
+                    .addRaw(`Fix these remaining lint errors:
 
 Errors:
 ${evaluation.issues.map(e => `- ${e}`).join('\n')}
@@ -152,7 +161,13 @@ ${evaluation.issues.map(e => `- ${e}`).join('\n')}
 Current code:
 \`\`\`systemverilog
 ${currentCode}
-\`\`\``,
+\`\`\``)
+                    .build();
+
+                const { text: improvedCode } = await generateText({
+                    model: client as any,
+                    system: systemPrompt,
+                    prompt,
                     ...variantOptions
                 });
 
@@ -237,18 +252,25 @@ export async function moduleGenerationWorkflow(
             qualityThreshold,
 
             generate: async () => {
-                const { text: moduleCode } = await generateText({
-                    model: client as any,
-                    system: `You are an expert SystemVerilog engineer. Generate synthesizable, well-documented modules.
-Follow IEEE 1800-2017 standard. Use meaningful signal names and include comments.`,
-                    prompt: `Generate a SystemVerilog module with these specifications:
+                const systemPrompt = new PromptBuilder()
+                    .addRaw(`You are an expert SystemVerilog engineer. Generate synthesizable, well-documented modules.
+Follow IEEE 1800-2017 standard. Use meaningful signal names and include comments.`)
+                    .build();
+                const prompt = new PromptBuilder()
+                    .addRaw(`Generate a SystemVerilog module with these specifications:
 
 Module name: ${spec.moduleName}
 Description: ${spec.description}
 Ports: ${portSpec}
 ${paramSpec ? `Parameters: ${paramSpec}` : ''}
 
-Return ONLY the module code, no explanations.`,
+Return ONLY the module code, no explanations.`)
+                    .build();
+
+                const { text: moduleCode } = await generateText({
+                    model: client as any,
+                    system: systemPrompt,
+                    prompt,
                     ...variantOptions
                 });
 
@@ -257,11 +279,11 @@ Return ONLY the module code, no explanations.`,
             },
 
             evaluate: async (code) => {
-                const { object } = await generateObject({
-                    model: client as any,
-                    schema: QualitySchema,
-                    system: 'You are an expert SystemVerilog reviewer evaluating module quality.',
-                    prompt: `Evaluate this SystemVerilog module:
+                const systemPrompt = new PromptBuilder()
+                    .addRaw('You are an expert SystemVerilog reviewer evaluating module quality.')
+                    .build();
+                const prompt = new PromptBuilder()
+                    .addRaw(`Evaluate this SystemVerilog module:
 
 \`\`\`systemverilog
 ${code}
@@ -271,7 +293,14 @@ Consider:
 1. Is it synthesizable? (no unsynthesizable constructs)
 2. Is it well documented? (comments, parameter descriptions)
 3. Does it follow conventions? (naming, coding style)
-4. Overall quality (1-10)`,
+4. Overall quality (1-10)`)
+                    .build();
+
+                const { object } = await generateObject({
+                    model: client as any,
+                    schema: QualitySchema,
+                    system: systemPrompt,
+                    prompt,
                     ...variantOptions
                 });
 
@@ -288,10 +317,11 @@ Consider:
             },
 
             improve: async (code, evaluation) => {
-                const { text: improvedCode } = await generateText({
-                    model: client as any,
-                    system: 'You are an expert SystemVerilog engineer improving module quality.',
-                    prompt: `Improve this SystemVerilog module based on feedback:
+                const systemPrompt = new PromptBuilder()
+                    .addRaw('You are an expert SystemVerilog engineer improving module quality.')
+                    .build();
+                const prompt = new PromptBuilder()
+                    .addRaw(`Improve this SystemVerilog module based on feedback:
 
 Current code:
 \`\`\`systemverilog
@@ -304,7 +334,13 @@ ${evaluation.issues.map(i => `- ${i}`).join('\n')}
 Suggestions:
 ${evaluation.suggestions.map(s => `- ${s}`).join('\n')}
 
-Return ONLY the improved code.`,
+Return ONLY the improved code.`)
+                    .build();
+
+                const { text: improvedCode } = await generateText({
+                    model: client as any,
+                    system: systemPrompt,
+                    prompt,
                     ...variantOptions
                 });
 
@@ -412,6 +448,23 @@ export async function testbenchWorkflow(
         {
             name: 'analyze',
             execute: async (_: string): Promise<AnalysisResult> => {
+                const systemPrompt = new PromptBuilder()
+                    .addRaw('You are analyzing a SystemVerilog module for testbench generation.')
+                    .build();
+                const prompt = new PromptBuilder()
+                    .addRaw(`Analyze this module and suggest test scenarios:
+
+\`\`\`systemverilog
+${moduleCode}
+\`\`\`
+
+Identify:
+1. All ports with directions and widths
+2. Parameters
+3. Core functionality
+4. Recommended test scenarios for thorough verification`)
+                    .build();
+
                 const { object } = await generateObject({
                     model: client as any,
                     schema: z.object({
@@ -424,18 +477,8 @@ export async function testbenchWorkflow(
                         functionality: z.string(),
                         suggestedScenarios: z.array(z.string())
                     }),
-                    system: 'You are analyzing a SystemVerilog module for testbench generation.',
-                    prompt: `Analyze this module and suggest test scenarios:
-
-\`\`\`systemverilog
-${moduleCode}
-\`\`\`
-
-Identify:
-1. All ports with directions and widths
-2. Parameters
-3. Core functionality
-4. Recommended test scenarios for thorough verification`,
+                    system: systemPrompt,
+                    prompt,
                     ...variantOptions
                 });
                 return object;
@@ -462,11 +505,12 @@ Identify:
         {
             name: 'generate',
             execute: async (plan: PlanResult): Promise<GenerationResult> => {
-                const { text: tbCode } = await generateText({
-                    model: client as any,
-                    system: `You are an expert SystemVerilog verification engineer.
-Generate comprehensive, self-checking testbenches with clear assertions.`,
-                    prompt: `Generate a testbench for module "${moduleName}":
+                const systemPrompt = new PromptBuilder()
+                    .addRaw(`You are an expert SystemVerilog verification engineer.
+Generate comprehensive, self-checking testbenches with clear assertions.`)
+                    .build();
+                const prompt = new PromptBuilder()
+                    .addRaw(`Generate a testbench for module "${moduleName}":
 
 Module code:
 \`\`\`systemverilog
@@ -486,7 +530,13 @@ Include:
 4. Self-checking assertions
 5. Coverage points
 
-Return ONLY the testbench code.`,
+Return ONLY the testbench code.`)
+                    .build();
+
+                const { text: tbCode } = await generateText({
+                    model: client as any,
+                    system: systemPrompt,
+                    prompt,
                     ...variantOptions
                 });
 
@@ -509,16 +559,11 @@ Return ONLY the testbench code.`,
     const generationResult = chainResult.output as unknown as GenerationResult;
 
     // Evaluate the testbench quality
-    const { object: evaluation } = await generateObject({
-        model: client as any,
-        schema: z.object({
-            qualityScore: z.number().min(1).max(10),
-            coverageEstimate: z.enum(['low', 'medium', 'high']),
-            issues: z.array(z.string()),
-            suggestions: z.array(z.string())
-        }),
-        system: 'You are evaluating SystemVerilog testbench quality.',
-        prompt: `Evaluate this testbench:
+    const systemPrompt = new PromptBuilder()
+        .addRaw('You are evaluating SystemVerilog testbench quality.')
+        .build();
+    const prompt = new PromptBuilder()
+        .addRaw(`Evaluate this testbench:
 
 \`\`\`systemverilog
 ${generationResult.code}
@@ -528,7 +573,18 @@ Consider:
 1. Coverage of test scenarios
 2. Self-checking capability
 3. Code quality
-4. Completeness`,
+4. Completeness`)
+        .build();
+    const { object: evaluation } = await generateObject({
+        model: client as any,
+        schema: z.object({
+            qualityScore: z.number().min(1).max(10),
+            coverageEstimate: z.enum(['low', 'medium', 'high']),
+            issues: z.array(z.string()),
+            suggestions: z.array(z.string())
+        }),
+        system: systemPrompt,
+        prompt,
         ...variantOptions
     });
 

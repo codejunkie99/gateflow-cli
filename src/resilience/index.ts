@@ -23,6 +23,7 @@ export {
     RETRY_POLICIES,
     calculateBackoff,
     getRetryDelayFromError,
+    parseRetryAfterFromError,
     withRetry,
     withRetryResult,
     RetryPolicyBuilder,

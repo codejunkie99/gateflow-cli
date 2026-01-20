@@ -7,6 +7,7 @@ import { withAbortableTimeout } from '../../resilience/timeout.js';
 import {
     RetryPolicyBuilder,
     getRetryDelayFromError,
+    parseRetryAfterFromError,
     withRetry,
 } from '../../resilience/retry.js';
 import { CircuitBreaker, CircuitOpenError } from '../../resilience/circuit-breaker.js';
@@ -35,35 +36,60 @@ export const AGENT_TIMEOUTS: Record<string, number> = {
     refactoring: 120000,
 };
 
-export type AgentErrorType = 'transient' | 'permanent' | 'timeout' | 'circuit_open';
+export type AgentErrorType = 'transient' | 'permanent' | 'timeout' | 'circuit_open' | 'rate_limited';
 
+export interface AgentErrorClassification {
+    type: AgentErrorType;
+    retryAfterMs?: number;
+}
+
+/**
+ * Classify an agent error and extract retry-after information if available
+ */
 export function classifyAgentError(error: unknown): AgentErrorType {
+    return classifyAgentErrorWithRetryAfter(error).type;
+}
+
+/**
+ * Classify an agent error with full details including retry-after
+ */
+export function classifyAgentErrorWithRetryAfter(error: unknown): AgentErrorClassification {
     if (error instanceof CircuitOpenError) {
-        return 'circuit_open';
+        return { type: 'circuit_open' };
     }
+
+    // Check for rate limit errors with Retry-After
+    const retryAfterMs = parseRetryAfterFromError(error);
 
     if (error instanceof Error) {
         if (error.name === 'AbortError') {
-            return 'permanent';
+            return { type: 'permanent' };
         }
 
         const msg = error.message.toLowerCase();
 
         if (msg.includes('timeout') || msg.includes('timed out')) {
-            return 'timeout';
+            return { type: 'timeout', retryAfterMs };
         }
 
+        // Detect rate limit errors explicitly
         if (
             msg.includes('rate limit') ||
             msg.includes('429') ||
             msg.includes('overloaded') ||
-            msg.includes('529') ||
+            msg.includes('529')
+        ) {
+            return { type: 'rate_limited', retryAfterMs };
+        }
+
+        // Other transient errors (connection, network issues)
+        if (
             msg.includes('connection') ||
             msg.includes('network') ||
             msg.includes('econnreset') ||
             msg.includes('socket')
         ) {
-            return 'transient';
+            return { type: 'transient', retryAfterMs };
         }
 
         if (
@@ -75,16 +101,22 @@ export function classifyAgentError(error: unknown): AgentErrorType {
             msg.includes('not found') ||
             msg.includes('user denied')
         ) {
-            return 'permanent';
+            return { type: 'permanent' };
         }
     }
 
-    return 'transient';
+    // Check if error has status code indicating rate limit
+    const errorObj = error as Record<string, unknown>;
+    if (errorObj.status === 429 || errorObj.statusCode === 429) {
+        return { type: 'rate_limited', retryAfterMs };
+    }
+
+    return { type: 'transient', retryAfterMs };
 }
 
 export function isRetryableAgentError(error: unknown): boolean {
     const type = classifyAgentError(error);
-    return type === 'transient' || type === 'timeout';
+    return type === 'transient' || type === 'timeout' || type === 'rate_limited';
 }
 
 export class AgentResilienceLayer {
@@ -151,10 +183,25 @@ export class AgentResilienceLayer {
                         const delay = context.lastError
                             ? getRetryDelayFromError(context.lastError, retryPolicy, context.attempt)
                             : retryPolicy.initialDelay;
+
+                        // Check if this is a rate limit error with Retry-After
+                        const classification = context.lastError
+                            ? classifyAgentErrorWithRetryAfter(context.lastError)
+                            : undefined;
+
+                        let statusLabel: string;
+                        if (classification?.type === 'rate_limited') {
+                            // More informative message for rate limit errors
+                            const waitSecs = Math.ceil(delay / 1000);
+                            statusLabel = `Rate limited, waiting ${waitSecs}s before retry ${context.attempt + 1}/${retryPolicy.maxAttempts}`;
+                        } else {
+                            statusLabel = `Retrying ${agentName} (attempt ${context.attempt + 1}/${retryPolicy.maxAttempts}) in ${delay}ms...`;
+                        }
+
                         this.bus.emit({
                             type: 'status',
                             phase: 'thinking',
-                            label: `Retrying ${agentName} (attempt ${context.attempt + 1}/${retryPolicy.maxAttempts}) in ${delay}ms...`,
+                            label: statusLabel,
                         });
                     },
                 }

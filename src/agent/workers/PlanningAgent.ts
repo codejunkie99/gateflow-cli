@@ -6,6 +6,7 @@
 
 import { generateObject } from 'ai';
 import { createModelWithVariant } from '../model-provider.js';
+import { PromptBuilder } from '../prompts/PromptBuilder.js';
 import type { ExecutionPlan } from '../../types/agent-shared.js';
 import { ExecutionPlanSchema } from '../../types/agent-shared.js';
 
@@ -22,38 +23,36 @@ export async function createPlan(
     const { model, variantOptions } = createModelWithVariant(modelName);
 
     // FIX A: Explicitly list valid agents in prompt to avoid 'planning' being assigned
-    const { object: plan } = await generateObject({
-        model: model as any,
-        schema: ExecutionPlanSchema,
-        ...variantOptions,
-        prompt: `Analyze this request and create an execution plan:
-
-User Request: ${userRequest}
-
-${projectContext ? `Project Context: ${projectContext}` : ''}
-
-Create a plan with tasks in dependency order. Each task should specify which agent handles it.
-
-AVAILABLE AGENTS (use ONLY these):
+    const prompt = new PromptBuilder()
+        .addRaw('Analyze this request and create an execution plan:')
+        .addRaw(`User Request: ${userRequest}`)
+        .addRaw(projectContext ? `Project Context: ${projectContext}` : '')
+        .addRaw('Create a plan with tasks in dependency order. Each task should specify which agent handles it.')
+        .addRaw(`AVAILABLE AGENTS (use ONLY these):
 - understanding: For reading/analyzing existing code and project structure
 - codegen: For creating new SystemVerilog modules and RTL code
 - testbench: For generating testbenches and verification code
 - debug: For diagnosing simulation failures and fixing errors
-- refactoring: For modifying existing code
-
-Guidelines:
+- refactoring: For modifying existing code`)
+        .addRaw(`Guidelines:
 - Identify dependencies before proposing edits
-- Consider compilation order (packages → modules → top)
+- Consider compilation order (packages -> modules -> top)
 - Check if files exist before reading
 - Break complex tasks into smaller, manageable subtasks
 - Estimate confidence for each task
-- Prioritize by dependencies (dependent tasks first)
-
-Return a structured plan with:
+- Prioritize by dependencies (dependent tasks first)`)
+        .addRaw(`Return a structured plan with:
 - planType: 'single_file' | 'multi_file' | 'analysis_only'
 - tasks: Array of tasks with id, type, description, priority, dependencies, agent (MUST be one of: understanding, codegen, testbench, debug, refactoring)
 - estimatedSteps: Total number of steps
-- confidence: Overall confidence (0-1)`
+- confidence: Overall confidence (0-1)`)
+        .build();
+
+    const { object: plan } = await generateObject({
+        model: model as any,
+        schema: ExecutionPlanSchema,
+        ...variantOptions,
+        prompt
     });
     
     return plan;  // Fully typed, no parsing needed!
@@ -89,4 +88,5 @@ export function parsePlan(llmOutput: string): ExecutionPlan {
         };
     }
 }
+
 

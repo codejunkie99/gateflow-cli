@@ -31,6 +31,7 @@ import {
     AgentResilienceLayer,
     type AgentResilienceConfig
 } from './resilience.js';
+import { PromptBuilder } from '../prompts/PromptBuilder.js';
 import { metrics } from '../../observability/index.js';
 
 interface TaskExecutionOutput {
@@ -516,41 +517,44 @@ export class Orchestrator {
     }
 
     private buildEnhancedPrompt(task: Task, context: TaskContext): string {
-        let prompt = task.description.trim();
+        const builder = new PromptBuilder();
 
+        // Add base task description (priority 0 to come first)
+        builder.addRaw(task.description.trim(), 0);
+
+        // Add project context (priority 15 default from addWrappedSection)
         const projectSummary = this.formatContextForTask(context.projectContext);
-        if (projectSummary) {
-            prompt += `\n\n<project_context>\n${projectSummary}\n</project_context>`;
-        }
+        builder.addWrappedSection('project_context', projectSummary);
 
+        // Build previous task results content
         if (context.previousResults.size > 0) {
-            prompt += '\n\n<previous_task_results>';
+            let resultsContent = '';
 
             for (const [depId, result] of context.previousResults) {
                 const status = result.success ? 'success' : 'failed';
-                prompt += `\n\n### Task ${depId} (${result.agent}) [${status}]:\n${result.summary}`;
+                resultsContent += `\n\n### Task ${depId} (${result.agent}) [${status}]:\n${result.summary}`;
 
                 if (result.artifacts.filesCreated.length > 0) {
-                    prompt += `\nFiles created: ${result.artifacts.filesCreated.join(', ')}`;
+                    resultsContent += `\nFiles created: ${result.artifacts.filesCreated.join(', ')}`;
                 }
                 if (result.artifacts.filesModified.length > 0) {
-                    prompt += `\nFiles referenced: ${result.artifacts.filesModified.join(', ')}`;
+                    resultsContent += `\nFiles referenced: ${result.artifacts.filesModified.join(', ')}`;
                 }
                 if (result.artifacts.modulesFound.length > 0) {
-                    prompt += `\nModules: ${result.artifacts.modulesFound.join(', ')}`;
+                    resultsContent += `\nModules: ${result.artifacts.modulesFound.join(', ')}`;
                 }
                 if (result.artifacts.errorsDetected.length > 0) {
-                    prompt += `\nErrors: ${result.artifacts.errorsDetected.join('; ')}`;
+                    resultsContent += `\nErrors: ${result.artifacts.errorsDetected.join('; ')}`;
                 }
                 if (result.insights.length > 0) {
-                    prompt += `\nKey insights: ${result.insights.join('; ')}`;
+                    resultsContent += `\nKey insights: ${result.insights.join('; ')}`;
                 }
             }
 
-            prompt += '\n</previous_task_results>';
+            builder.addWrappedSection('previous_task_results', resultsContent.trim());
         }
 
-        return prompt;
+        return builder.build();
     }
 
     private createTaskResult(

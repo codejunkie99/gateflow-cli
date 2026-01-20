@@ -22,6 +22,7 @@ import {
     type StepContext
 } from './loop-control.js';
 import { stepCountIs, type StopCondition } from './stop-conditions.js';
+import { PromptBuilder } from './prompts/PromptBuilder.js';
 
 // ============================================================================
 // Types
@@ -157,7 +158,12 @@ export class PlannerAgent extends UIAgent {
     }
 
     get systemPrompt(): string {
-        return `You are a Planning Agent for SystemVerilog development.
+        const planProgress = this.state.context.plan
+            ? this.state.context.plan.map((s, i) => `${i + 1}. ${s}`).join('\n')
+            : 'No plan yet';
+
+        return new PromptBuilder()
+            .addRaw(`You are a Planning Agent for SystemVerilog development.
 
 Your role is to:
 1. Analyze complex requests and break them into steps
@@ -170,8 +176,8 @@ You do NOT execute code or tools yourself. You only plan.
 When the plan is ready, signal to transition to execution mode.
 
 Current plan progress:
-${this.state.context.plan ? this.state.context.plan.map((s, i) => `${i + 1}. ${s}`).join('\n') : 'No plan yet'}
-`;
+${planProgress}`)
+            .build();
     }
 
     get prepareStep(): PrepareStepFn {
@@ -228,7 +234,8 @@ export class ExecutorAgent extends UIAgent {
             }).join('\n')}`
             : '';
 
-        return `You are an Executor Agent for SystemVerilog development.
+        return new PromptBuilder()
+            .addRaw(`You are an Executor Agent for SystemVerilog development.
 
 Your role is to:
 1. Execute the planned steps using available tools
@@ -239,7 +246,8 @@ Your role is to:
 You follow plans created by the Planner Agent.
 ${planContext}
 
-After completing all steps or encountering issues, signal to transition to review mode.`;
+After completing all steps or encountering issues, signal to transition to review mode.`)
+            .build();
     }
 
     get prepareStep(): PrepareStepFn {
@@ -309,7 +317,12 @@ export class ReviewAgent extends UIAgent {
     }
 
     get systemPrompt(): string {
-        return `You are a Review Agent for SystemVerilog development.
+        const artifacts = this.state.context.artifacts?.join(', ') || 'None';
+        const stepsCompleted = this.state.context.completedSteps ?? 0;
+        const totalSteps = this.state.context.totalSteps ?? 0;
+
+        return new PromptBuilder()
+            .addRaw(`You are a Review Agent for SystemVerilog development.
 
 Your role is to:
 1. Review the work done by the Executor Agent
@@ -317,11 +330,12 @@ Your role is to:
 3. Suggest refinements if needed
 4. Confirm completion or request more work
 
-Artifacts created: ${this.state.context.artifacts?.join(', ') || 'None'}
-Steps completed: ${this.state.context.completedSteps ?? 0}/${this.state.context.totalSteps ?? 0}
+Artifacts created: ${artifacts}
+Steps completed: ${stepsCompleted}/${totalSteps}
 
 If satisfied, transition back to chat mode.
-If issues found, transition back to planning or execution mode with specific feedback.`;
+If issues found, transition back to planning or execution mode with specific feedback.`)
+            .build();
     }
 
     get prepareStep(): PrepareStepFn {
@@ -474,7 +488,8 @@ class ChatAgent extends UIAgent {
     }
 
     get systemPrompt(): string {
-        return `You are a helpful SystemVerilog assistant.
+        return new PromptBuilder()
+            .addRaw(`You are a helpful SystemVerilog assistant.
 
 For simple questions, answer directly.
 For complex tasks, suggest transitioning to planning mode.
@@ -483,7 +498,8 @@ Available modes:
 - chat: Quick Q&A (current)
 - planning: Complex task decomposition
 - execution: Running tools and generating code
-- review: Reviewing and refining work`;
+- review: Reviewing and refining work`)
+            .build();
     }
 
     get prepareStep(): PrepareStepFn {
