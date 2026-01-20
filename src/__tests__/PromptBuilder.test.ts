@@ -57,5 +57,24 @@ describe('PromptBuilder', () => {
         expect(exported.componentCount).toBe(2);
         expect(exported.estimatedTokens).toBeGreaterThan(0);
     });
+
+    it('should include raw and wrapped sections', () => {
+        const prompt = new PromptBuilder()
+            .addRaw('Base instructions', 0)
+            .addWrappedSection('project_context', 'Context block')
+            .build();
+
+        expect(prompt).toContain('Base instructions');
+        expect(prompt).toContain('<project_context>\nContext block\n</project_context>');
+    });
+
+    it('should honor priority 0 ordering', () => {
+        const prompt = new PromptBuilder()
+            .addRaw('FIRST', 0)
+            .addRaw('SECOND', 1)
+            .build();
+
+        expect(prompt.indexOf('FIRST')).toBeLessThan(prompt.indexOf('SECOND'));
+    });
 });
 

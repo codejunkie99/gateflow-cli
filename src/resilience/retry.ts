@@ -4,7 +4,7 @@
  */
 
 import { GateFlowError, isRetryableError } from '../error/types.js';
-import { RetryableError, classifyError } from '../error/classes.js';
+import { RetryableError, RateLimitError, classifyError } from '../error/classes.js';
 
 // ============================================================================
 // Retry Policy Types
@@ -116,12 +116,168 @@ export function calculateBackoff(
 }
 
 /**
- * Get retry delay from a RetryableError if present
+ * Parse Retry-After header value from an HTTP-date or seconds format
+ * HTTP-date format: "Wed, 21 Oct 2015 07:28:00 GMT"
+ * Seconds format: "120"
+ * Returns milliseconds or undefined if parsing fails
  */
-export function getRetryDelayFromError(error: unknown, policy: RetryPolicy, attempt: number): number {
-    if (error instanceof RetryableError && error.options?.retryAfter) {
+function parseRetryAfterValue(value: string | number | undefined): number | undefined {
+    if (value === undefined || value === null) {
+        return undefined;
+    }
+
+    // If it's already a number, treat as seconds
+    if (typeof value === 'number') {
+        return value > 0 ? value * 1000 : undefined;
+    }
+
+    const trimmed = value.trim();
+    if (!trimmed) {
+        return undefined;
+    }
+
+    // Try to parse as numeric seconds first (accept leading zeros)
+    if (/^\d+$/.test(trimmed)) {
+        const numericValue = Number(trimmed);
+        return numericValue > 0 ? numericValue * 1000 : undefined;
+    }
+
+    // Try to parse as HTTP-date
+    const dateValue = Date.parse(trimmed);
+    if (!isNaN(dateValue)) {
+        const delayMs = dateValue - Date.now();
+        return delayMs > 0 ? delayMs : undefined;
+    }
+
+    return undefined;
+}
+
+/**
+ * Extract headers from an error object
+ * Handles various SDK error formats (Anthropic, OpenRouter, etc.)
+ */
+function extractHeadersFromError(error: unknown): Record<string, string | number | undefined> | undefined {
+    if (!error || typeof error !== 'object') {
+        return undefined;
+    }
+
+    const errorObj = error as Record<string, unknown>;
+
+    // Check for direct headers property (common in SDK errors)
+    if (errorObj.headers && typeof errorObj.headers === 'object') {
+        return errorObj.headers as Record<string, string | number | undefined>;
+    }
+
+    // Check for response.headers (fetch-style errors)
+    if (errorObj.response && typeof errorObj.response === 'object') {
+        const response = errorObj.response as Record<string, unknown>;
+        if (response.headers && typeof response.headers === 'object') {
+            // Handle Headers object (from fetch)
+            const headers = response.headers;
+            if (typeof (headers as Headers).get === 'function') {
+                const retryAfter = (headers as Headers).get('retry-after');
+                if (retryAfter) {
+                    return { 'retry-after': retryAfter };
+                }
+            }
+            return headers as Record<string, string | number | undefined>;
+        }
+    }
+
+    // Check for error.error.headers (nested error format)
+    if (errorObj.error && typeof errorObj.error === 'object') {
+        const innerError = errorObj.error as Record<string, unknown>;
+        if (innerError.headers && typeof innerError.headers === 'object') {
+            return innerError.headers as Record<string, string | number | undefined>;
+        }
+    }
+
+    return undefined;
+}
+
+/**
+ * Parse Retry-After from raw API error responses
+ * Checks retryAfter fields and Retry-After headers (seconds or HTTP-date)
+ * Uses milliseconds for internal error types (RateLimitError/RetryableError)
+ * Returns delay in milliseconds or undefined if not found
+ */
+export function parseRetryAfterFromError(error: unknown): number | undefined {
+    if (!error) {
+        return undefined;
+    }
+
+    if (error instanceof RetryableError && error.options?.retryAfter && error.options.retryAfter > 0) {
         return error.options.retryAfter;
     }
+
+    if (error instanceof RateLimitError && error.retryAfter !== undefined && error.retryAfter > 0) {
+        return error.retryAfter;
+    }
+
+    const errorObj = error as Record<string, unknown>;
+
+    // Check for direct retryAfter property on error (some SDKs add this)
+    const directRetryAfter = errorObj.retryAfter ?? errorObj.retry_after;
+    const parsedDirect = parseRetryAfterValue(directRetryAfter as string | number | undefined);
+    if (parsedDirect !== undefined) {
+        return parsedDirect;
+    }
+
+    // Extract and check headers
+    const headers = extractHeadersFromError(error);
+    if (headers) {
+        // Check various header name formats (case-insensitive matching)
+        const retryAfterValue =
+            headers['retry-after'] ??
+            headers['Retry-After'] ??
+            headers['RETRY-AFTER'] ??
+            headers['x-retry-after'] ??
+            headers['X-Retry-After'];
+
+        if (retryAfterValue !== undefined) {
+            return parseRetryAfterValue(retryAfterValue as string | number);
+        }
+    }
+
+    return undefined;
+}
+
+/**
+ * Apply jitter to a delay value
+ * Adds 0-10% random jitter to help prevent thundering herd
+ */
+function applyJitter(delay: number, enabled: boolean): number {
+    if (!enabled) {
+        return delay;
+    }
+    // Add small jitter (0-10%) to Retry-After values to prevent thundering herd
+    const jitter = delay * 0.1 * Math.random();
+    return Math.floor(delay + jitter);
+}
+
+/**
+ * Get retry delay from error if present, falling back to exponential backoff
+ * Checks RetryableError, RateLimitError, and raw API error headers for Retry-After
+ */
+export function getRetryDelayFromError(error: unknown, policy: RetryPolicy, attempt: number): number {
+    // Check RetryableError.options.retryAfter
+    if (error instanceof RetryableError && error.options?.retryAfter) {
+        return applyJitter(error.options.retryAfter, policy.jitter);
+    }
+
+    // Check RateLimitError.retryAfter
+    if (error instanceof RateLimitError && error.retryAfter !== undefined && error.retryAfter > 0) {
+        // RateLimitError.retryAfter is already in milliseconds (from getWaitTime())
+        return applyJitter(error.retryAfter, policy.jitter);
+    }
+
+    // Try to parse Retry-After from raw API error
+    const parsedRetryAfter = parseRetryAfterFromError(error);
+    if (parsedRetryAfter !== undefined) {
+        return applyJitter(parsedRetryAfter, policy.jitter);
+    }
+
+    // Fall back to exponential backoff calculation
     return calculateBackoff(attempt, policy);
 }
 

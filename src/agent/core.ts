@@ -23,6 +23,7 @@ import { createToolExecutors, getToolSpecs as getToolDefinitions, TOOL_APPROVAL_
 import type { MemoryManager } from '../memory/store/manager.js';
 import type { MemoryService } from '../memory/MemoryService.js';
 import { getSystemPrompt, detectMode, type PromptMode, type DetectModeContext } from './prompts.js';
+import { PromptBuilder } from './prompts/PromptBuilder.js';
 import { ThinkingChain } from './reasoning/ThinkingChain.js';
 import { Orchestrator } from './orchestrator/Orchestrator.js';
 import { ComplexityDetectionSchema } from '../types/agent-shared.js';
@@ -547,6 +548,7 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
 
             // Inject context from MemoryService (token-budgeted project + knowledge context)
             let systemPrompt = bundle.instructions;
+
             if (this.memoryService) {
                 const contextInjection = this.memoryService.getContextForAI({
                     query: userMessage  // Use user message as context hint for relevance filtering
@@ -557,13 +559,14 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
                         query: userMessage
                     });
 
+                    // Use PromptBuilder to compose the system prompt with context
+                    const promptBuilder = new PromptBuilder();
+                    promptBuilder
+                        .addRaw(bundle.instructions, 0)  // Base instructions without wrapping
+                        .addWrappedSection('project_context', contextBlock);  // Wrapped context
+                    systemPrompt = promptBuilder.build();
+
                     if (contextBlock.trim()) {
-                        systemPrompt = `${bundle.instructions}
-
-<project_context>
-${contextBlock}
-</project_context>`;
-
                         this.bus.emit({
                             type: 'status',
                             phase: 'thinking',

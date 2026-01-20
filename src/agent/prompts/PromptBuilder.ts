@@ -6,7 +6,7 @@
 export interface PromptComponent {
     type: 'base' | 'role' | 'constraint' | 'task' | 'format' | 'context' | 'example';
     content: string;
-    priority?: number;        // Ordering (higher = more important)
+    priority?: number;        // Ordering (lower = earlier in prompt, 0 is valid)
     conditional?: boolean;      // Only include if condition met
     condition?: () => boolean;
 }
@@ -231,6 +231,36 @@ Use \`ask_user\` tool for confirmations:
     }
 
     /**
+     * Add raw content without any wrapping
+     * Useful for base instructions that shouldn't be wrapped in XML tags
+     */
+    addRaw(content: string, priority?: number): this {
+        if (content?.trim()) {
+            this.components.push({
+                type: 'base',
+                content,
+                priority: priority ?? 0
+            });
+        }
+        return this;
+    }
+
+    /**
+     * Add raw content wrapped in XML-style tags
+     * Only includes if content is non-empty
+     */
+    addWrappedSection(tag: string, content: string, priority?: number): this {
+        if (content?.trim()) {
+            this.components.push({
+                type: 'context',
+                content: `<${tag}>\n${content}\n</${tag}>`,
+                priority: priority ?? 15
+            });
+        }
+        return this;
+    }
+
+    /**
      * Add code example
      */
     addExample(title: string, code: string, explanation?: string): this {
@@ -287,8 +317,8 @@ Use \`ask_user\` tool for confirmations:
             return true;
         });
 
-        // Sort by priority
-        activeComponents.sort((a, b) => (a.priority || 50) - (b.priority || 50));
+        // Sort by priority (lower = earlier, nullish coalescing preserves 0)
+        activeComponents.sort((a, b) => (a.priority ?? 50) - (b.priority ?? 50));
 
         let prompt = activeComponents.map(c => c.content).join('\n\n');
         
