@@ -24,3 +24,6 @@ export * from './InputManager.js';
 
 // Interactive menus
 export * from './InteractiveMenu.js';
+
+// Blessed chatbox
+export * from './BlessedChatbox.js';
