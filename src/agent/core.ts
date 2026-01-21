@@ -801,18 +801,50 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
             const finalResult = await result;
             const textContent = await finalResult.text;
 
+            // AI SDK 6: Persist all step messages to session to maintain context
+            // This prevents state loss of intermediate tool interactions
+            const steps = await finalResult.steps;
+            if (steps && steps.length > 0) {
+                for (const step of steps) {
+                    // Add assistant message with tool calls if present
+                    if (step.toolCalls && step.toolCalls.length > 0) {
+                        this.session.messages.push({
+                            role: 'assistant',
+                            content: step.toolCalls.map(tc => ({
+                                type: 'tool-call' as const,
+                                toolCallId: tc.toolCallId,
+                                toolName: tc.toolName,
+                                input: tc.input  // AI SDK 6 uses 'input' not 'args'
+                            }))
+                        });
+
+                        // Add tool results
+                        if (step.toolResults && step.toolResults.length > 0) {
+                            for (const tr of step.toolResults) {
+                                this.session.messages.push({
+                                    role: 'tool',
+                                    content: [{
+                                        type: 'tool-result' as const,
+                                        toolCallId: tr.toolCallId,
+                                        toolName: tr.toolName,
+                                        output: tr.output  // AI SDK 6 uses 'output' not 'result'
+                                    }]
+                                });
+                            }
+                        }
+                    }
+                }
+
+                this.session.toolCallCount += steps.length;
+            }
+
+            // Add final text response if present
             if (textContent && textContent.trim()) {
                 fullResponse = textContent;
                 this.session.messages.push({
                     role: 'assistant',
                     content: textContent
                 });
-            }
-
-            // Update tool call count from final result
-            const steps = await finalResult.steps;
-            if (steps) {
-                this.session.toolCallCount += steps.length;
             }
 
             this.bus.emit({ type: 'token_done' });
