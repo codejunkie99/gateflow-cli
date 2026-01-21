@@ -8,10 +8,10 @@
  * The agents can transition control between each other based on task needs.
  */
 
-import { generateObject, generateText, streamText } from 'ai';
+import { generateText, streamText, type LanguageModel } from 'ai';
 import { z } from 'zod';
 import type { Tool } from 'ai';
-import { createModel, parseModelString } from './model-provider.js';
+import { createModel, parseModelString, generateStructured } from './model-provider.js';
 import type { EventBus } from '../events/index.js';
 import {
     combinePrepareSteps,
@@ -81,12 +81,16 @@ const PlanSchema = z.object({
 
 export abstract class UIAgent {
     protected model: string;
+    /** LanguageModel object for use in prepareStep (avoids AI Gateway fallback) */
+    protected languageModel: LanguageModel;
     protected tools: Record<string, Tool>;
     protected bus: EventBus;
     protected state: UIState;
 
     constructor(config: UIAgentConfig, initialMode: UIMode) {
         this.model = config.model;
+        // Create LanguageModel object to avoid AI Gateway fallback in prepareStep
+        this.languageModel = createModel(parseModelString(config.model));
         this.tools = config.tools;
         this.bus = config.bus;
         this.state = { mode: initialMode, context: {} };
@@ -109,14 +113,19 @@ export abstract class UIAgent {
      */
     setModel(model: string): void {
         this.model = model;
+        // Keep LanguageModel object in sync
+        this.languageModel = createModel(parseModelString(model));
     }
 
     /**
      * Check if the agent should transition to a different mode.
      */
     async shouldTransition(userMessage: string): Promise<TransitionRequest | null> {
-        const { object } = await generateObject({
-            model: createModel(parseModelString(this.model)) as any,
+        const modelConfig = parseModelString(this.model);
+        const modelId = `${modelConfig.provider}/${modelConfig.model}`;
+        const object = await generateStructured({
+            model: createModel(modelConfig),
+            modelId,
             schema: TransitionSchema,
             prompt: `Current mode: ${this.mode}
 Current context: ${JSON.stringify(this.state.context)}
@@ -194,8 +203,11 @@ ${planProgress}`)
      * Create a plan for a complex task.
      */
     async createPlan(task: string): Promise<z.infer<typeof PlanSchema>> {
-        const { object: plan } = await generateObject({
-            model: createModel(parseModelString(this.model)) as any,
+        const modelConfig = parseModelString(this.model);
+        const modelId = `${modelConfig.provider}/${modelConfig.model}`;
+        const plan = await generateStructured({
+            model: createModel(modelConfig),
+            modelId,
             schema: PlanSchema,
             system: this.systemPrompt,
             prompt: `Create a detailed plan for this task:
@@ -253,9 +265,11 @@ After completing all steps or encountering issues, signal to transition to revie
     get prepareStep(): PrepareStepFn {
         return combinePrepareSteps(
             contextWindowManager({ maxMessages: 40, keepSystem: true }),
+            // IMPORTANT: Pass LanguageModel objects, NOT strings
+            // Passing strings causes AI SDK to fall back to AI Gateway
             dynamicModelSelector({
-                defaultModel: this.model,
-                complexModel: this.model, // Could use a larger model
+                defaultModel: this.languageModel,
+                complexModel: this.languageModel, // Could use a larger model
                 complexityThreshold: 5
             }),
             // Executor has full tool access, phased by step
@@ -401,7 +415,7 @@ export class UIAgentCoordinator {
 
         // Generate response with current agent
         const { text } = await generateText({
-            model: createModel(parseModelString(this.currentAgent['model'])) as any,
+            model: createModel(parseModelString(this.currentAgent['model'])),
             system: this.currentAgent.systemPrompt,
             prompt: userMessage
         });

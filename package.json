@@ -49,7 +49,8 @@
         "ora": "^8.1.1",
         "picomatch": "^4.0.3",
         "readline-sync": "^1.4.10",
-        "tar": "^7.5.4",
+        "tar": "^7.5.2",
+        "zhipu-ai-provider": "^0.2.1",
         "zod": "^3.23.0"
     },
     "devDependencies": {

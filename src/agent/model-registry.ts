@@ -306,43 +306,6 @@ export const MODEL_METADATA: ModelMetadata[] = [
         description: 'Fast and capable with 1M context',
     },
 
-    // ========== xAI ==========
-    {
-        id: 'grok-4',
-        name: 'Grok 4',
-        provider: 'xai',
-        contextWindow: 131072,
-        maxOutputTokens: 16384,
-        capabilities: {
-            tools: true,
-            vision: true,
-            streaming: true,
-            reasoning: true,
-            structuredOutput: true,
-        },
-        pricing: { inputPer1M: 3, outputPer1M: 15 },
-        status: 'stable',
-        description: 'Most intelligent Grok with tool use',
-    },
-    {
-        id: 'grok-4.1-fast',
-        name: 'Grok 4.1 Fast',
-        provider: 'xai',
-        contextWindow: 131072,
-        maxOutputTokens: 16384,
-        capabilities: {
-            tools: true,
-            vision: true,
-            streaming: true,
-            reasoning: false,
-            structuredOutput: true,
-        },
-        pricing: { inputPer1M: 1, outputPer1M: 5 },
-        status: 'stable',
-        releaseDate: '2025-11-01',
-        description: 'Latest fast model, 65% less hallucination',
-    },
-
     // ========== DeepSeek ==========
     {
         id: 'deepseek-chat',
@@ -377,59 +340,6 @@ export const MODEL_METADATA: ModelMetadata[] = [
         pricing: { inputPer1M: 0.55, outputPer1M: 2.19, cachedPer1M: 0.14 },
         status: 'stable',
         description: 'Reasoning model with chain-of-thought',
-    },
-
-    // ========== Groq ==========
-    {
-        id: 'llama-3.3-70b-versatile',
-        name: 'Llama 3.3 70B Versatile',
-        provider: 'groq',
-        contextWindow: 131072,
-        maxOutputTokens: 32768,
-        capabilities: {
-            tools: true,
-            vision: false,
-            streaming: true,
-            reasoning: false,
-            structuredOutput: true,
-        },
-        pricing: { inputPer1M: 0.59, outputPer1M: 0.79 },
-        status: 'stable',
-        description: 'Fastest inference with Groq LPU',
-    },
-    {
-        id: 'llama-3.1-8b-instant',
-        name: 'Llama 3.1 8B Instant',
-        provider: 'groq',
-        contextWindow: 131072,
-        maxOutputTokens: 8192,
-        capabilities: {
-            tools: true,
-            vision: false,
-            streaming: true,
-            reasoning: false,
-            structuredOutput: true,
-        },
-        pricing: { inputPer1M: 0.05, outputPer1M: 0.08 },
-        status: 'stable',
-        description: 'Ultra-fast small model',
-    },
-    {
-        id: 'mixtral-8x7b-32768',
-        name: 'Mixtral 8x7B',
-        provider: 'groq',
-        contextWindow: 32768,
-        maxOutputTokens: 8192,
-        capabilities: {
-            tools: true,
-            vision: false,
-            streaming: true,
-            reasoning: false,
-            structuredOutput: true,
-        },
-        pricing: { inputPer1M: 0.24, outputPer1M: 0.24 },
-        status: 'stable',
-        description: 'MoE model with fast inference',
     },
 
     // ========== Mistral ==========
@@ -556,25 +466,6 @@ export const MODEL_METADATA: ModelMetadata[] = [
         releaseDate: '2025-12-01',
         description: '400B parameter model with deep reasoning',
     },
-
-    // ========== MiniMax ==========
-    {
-        id: 'abab6.5-chat',
-        name: 'ABAB 6.5 Chat',
-        provider: 'minimax',
-        contextWindow: 245760,
-        maxOutputTokens: 16384,
-        capabilities: {
-            tools: true,
-            vision: false,
-            streaming: true,
-            reasoning: false,
-            structuredOutput: true,
-        },
-        pricing: { inputPer1M: 1, outputPer1M: 4 },
-        status: 'stable',
-        description: 'MiniMax flagship chat model',
-    },
 ];
 
 /**
@@ -606,28 +497,12 @@ export const PROVIDER_METADATA: ProviderMetadata[] = [
         defaultModel: 'gemini-2.5-flash',
     },
     {
-        id: 'xai',
-        name: 'xAI (Grok)',
-        npm: '@ai-sdk/xai',
-        envVars: ['XAI_API_KEY'],
-        docUrl: 'https://console.x.ai/team',
-        defaultModel: 'grok-4',
-    },
-    {
         id: 'deepseek',
         name: 'DeepSeek',
         npm: '@ai-sdk/openai',
         envVars: ['DEEPSEEK_API_KEY'],
         docUrl: 'https://platform.deepseek.com/api_keys',
         defaultModel: 'deepseek-chat',
-    },
-    {
-        id: 'groq',
-        name: 'Groq (Fast Inference)',
-        npm: '@ai-sdk/groq',
-        envVars: ['GROQ_API_KEY'],
-        docUrl: 'https://console.groq.com/keys',
-        defaultModel: 'llama-3.3-70b-versatile',
     },
     {
         id: 'mistral',
@@ -660,14 +535,6 @@ export const PROVIDER_METADATA: ProviderMetadata[] = [
         envVars: ['ZHIPU_API_KEY'],
         docUrl: 'https://open.bigmodel.cn/usercenter/apikeys',
         defaultModel: 'glm-4.7',
-    },
-    {
-        id: 'minimax',
-        name: 'MiniMax',
-        npm: '@ai-sdk/openai',
-        envVars: ['MINIMAX_API_KEY'],
-        docUrl: 'https://platform.minimax.io',
-        defaultModel: 'abab6.5-chat',
     },
 ];
 

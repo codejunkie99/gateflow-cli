@@ -3,9 +3,8 @@
  * All LLM work is async/offline; search uses static or cached expansions only.
  */
 
-import { generateObject } from 'ai';
 import { z } from 'zod';
-import { createModel, parseModelString } from '../../agent/model-provider.js';
+import { createModel, parseModelString, generateStructured } from '../../agent/model-provider.js';
 import type { KnowledgeItem, KnowledgeLlmConfig } from '../knowledge-types.js';
 
 type EnrichmentResult = {
@@ -148,8 +147,11 @@ export class KnowledgeLlmService {
         }
 
         try {
-            const { object } = await generateObject({
-                model: createModel(parseModelString(this.modelName)) as any,
+            const modelConfig = parseModelString(this.modelName);
+            const modelId = `${modelConfig.provider}/${modelConfig.model}`;
+            const object = await generateStructured({
+                model: createModel(modelConfig) as any,
+                modelId,
                 schema: z.object({
                     keywords: z.array(z.string()).max(10),
                     concepts: z.array(z.string()).max(10).optional(),
@@ -206,8 +208,11 @@ Return JSON with:
         if (this.inflightQueries.has(query)) return;
         this.inflightQueries.add(query);
         try {
-            const { object } = await generateObject({
-                model: createModel(parseModelString(this.modelName)) as any,
+            const modelConfig = parseModelString(this.modelName);
+            const modelId = `${modelConfig.provider}/${modelConfig.model}`;
+            const object = await generateStructured({
+                model: createModel(modelConfig) as any,
+                modelId,
                 schema: z.object({
                     terms: z.array(z.string()).max(10)
                 }),
@@ -249,8 +254,11 @@ Return JSON with:
 - tags: 5-10 concise, lowercase tags (protocols, patterns, concepts)
 - summary: one-sentence summary (<= 200 chars)`;
 
-        const { object } = await generateObject({
-            model: createModel(parseModelString(this.modelName)) as any,
+        const modelConfig = parseModelString(this.modelName);
+        const modelId = `${modelConfig.provider}/${modelConfig.model}`;
+        const object = await generateStructured({
+            model: createModel(modelConfig) as any,
+            modelId,
             schema: z.object({
                 tags: z.array(z.string()).max(12),
                 summary: z.string().max(200)

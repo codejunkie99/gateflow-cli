@@ -5,9 +5,9 @@
  * the generic workflow patterns with GateFlow's specialized tools.
  */
 
-import { generateText, generateObject } from 'ai';
+import { generateText } from 'ai';
 import { z } from 'zod';
-import { createModelWithVariant } from '../model-provider.js';
+import { createModelWithVariant, generateStructured } from '../model-provider.js';
 import { PromptBuilder } from '../prompts/PromptBuilder.js';
 import {
     evaluatorOptimizer,
@@ -122,7 +122,7 @@ ${code}
 
                 // Initial fix attempt
                 const { text: fixedCode } = await generateText({
-                    model: client as any,
+                    model: client,
                     system: systemPrompt,
                     prompt,
                     ...variantOptions
@@ -165,7 +165,7 @@ ${currentCode}
                     .build();
 
                 const { text: improvedCode } = await generateText({
-                    model: client as any,
+                    model: client,
                     system: systemPrompt,
                     prompt,
                     ...variantOptions
@@ -223,7 +223,8 @@ export async function moduleGenerationWorkflow(
         qualityThreshold = 8
     } = config ?? {};
 
-    const { model: client, variantOptions } = createModelWithVariant(model);
+    const { model: client, variantOptions, config: modelConfig } = createModelWithVariant(model);
+    const modelId = `${modelConfig.provider}/${modelConfig.model}`;
 
     const QualitySchema = z.object({
         score: z.number().min(1).max(10),
@@ -268,7 +269,7 @@ Return ONLY the module code, no explanations.`)
                     .build();
 
                 const { text: moduleCode } = await generateText({
-                    model: client as any,
+                    model: client,
                     system: systemPrompt,
                     prompt,
                     ...variantOptions
@@ -296,8 +297,9 @@ Consider:
 4. Overall quality (1-10)`)
                     .build();
 
-                const { object } = await generateObject({
-                    model: client as any,
+                const object = await generateStructured({
+                    model: client,
+                    modelId,
                     schema: QualitySchema,
                     system: systemPrompt,
                     prompt,
@@ -338,7 +340,7 @@ Return ONLY the improved code.`)
                     .build();
 
                 const { text: improvedCode } = await generateText({
-                    model: client as any,
+                    model: client,
                     system: systemPrompt,
                     prompt,
                     ...variantOptions
@@ -421,7 +423,8 @@ export async function testbenchWorkflow(
         model = 'claude-sonnet-4-20250514'
     } = config;
 
-    const { model: client, variantOptions } = createModelWithVariant(model);
+    const { model: client, variantOptions, config: modelConfig } = createModelWithVariant(model);
+    const modelId = `${modelConfig.provider}/${modelConfig.model}`;
 
     // Step 1: Analyze the module
     interface AnalysisResult {
@@ -465,8 +468,9 @@ Identify:
 4. Recommended test scenarios for thorough verification`)
                     .build();
 
-                const { object } = await generateObject({
-                    model: client as any,
+                const object = await generateStructured({
+                    model: client,
+                    modelId,
                     schema: z.object({
                         ports: z.array(z.object({
                             name: z.string(),
@@ -534,7 +538,7 @@ Return ONLY the testbench code.`)
                     .build();
 
                 const { text: tbCode } = await generateText({
-                    model: client as any,
+                    model: client,
                     system: systemPrompt,
                     prompt,
                     ...variantOptions
@@ -575,8 +579,9 @@ Consider:
 3. Code quality
 4. Completeness`)
         .build();
-    const { object: evaluation } = await generateObject({
-        model: client as any,
+    const evaluation = await generateStructured({
+        model: client,
+        modelId,
         schema: z.object({
             qualityScore: z.number().min(1).max(10),
             coverageEstimate: z.enum(['low', 'medium', 'high']),
