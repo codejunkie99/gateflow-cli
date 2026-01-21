@@ -17,8 +17,16 @@
 import readline from 'readline';
 import chalk from 'chalk';
 import type { EventBus } from '../events/index.js';
+import { InlineChatbox, type ChatboxOptions } from './BlessedChatbox.js';
 
 export type ApprovalScope = 'once' | 'session' | 'all';
+
+export interface InputManagerOptions {
+    /** Use chatbox UI instead of simple readline */
+    useChatbox?: boolean;
+    /** Chatbox configuration */
+    chatboxOptions?: ChatboxOptions;
+}
 
 export interface ApprovalResult {
     approved: boolean;
@@ -53,7 +61,52 @@ export class InputManager {
     private onPromptStart?: () => void;
     private onPromptEnd?: () => void;
 
-    constructor(private bus?: EventBus) {}
+    // Chatbox support
+    private useChatbox: boolean = false;
+    private chatbox: InlineChatbox | null = null;
+    private chatboxOptions: ChatboxOptions = {};
+
+    constructor(private bus?: EventBus, options?: InputManagerOptions) {
+        if (options?.useChatbox) {
+            this.useChatbox = true;
+            this.chatboxOptions = options.chatboxOptions || {};
+            this.chatbox = new InlineChatbox(this.chatboxOptions);
+        }
+    }
+
+    /**
+     * Enable or disable chatbox mode
+     */
+    setChatboxMode(enabled: boolean, options?: ChatboxOptions): void {
+        this.useChatbox = enabled;
+        if (enabled) {
+            this.chatboxOptions = options || this.chatboxOptions;
+            this.chatbox = new InlineChatbox(this.chatboxOptions);
+        } else {
+            this.chatbox = null;
+        }
+    }
+
+    /**
+     * Update chatbox dimensions
+     */
+    setChatboxSize(width?: number | string, height?: number): void {
+        if (this.chatbox) {
+            this.chatbox.updateOptions({ width, height });
+        }
+        if (width !== undefined) this.chatboxOptions.width = width;
+        if (height !== undefined) this.chatboxOptions.height = height;
+    }
+
+    /**
+     * Get current chatbox settings
+     */
+    getChatboxSettings(): { enabled: boolean; options: ChatboxOptions } {
+        return {
+            enabled: this.useChatbox,
+            options: { ...this.chatboxOptions }
+        };
+    }
 
     /**
      * Initialize the input manager
@@ -168,8 +221,20 @@ export class InputManager {
 
     /**
      * Get raw line input (for REPL)
+     * Uses chatbox if enabled, otherwise standard readline
      */
     async getLine(promptStr: string = '> '): Promise<string> {
+        // Use chatbox mode if enabled
+        if (this.useChatbox && this.chatbox) {
+            this.onPromptStart?.();
+            try {
+                const result = await this.chatbox.getInput();
+                return result.submitted ? (result.value || '') : '';
+            } finally {
+                this.onPromptEnd?.();
+            }
+        }
+
         return this.prompt({ question: promptStr });
     }
 
@@ -200,27 +265,40 @@ export class InputManager {
 
             // Build prompt string
             let promptStr = '';
-            
+
             if (options.diff) {
                 promptStr += '\n' + options.diff + '\n';
             }
-            
+
             promptStr += options.question;
-            
+
             if (options.choices && options.choices.length > 0) {
-                promptStr += '\n   ' + options.choices.map((c, i) => 
+                promptStr += '\n   ' + options.choices.map((c, i) =>
                     chalk.cyan(`[${i + 1}]`) + ' ' + c
                 ).join('  ');
                 promptStr += '\n';
             }
-            
+
             if (options.isApproval) {
                 promptStr += '\n' + chalk.gray('   [Y]es  [N]o  [A]ll  [S]kip: ');
             } else if (!promptStr.endsWith(' ')) {
                 promptStr += ' ';
             }
 
-            // Ask the question
+            // Use chatbox for main prompts if enabled (but not for approvals/choices)
+            if (this.useChatbox && this.chatbox && !options.isApproval && !options.choices) {
+                // Show the question first
+                if (promptStr.trim()) {
+                    console.log(promptStr);
+                }
+                const result = await this.chatbox.getInput();
+                const answer = result.submitted ? (result.value || '') : '';
+                const finalResult = answer.trim() || options.defaultAnswer || '';
+                resolve(finalResult);
+                return;
+            }
+
+            // Standard readline input
             const answer = await new Promise<string>((res) => {
                 this.rl!.question(promptStr, (input) => {
                     res(input);
@@ -229,16 +307,16 @@ export class InputManager {
 
             // Apply default if empty
             const result = answer.trim() || options.defaultAnswer || '';
-            
+
             resolve(result);
         } catch (error) {
             reject(error instanceof Error ? error : new Error(String(error)));
         } finally {
             this.isPrompting = false;
-            
+
             // Notify renderer to resume spinner
             this.onPromptEnd?.();
-            
+
             // Process next in queue
             this.processQueue();
         }
@@ -302,10 +380,34 @@ export function getInputManager(): InputManager {
 /**
  * Initialize the global InputManager
  */
-export function initInputManager(bus?: EventBus): InputManager {
+export function initInputManager(bus?: EventBus, options?: InputManagerOptions): InputManager {
     if (!instance) {
-        instance = new InputManager(bus);
+        instance = new InputManager(bus, options);
     }
     instance.initialize();
     return instance;
+}
+
+/**
+ * Enable chatbox mode on the global InputManager
+ */
+export function enableChatbox(options?: ChatboxOptions): void {
+    const mgr = getInputManager();
+    mgr.setChatboxMode(true, options);
+}
+
+/**
+ * Disable chatbox mode on the global InputManager
+ */
+export function disableChatbox(): void {
+    const mgr = getInputManager();
+    mgr.setChatboxMode(false);
+}
+
+/**
+ * Set chatbox dimensions
+ */
+export function setChatboxSize(width?: number | string, height?: number): void {
+    const mgr = getInputManager();
+    mgr.setChatboxSize(width, height);
 }

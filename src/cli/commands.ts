@@ -226,9 +226,17 @@ export async function setupContext(options: GlobalOptions): Promise<CommandConte
 
     const semanticSummarizer = createSemanticSummarizer();
 
-    // Initialize centralized input manager
-    const inputManager = initInputManager(bus);
-    
+    // Initialize centralized input manager with chatbox UI
+    const inputManager = initInputManager(bus, {
+        useChatbox: true,
+        chatboxOptions: {
+            width: '80%',
+            height: 3,
+            label: ' Input ',
+            prompt: '> '
+        }
+    });
+
     // Connect input manager to renderer for pause/resume coordination
     inputManager.setPromptCallbacks(
         () => renderer.pauseForInput(),
@@ -1197,22 +1205,22 @@ async function showInteractiveModelSelector(
     const currentConfig = agent.getModelConfig();
     const availableProviders = detectAvailableProviders();
 
-    // Build menu sections
-    const includedSection: MenuSection<ModelMenuItem> = {
-        title: 'Configured Providers',
+    // Build menu sections - Direct Providers vs OpenRouter
+    const directProvidersSection: MenuSection<ModelMenuItem> = {
+        title: '── Direct Providers (Verified Compatible) ──',
         headerColor: chalk.green,
         items: []
     };
 
-    const supportedSection: MenuSection<ModelMenuItem> = {
-        title: 'Available Providers (needs API key)',
+    const unconfiguredSection: MenuSection<ModelMenuItem> = {
+        title: '── Direct Providers (Needs API Key) ──',
         headerColor: chalk.yellow,
         items: []
     };
 
-    // Separate section for OpenRouter models
+    // Separate section for OpenRouter models (capability-checked)
     const openRouterSection: MenuSection<ModelMenuItem> = {
-        title: 'OpenRouter',
+        title: '── OpenRouter (300+ Models) ──',
         headerColor: chalk.cyan,
         items: []
     };
@@ -1308,27 +1316,29 @@ async function showInteractiveModelSelector(
             };
 
             if (isConfigured) {
-                includedSection.items.push(item);
+                directProvidersSection.items.push(item);
             } else {
-                supportedSection.items.push(item);
+                unconfiguredSection.items.push(item);
             }
         }
     }
 
-    // Filter out empty sections and add OpenRouter section first
+    // Build sections: Direct Providers first, then OpenRouter
     const sections: MenuSection<ModelMenuItem>[] = [];
-    
-    // Add OpenRouter section first (if it has models)
+
+    // Add configured direct providers first (verified compatible - no capability check needed)
+    if (directProvidersSection.items.length > 0) {
+        sections.push(directProvidersSection);
+    }
+
+    // Add unconfigured direct providers
+    if (unconfiguredSection.items.length > 0) {
+        sections.push(unconfiguredSection);
+    }
+
+    // Add OpenRouter section last (capability-checked via ModelCapabilityService)
     if (openRouterSection.items.length > 0) {
         sections.push(openRouterSection);
-    }
-    
-    // Add other provider sections
-    if (includedSection.items.length > 0) {
-        sections.push(includedSection);
-    }
-    if (supportedSection.items.length > 0) {
-        sections.push(supportedSection);
     }
 
     if (sections.length === 0) {
@@ -1340,11 +1350,13 @@ async function showInteractiveModelSelector(
     // Pause renderer during menu
     renderer.pauseForInput();
 
-    // Show the menu
+    // Show the menu with search functionality
     const result = await showSectionedMenu(sections, {
         title: `Select Model ${currentConfig ? chalk.dim(`(current: ${currentConfig.provider}/${currentConfig.model})`) : ''}`,
         showHelp: true,
         maxVisibleItems: 12,
+        searchable: true,
+        searchPlaceholder: 'Type to filter models...',
         onPromptStart: () => renderer.pauseForInput(),
         onPromptEnd: () => renderer.resumeAfterInput()
     });
