@@ -302,11 +302,15 @@ export class Orchestrator {
         this.abortControllers.set(task.id, controller);
 
         try {
+            // Get the model ID for rate limit tracking (worker-specific or default)
+            const modelId = worker.modelName ?? this.modelName;
+
             const execution = await this.resilienceLayer.executeWithResilience(
                 task.agent,
                 task.id,
                 (signal) => this.runTaskStream(worker, task, taskContext, signal),
-                controller.signal
+                controller.signal,
+                modelId
             );
 
             const taskResult = this.createTaskResult(task, execution.output, startTime, execution.usage);
@@ -366,7 +370,7 @@ export class Orchestrator {
         }
 
         return streamText({
-            model: modelBundle.model as any,
+            model: modelBundle.model,
             system: worker.system,
             prompt,
             tools: worker.tools,
@@ -445,9 +449,9 @@ export class Orchestrator {
                 }
 
                 case 'error': {
-                    const errorMsg = (part as any).error instanceof Error
-                        ? (part as any).error.message
-                        : String((part as any).error);
+                    const errorMsg = part.error instanceof Error
+                        ? part.error.message
+                        : String(part.error);
                     this.bus.emit({
                         type: 'error',
                         message: `Stream error: ${errorMsg}`
@@ -456,13 +460,12 @@ export class Orchestrator {
                 }
 
                 case 'tool-error': {
-                    const toolError = part as any;
-                    const errorMsg = toolError.error instanceof Error
-                        ? toolError.error.message
-                        : String(toolError.error);
+                    const errorMsg = part.error instanceof Error
+                        ? part.error.message
+                        : String(part.error);
                     this.bus.emit({
                         type: 'error',
-                        message: `Tool ${toolError.toolName} failed: ${errorMsg}`
+                        message: `Tool ${part.toolName} failed: ${errorMsg}`
                     });
                     break;
                 }
