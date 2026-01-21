@@ -44,13 +44,6 @@ export interface AgentErrorClassification {
 }
 
 /**
- * Classify an agent error and extract retry-after information if available
- */
-export function classifyAgentError(error: unknown): AgentErrorType {
-    return classifyAgentErrorWithRetryAfter(error).type;
-}
-
-/**
  * Classify an agent error with full details including retry-after
  */
 export function classifyAgentErrorWithRetryAfter(error: unknown): AgentErrorClassification {
@@ -115,12 +108,13 @@ export function classifyAgentErrorWithRetryAfter(error: unknown): AgentErrorClas
 }
 
 export function isRetryableAgentError(error: unknown): boolean {
-    const type = classifyAgentError(error);
+    const { type } = classifyAgentErrorWithRetryAfter(error);
     return type === 'transient' || type === 'timeout' || type === 'rate_limited';
 }
 
 export class AgentResilienceLayer {
     private circuitBreakers: Map<string, CircuitBreaker> = new Map();
+    private rateLimitedUntil: Map<string, number> = new Map(); // model → timestamp
     private config: AgentResilienceConfig;
 
     constructor(
@@ -128,6 +122,43 @@ export class AgentResilienceLayer {
         config?: Partial<AgentResilienceConfig>
     ) {
         this.config = { ...DEFAULT_AGENT_RESILIENCE, ...config };
+    }
+
+    /**
+     * Check if a model is currently rate limited and wait if necessary.
+     * Returns the wait time in ms (0 if not rate limited).
+     */
+    private async waitForRateLimit(modelId: string): Promise<number> {
+        const until = this.rateLimitedUntil.get(modelId);
+        if (!until) return 0;
+
+        const waitTime = until - Date.now();
+        if (waitTime <= 0) {
+            this.rateLimitedUntil.delete(modelId);
+            return 0;
+        }
+
+        this.bus.emit({
+            type: 'status',
+            phase: 'thinking',
+            label: `Model ${modelId} rate limited, waiting ${Math.ceil(waitTime / 1000)}s...`,
+        });
+
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+        this.rateLimitedUntil.delete(modelId);
+        return waitTime;
+    }
+
+    /**
+     * Record a rate limit for a model so other agents can respect it.
+     */
+    private recordRateLimit(modelId: string, retryAfterMs: number): void {
+        const until = Date.now() + retryAfterMs;
+        const existing = this.rateLimitedUntil.get(modelId);
+        // Only update if new limit is further in the future
+        if (!existing || until > existing) {
+            this.rateLimitedUntil.set(modelId, until);
+        }
     }
 
     private getCircuitBreaker(agentName: string): CircuitBreaker {
@@ -156,8 +187,14 @@ export class AgentResilienceLayer {
         agentName: string,
         taskId: string,
         operation: (signal: AbortSignal) => Promise<T>,
-        abortSignal?: AbortSignal
+        abortSignal?: AbortSignal,
+        modelId?: string
     ): Promise<T> {
+        // Wait for any existing rate limit on this model before proceeding
+        if (modelId) {
+            await this.waitForRateLimit(modelId);
+        }
+
         const breaker = this.getCircuitBreaker(agentName);
         const timeoutMs = AGENT_TIMEOUTS[agentName] ?? this.config.agentTimeout;
 
@@ -189,9 +226,13 @@ export class AgentResilienceLayer {
                             ? classifyAgentErrorWithRetryAfter(context.lastError)
                             : undefined;
 
+                        // Record rate limit so other agents using the same model will wait
+                        if (modelId && classification?.type === 'rate_limited' && classification.retryAfterMs) {
+                            this.recordRateLimit(modelId, classification.retryAfterMs);
+                        }
+
                         let statusLabel: string;
                         if (classification?.type === 'rate_limited') {
-                            // More informative message for rate limit errors
                             const waitSecs = Math.ceil(delay / 1000);
                             statusLabel = `Rate limited, waiting ${waitSecs}s before retry ${context.attempt + 1}/${retryPolicy.maxAttempts}`;
                         } else {
@@ -207,23 +248,5 @@ export class AgentResilienceLayer {
                 }
             );
         });
-    }
-
-    getHealthStatus(): Record<string, { state: string; failureRate: number }> {
-        const status: Record<string, { state: string; failureRate: number }> = {};
-        for (const [name, breaker] of this.circuitBreakers) {
-            const stats = breaker.getStats();
-            status[name] = {
-                state: stats.state,
-                failureRate: stats.failureRate,
-            };
-        }
-        return status;
-    }
-
-    resetAll(): void {
-        for (const breaker of this.circuitBreakers.values()) {
-            breaker.reset();
-        }
     }
 }
