@@ -142,6 +142,7 @@ export class InteractiveMenu<T = unknown> {
             // Reset search state
             this.searchQuery = '';
             this.filteredItems = [...this.flatItems];
+            this.scrollOffset = 0;
 
             // Move to first selectable item
             this.currentIndex = this.findNextSelectableIndexInFiltered(0, 1);
