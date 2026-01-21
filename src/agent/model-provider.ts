@@ -1,27 +1,26 @@
 /**
  * Multi-Provider Model Abstraction
  *
- * Supports: Anthropic, OpenAI, Google, xAI, DeepSeek, Zhipu, Minimax
+ * Supports: Anthropic, OpenAI, Google, DeepSeek, Zhipu, Minimax, Mistral, OpenRouter
  *
  * Design decisions:
  * 1. ESM-compatible top-level imports for installed SDKs
  * 2. Backward compatible - existing code works unchanged
  * 3. Provider detection via environment variables
  * 4. OpenAI-compatible API for providers without dedicated SDK
- * 5. Validation with clear error messages
+ * 5. Only models with tools + structured output support
  *
  * @module agent/model-provider
  */
 
 import "../env/bootstrap-env.js";
-import { anthropic } from "@ai-sdk/anthropic";
+import { createAnthropic } from "@ai-sdk/anthropic";
 import { openai, createOpenAI } from "@ai-sdk/openai";
+import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { google } from "@ai-sdk/google";
-import { xai } from "@ai-sdk/xai";
-import { groq } from "@ai-sdk/groq";
 import { mistral } from "@ai-sdk/mistral";
 import { createOpenRouter } from "@openrouter/ai-sdk-provider";
-import type { LanguageModel } from "ai";
+import { generateText, Output, type LanguageModel } from "ai";
 import {
   type VariantName,
   type ModelConfigWithVariant,
@@ -30,6 +29,7 @@ import {
   getVariantOptions,
   getVariantProviderOptions,
 } from "./model-variants.js";
+import { modelCapabilities } from "./model-capabilities/index.js";
 
 // Re-export variant types and functions for convenience
 export type { VariantName, ModelConfigWithVariant, ModelVariantOptions };
@@ -43,12 +43,9 @@ export type ProviderName =
   | "anthropic"
   | "openai"
   | "google"
-  | "xai"
   | "deepseek"
   | "zhipu"
-  | "minimax"
   | "openrouter"
-  | "groq"
   | "mistral"
   | "ollama";
 
@@ -67,7 +64,18 @@ export interface ProviderInfo {
 }
 
 // ============================================================================
-// Provider Registry (January 2026 - Latest Models)
+// Provider Registry (January 2026 - Tools + Structured Output Models Only)
+// Only models with BOTH tools AND native structured output are listed.
+// This ensures thinking/reasoning modes work with structured calls.
+//
+// Sources:
+// - Anthropic: https://platform.claude.com/docs/en/build-with-claude/structured-outputs
+// - OpenAI: https://platform.openai.com/docs/models/
+// - Google: https://ai.google.dev/gemini-api/docs/models
+// - Mistral: https://docs.mistral.ai/capabilities/structured_output
+// - DeepSeek: https://api-docs.deepseek.com/news/news251201
+// - Zhipu: https://open.bigmodel.cn/
+// - Ollama: https://docs.ollama.com/capabilities/tool-calling
 // ============================================================================
 
 export const PROVIDERS: Record<ProviderName, ProviderInfo> = {
@@ -75,11 +83,16 @@ export const PROVIDERS: Record<ProviderName, ProviderInfo> = {
     name: "Anthropic (Claude)",
     envVar: "ANTHROPIC_API_KEY",
     docUrl: "https://console.anthropic.com/settings/keys",
-    defaultModel: "claude-sonnet-4-20250514",
+    defaultModel: "claude-sonnet-4-5-20250929",
     models: [
+      // Claude 4.5 family - all support tools + structured outputs + extended thinking
       "claude-opus-4-5-20251101", // Most capable, extended thinking
-      "claude-sonnet-4-20250514", // Best balance (recommended)
-      "claude-haiku-4-5-20251201", // Fastest, most cost-efficient
+      "claude-sonnet-4-5-20250929", // Balanced performance/cost (default)
+      "claude-haiku-4-5-20251001", // Fastest, most cost-efficient
+      // Legacy Claude 4 models (still available)
+      "claude-opus-4-1-20250805", // Opus 4.1 - agentic tasks
+      "claude-sonnet-4-20250514", // Sonnet 4
+      "claude-opus-4-20250514", // Opus 4
     ],
   },
   openai: {
@@ -88,11 +101,15 @@ export const PROVIDERS: Record<ProviderName, ProviderInfo> = {
     docUrl: "https://platform.openai.com/api-keys",
     defaultModel: "gpt-5",
     models: [
+      // GPT-5 family - all support tools + structured outputs
       "gpt-5.2", // Latest (Dec 2025) - SOTA on ARC-AGI
+      "gpt-5.1", // November 2025
       "gpt-5", // Default in ChatGPT, replaces 4o
-      "o3", // Most powerful reasoning model
+      // O-series reasoning models - tools + structured outputs
+      "o3", // Most powerful reasoning
       "o3-pro", // Extended thinking version
       "o4-mini", // Fast reasoning, best on AIME
+      // GPT-4 series - still supported
       "gpt-4.1", // Coding specialist, 1M context
       "gpt-4o", // Previous flagship
       "gpt-4o-mini", // Fast, cost-efficient
@@ -104,23 +121,13 @@ export const PROVIDERS: Record<ProviderName, ProviderInfo> = {
     docUrl: "https://aistudio.google.com/apikey",
     defaultModel: "gemini-2.5-flash",
     models: [
-      "gemini-2.5-pro", // Most powerful, adaptive thinking
+      // Gemini 3 (preview) - tools + structured outputs + thinking_level
+      "gemini-3-pro-preview", // State-of-the-art reasoning, 1M context
+      "gemini-3-flash-preview", // Fast Gemini 3
+      // Gemini 2.5 - stable, tools + structured outputs
+      "gemini-2.5-pro", // Most powerful 2.5, adaptive thinking
       "gemini-2.5-flash", // Fast and capable
       "gemini-2.5-flash-lite", // Lowest latency/cost
-      "gemini-2.0-flash", // Legacy (retiring Mar 2026)
-    ],
-  },
-  xai: {
-    name: "xAI (Grok)",
-    envVar: "XAI_API_KEY",
-    docUrl: "https://console.x.ai/team",
-    defaultModel: "grok-4",
-    models: [
-      "grok-4.1-fast", // Latest fast (Nov 2025)
-      "grok-4.1", // Nov 2025, 65% less hallucination
-      "grok-4", // "Most intelligent" with tool use
-      "grok-3", // Previous flagship
-      "grok-3-mini", // Fast reasoning
     ],
   },
   deepseek: {
@@ -129,51 +136,29 @@ export const PROVIDERS: Record<ProviderName, ProviderInfo> = {
     docUrl: "https://platform.deepseek.com/api_keys",
     defaultModel: "deepseek-chat",
     models: [
-      "deepseek-chat", // V3 base, general tasks
-      "deepseek-reasoner", // R1 reasoning model
-      "deepseek-coder", // Code-specialized
+      // V3.2 - hybrid thinking mode, tools + json_object (NOT json_schema)
+      // Structured output: json_object only, no server-side schema validation
+      "deepseek-chat", // V3.2 - both thinking and non-thinking modes
+      // NOTE: deepseek-reasoner points to R1 which has limited structured output support
     ],
   },
   zhipu: {
     name: "Zhipu (GLM)",
     envVar: "ZHIPU_API_KEY",
     docUrl: "https://open.bigmodel.cn/usercenter/apikeys",
-    defaultModel: "glm-4.7",
+    defaultModel: "GLM-4.7",
     models: [
-      "glm-4.7", // Latest (Dec 2025) - 400B params, deep reasoning
-      "glm-4.6", // MoE model (Sep 2025) - 355B/32B active
-      "glm-4.5", // July 2025
-      "glm-4-flash", // Fast, cost-efficient
-    ],
-  },
-  minimax: {
-    name: "MiniMax",
-    envVar: "MINIMAX_API_KEY",
-    docUrl: "https://platform.minimax.io",
-    defaultModel: "abab6.5-chat",
-    models: [
-      "abab6.5-chat", // Latest chat model
-      "abab6.5s-chat", // Fast version
-      "abab5.5-chat", // Previous gen
-    ],
-  },
-  openrouter: {
-    name: "OpenRouter (300+ Models)",
-    envVar: "OPENROUTER_API_KEY",
-    docUrl: "https://openrouter.ai/keys",
-    defaultModel: "anthropic/claude-sonnet-4",
-    description: "Dynamic model discovery from OpenRouter API - Fetches all available models with pricing, context limits, and capabilities",
-    models: [],  // Dynamic - Use fetchOpenRouterModels() to get all 300+ models
-  },
-  groq: {
-    name: "Groq (Fast inference)",
-    envVar: "GROQ_API_KEY",
-    docUrl: "https://console.groq.com/keys",
-    defaultModel: "llama-3.3-70b-versatile",
-    models: [
-      "llama-3.3-70b-versatile",
-      "llama-3.1-8b-instant",
-      "mixtral-8x7b-32768",
+      // All support native function calling + json_object mode (NOT json_schema)
+      // Structured output: json_object only, no server-side schema validation
+      // API model IDs from https://open.bigmodel.cn/dev/api
+      "GLM-4.7", // Dec 2025 - 400B params, deep reasoning
+      "GLM-4.7-Flash", // Lightweight 30B-A3B model
+      "GLM-4-Flash", // Free tier, 128K context, fast inference
+      "GLM-4-Plus", // Enhanced model, 10T tokens pretrained
+      "GLM-4-Air", // Balanced cost/performance
+      "GLM-4-AirX", // Extended air model
+      "GLM-4-Long", // Long context specialist
+      "GLM-4-FlashX", // Extended flash model
     ],
   },
   mistral: {
@@ -182,17 +167,49 @@ export const PROVIDERS: Record<ProviderName, ProviderInfo> = {
     docUrl: "https://console.mistral.ai/api-keys/",
     defaultModel: "mistral-large-latest",
     models: [
-      "mistral-large-latest",
-      "mistral-medium-latest",
-      "codestral-latest",
+      // All support tools + custom structured outputs (response_format: json_schema)
+      "mistral-large-latest", // Flagship model
+      "mistral-small-latest", // v3.2 - improved tool use
+      "magistral-small", // Reasoning model (Jun 2025), 24B, Apache 2.0
+      "magistral-medium", // Enterprise reasoning
+      "codestral-latest", // Code specialist
     ],
+  },
+  openrouter: {
+    name: "OpenRouter (300+ Models)",
+    envVar: "OPENROUTER_API_KEY",
+    docUrl: "https://openrouter.ai/keys",
+    defaultModel: "anthropic/claude-sonnet-4.5",
+    description: "Dynamic model discovery - only shows models with tools + structured output",
+    models: [], // Dynamic - filtered by tools + structuredOutputs capability at runtime
   },
   ollama: {
     name: "Ollama (Local)",
     envVar: "OLLAMA_BASE_URL", // Optional, defaults to localhost
     docUrl: "https://ollama.ai/download",
-    defaultModel: "llama3.1",
-    models: ["llama3.1", "llama3.1:70b", "codellama", "deepseek-coder-v2"],
+    defaultModel: "qwen3:8b",
+    // Ollama: JSON Schema supported via `format` param (grammar-based validation since v0.5)
+    // Listed models support tool calling; structured outputs work via grammar constraints
+    models: [
+      // Qwen 3 - best tool support + thinking
+      "qwen3:8b",
+      "qwen3:14b",
+      "qwen3:32b",
+      // Qwen 2.5 Coder - optimized for code
+      "qwen2.5-coder:7b",
+      "qwen2.5-coder:14b",
+      "qwen2.5-coder:32b",
+      // Llama 3.x - Meta's best with tools
+      "llama3.1:8b",
+      "llama3.1:70b",
+      "llama3.3:70b",
+      // Mistral on Ollama
+      "mistral-nemo:12b",
+      "mistral-small:24b",
+      // DeepSeek R1 - reasoning with tools
+      "deepseek-r1:8b",
+      "deepseek-r1:32b",
+    ],
   },
 };
 
@@ -208,7 +225,6 @@ export const PROVIDERS: Record<ProviderName, ProviderInfo> = {
  * - Anthropic: sk-ant-api03-[48-95 chars]
  * - OpenAI: sk- or sk-proj- or sk-None- or sk-svcacct- [20-160 chars]
  * - Google: AIza[35 chars]
- * - xAI: xai-[40+ chars]
  * - DeepSeek: sk-[40+ chars] (OpenAI-compatible)
  * - Zhipu/MiniMax: Generic alphanumeric [32+ chars]
  */
@@ -251,13 +267,6 @@ export const API_KEY_PATTERNS: Record<
     description: 'Google keys: "AIza" + exactly 35 chars (39 total)',
     example: "AIzaSyDxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
   },
-  xai: {
-    // xAI (Grok) - Limited public documentation
-    // Known prefix: "xai-"
-    regex: /^xai-[A-Za-z0-9_-]{20,}$/,
-    description: 'xAI keys: "xai-" + 20+ alphanumeric chars',
-    example: "xai-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
-  },
   deepseek: {
     // Verified: sk-[32 lowercase alphanumeric] (35 total)
     // Source: Semgrep, DeepSeek docs
@@ -274,25 +283,11 @@ export const API_KEY_PATTERNS: Record<
       'Zhipu keys: 32-char hex + "." + secret (e.g., abc123...def.XyzSecret)',
     example: "39c8c7b4d7584d6dbf05516cca9c72f4.Avx1htdBdB1RZpE1",
   },
-  minimax: {
-    // MiniMax - Limited public documentation
-    // Known: Alphanumeric, may require GROUP_ID for some regions
-    regex: /^[A-Za-z0-9_.-]{20,}$/,
-    description:
-      "MiniMax keys: 20+ alphanumeric chars (may also require GROUP_ID)",
-    example: "eyJhbGciOiJSUzI1NiIsInR5cCI6Ikp...",
-  },
   openrouter: {
     // OpenRouter keys start with "sk-or-v1-" followed by 64 hex chars
     regex: /^sk-or-v1-[a-f0-9]{64}$/,
     description: 'OpenRouter keys: "sk-or-v1-" + 64 hex chars',
     example: "sk-or-v1-abc123def456...",
-  },
-  groq: {
-    // Groq keys start with "gsk_" followed by alphanumeric chars
-    regex: /^gsk_[A-Za-z0-9]{50,}$/,
-    description: 'Groq keys: "gsk_" + 50+ alphanumeric chars',
-    example: "gsk_xxxxxxxxxxxxx...",
   },
   mistral: {
     // Mistral keys are 32-char alphanumeric
@@ -423,7 +418,7 @@ export function createModel(
   if (!apiKey && provider !== "ollama") {
     throw new Error(
       `${providerInfo.envVar} not set.\n` +
-        `Get your API key at: ${providerInfo.docUrl}`,
+      `Get your API key at: ${providerInfo.docUrl}`,
     );
   }
 
@@ -433,8 +428,8 @@ export function createModel(
 
   switch (provider) {
     case "anthropic": {
-      // Ensure env var is set before SDK reads it (Windows workaround)
-      process.env.ANTHROPIC_API_KEY = apiKey;
+      // Use createAnthropic with explicit API key to avoid AI Gateway fallback
+      const anthropic = createAnthropic({ apiKey: apiKey! });
       return anthropic(model);
     }
 
@@ -448,36 +443,39 @@ export function createModel(
       return google(model);
     }
 
-    case "xai": {
-      process.env.XAI_API_KEY = apiKey;
-      return xai(model);
-    }
-
     case "deepseek": {
-      // DeepSeek uses OpenAI-compatible API
-      const deepseek = createOpenAI({
+      // DeepSeek uses OpenAI-compatible Chat Completions API
+      // Use createOpenAICompatible to use /chat/completions (not /responses)
+      // Note: supportsStructuredOutputs is FALSE because DeepSeek only supports
+      // json_object mode, not json_schema with server-side validation.
+      // Tool parameters work fine regardless of this setting.
+      const deepseek = createOpenAICompatible({
+        name: "deepseek",
         baseURL: "https://api.deepseek.com/v1",
         apiKey: apiKey!,
+        // DeepSeek supports json_object but NOT json_schema (no server-side schema validation)
+        supportsStructuredOutputs: false,
       });
       return deepseek(model);
     }
 
     case "zhipu": {
-      // Zhipu uses OpenAI-compatible API
-      const zhipu = createOpenAI({
-        baseURL: "https://open.bigmodel.cn/api/paas/v4",
+      // Z.ai / Zhipu uses OpenAI-compatible Chat Completions API
+      // IMPORTANT: Use createOpenAICompatible (NOT createOpenAI) because:
+      // - createOpenAI uses the Responses API endpoint (/responses)
+      // - createOpenAICompatible uses Chat Completions endpoint (/chat/completions)
+      // Zhipu/Z.ai only supports the Chat Completions format
+      // Note: supportsStructuredOutputs is FALSE because Zhipu only supports
+      // json_object mode, not json_schema with server-side validation.
+      // Tool parameters work fine regardless of this setting.
+      const zhipu = createOpenAICompatible({
+        name: "zhipu",
+        baseURL: "https://api.z.ai/api/coding/paas/v4",
         apiKey: apiKey!,
+        // Zhipu supports json_object but NOT json_schema (no server-side schema validation)
+        supportsStructuredOutputs: false,
       });
       return zhipu(model);
-    }
-
-    case "minimax": {
-      // MiniMax uses OpenAI-compatible API
-      const minimax = createOpenAI({
-        baseURL: "https://api.minimax.chat/v1",
-        apiKey: apiKey!,
-      });
-      return minimax(model);
     }
 
     case "openrouter": {
@@ -488,22 +486,23 @@ export function createModel(
       return openrouter(model);
     }
 
-    case "groq": {
-      process.env.GROQ_API_KEY = apiKey;
-      return groq(model);
-    }
-
     case "mistral": {
       process.env.MISTRAL_API_KEY = apiKey;
       return mistral(model);
     }
 
     case "ollama": {
-      // Ollama uses OpenAI-compatible API with local server
+      // Ollama uses OpenAI-compatible Chat Completions API
+      // Use createOpenAICompatible to use /chat/completions (not /responses)
+      // Note: Ollama DOES support JSON Schema via its `format` parameter (since v0.5)
+      // which provides grammar-based output validation.
       const baseURL = apiKey || "http://localhost:11434/v1";
-      const ollama = createOpenAI({
+      const ollama = createOpenAICompatible({
+        name: "ollama",
         baseURL,
         apiKey: "ollama", // Ollama doesn't require a real API key
+        // Ollama supports JSON Schema via format parameter (grammar-based validation)
+        supportsStructuredOutputs: true,
       });
       return ollama(model);
     }
@@ -584,7 +583,7 @@ export function parseModelString(spec: string): ModelConfigWithVariant {
     const validProviders = Object.keys(PROVIDERS).join(", ");
     throw new ModelParseError(
       `Unknown provider: '${providerPart}'\n` +
-        `Valid providers: ${validProviders}`,
+      `Valid providers: ${validProviders}`,
       spec,
     );
   }
@@ -606,9 +605,6 @@ export function parseModelString(spec: string): ModelConfigWithVariant {
   if (lowerSpec.startsWith("gemini-")) {
     return { provider: "google", model: cleanSpec, variant };
   }
-  if (lowerSpec.startsWith("grok-")) {
-    return { provider: "xai", model: cleanSpec, variant };
-  }
   if (lowerSpec.startsWith("deepseek")) {
     return { provider: "deepseek", model: cleanSpec, variant };
   }
@@ -617,15 +613,12 @@ export function parseModelString(spec: string): ModelConfigWithVariant {
     const normalized = cleanSpec.replace(/^glm\s+/i, "glm-");
     return { provider: "zhipu", model: normalized, variant };
   }
-  if (lowerSpec.startsWith("abab") || lowerSpec.startsWith("minimax")) {
-    return { provider: "minimax", model: cleanSpec, variant };
-  }
-  // Groq models (llama, mixtral patterns without provider prefix)
-  if (lowerSpec.startsWith("llama-") || lowerSpec.startsWith("mixtral")) {
-    return { provider: "groq", model: cleanSpec, variant };
-  }
-  // Mistral models
-  if (lowerSpec.startsWith("mistral-") || lowerSpec.startsWith("codestral")) {
+  // Mistral models (including Magistral reasoning models)
+  if (
+    lowerSpec.startsWith("mistral-") ||
+    lowerSpec.startsWith("codestral") ||
+    lowerSpec.startsWith("magistral")
+  ) {
     return { provider: "mistral", model: cleanSpec, variant };
   }
 
@@ -699,7 +692,7 @@ export function detectAvailableProviders(): ProviderName[] {
 
 /**
  * Get the default provider (first one with an API key).
- * Priority: anthropic > openai > google > xai > deepseek > zhipu > minimax
+ * Priority: anthropic > openai > google > deepseek > zhipu > mistral > openrouter > ollama
  * @returns Default provider name, or null if none configured
  */
 export function getDefaultProvider(): ProviderName | null {
@@ -979,7 +972,7 @@ export function hasApiKey(provider: ProviderName): boolean {
 
 /**
  * Result of creating a model with variant options.
- * Used to simplify calls to generateText/streamText/generateObject.
+ * Used to simplify calls to generateText/streamText/generateStructured.
  */
 export interface ModelWithVariant {
   /** The language model instance */
@@ -1016,4 +1009,152 @@ export function createModelWithVariant(modelSpec: string): ModelWithVariant {
   );
 
   return { model, variantOptions, config };
+}
+
+// ============================================================================
+// Structured Output Routing
+// ============================================================================
+
+import type { ZodSchema } from "zod";
+
+type GenerateStructuredCallOptions = Omit<
+  Parameters<typeof generateText>[0],
+  "model" | "output"
+>;
+
+/**
+ * Options for generateStructured - requires schema and modelId.
+ */
+export interface GenerateStructuredOptions<T>
+  extends GenerateStructuredCallOptions {
+  model: LanguageModel;
+  schema: ZodSchema<T>;
+  modelId: string;
+  /** Optional name for the schema (improves model understanding) */
+  schemaName?: string;
+  /** Optional description for the schema (improves model understanding) */
+  schemaDescription?: string;
+}
+
+/**
+ * Native structured output using generateText + Output.object().
+ *
+ * Uses AI SDK 6's native structured output mode which works with thinking/reasoning.
+ * This is the only supported path - models must have structuredOutputs capability.
+ */
+async function nativeStructuredOutput<T>(
+  options: Omit<GenerateStructuredOptions<T>, "modelId">,
+): Promise<T> {
+  const {
+    schema,
+    schemaName,
+    schemaDescription,
+    model,
+    ...callOptions
+  } = options;
+
+  // Build Output.object config with optional schema metadata
+  // Note: Output.object uses 'name' and 'description', not 'schemaName'/'schemaDescription'
+  const outputConfig: Parameters<typeof Output.object>[0] = { schema };
+  if (schemaName) outputConfig.name = schemaName;
+  if (schemaDescription) outputConfig.description = schemaDescription;
+
+  // Use 'as any' due to complex AI SDK overloaded types for generateText
+  const { output } = await generateText({
+    model,
+    output: Output.object(outputConfig),
+    ...callOptions,
+  } as any);
+
+  return output as T;
+}
+
+/**
+ * Check if modelId belongs to a direct provider (not OpenRouter).
+ * Direct providers in our curated PROVIDERS list are pre-verified compatible.
+ *
+ * @param modelId - Model identifier (e.g., "anthropic/claude-opus-4-5-20251101")
+ * @returns True if direct provider, false if OpenRouter
+ */
+function isDirectProvider(modelId: string): boolean {
+  if (!modelId) return false;
+
+  // Check for explicit openrouter prefix
+  const lower = modelId.toLowerCase();
+  if (lower.startsWith("openrouter/") || lower.startsWith("openrouter:")) {
+    return false;
+  }
+
+  // Check for provider/model format
+  const slashIndex = modelId.indexOf("/");
+  if (slashIndex > 0) {
+    const provider = modelId.slice(0, slashIndex).toLowerCase();
+    // If it's a known direct provider, return true
+    if (provider in PROVIDERS && provider !== "openrouter") {
+      return true;
+    }
+  }
+
+  // Check for model name patterns from direct providers
+  if (lower.startsWith("claude-")) return true; // Anthropic
+  if (
+    lower.startsWith("gpt-") ||
+    lower.startsWith("o1") ||
+    lower.startsWith("o3") ||
+    lower.startsWith("o4")
+  )
+    return true; // OpenAI
+  if (lower.startsWith("gemini-")) return true; // Google
+  if (lower.startsWith("deepseek")) return true; // DeepSeek
+  if (lower.startsWith("glm-")) return true; // Zhipu
+  if (
+    lower.startsWith("mistral-") ||
+    lower.startsWith("codestral") ||
+    lower.startsWith("magistral")
+  )
+    return true; // Mistral
+  if (lower.startsWith("qwen") || lower.startsWith("llama")) return true; // Ollama
+
+  return false;
+}
+
+/**
+ * Generate structured output with provider-based routing.
+ *
+ * Routing logic:
+ * - Direct Providers (Anthropic, OpenAI, etc.) → Trust curated PROVIDERS list
+ *   These are pre-verified to support both tools AND structuredOutputs.
+ * - OpenRouter → Use ModelCapabilityService to check capabilities dynamically
+ *
+ * This separation ensures:
+ * 1. Direct provider models always work (no false negatives from cache misses)
+ * 2. OpenRouter models are capability-checked for safety
+ */
+export async function generateStructured<T>(
+  options: GenerateStructuredOptions<T>,
+): Promise<T> {
+  const { modelId, ...callOptions } = options;
+
+  // Direct Providers: Trust our curated PROVIDERS list
+  // We've verified these support both tools + structuredOutputs
+  if (isDirectProvider(modelId)) {
+    return nativeStructuredOutput<T>(callOptions);
+  }
+
+  // OpenRouter: Check capabilities dynamically via ModelCapabilityService
+  const caps = await modelCapabilities.getCapabilities(modelId);
+
+  if (!caps.tools || !caps.structuredOutputs) {
+    const missing: string[] = [];
+    if (!caps.tools) missing.push("tools");
+    if (!caps.structuredOutputs) missing.push("structuredOutputs");
+
+    throw new Error(
+      `Model "${modelId}" is not compatible. Missing capabilities: ${missing.join(", ")}.\n` +
+        `Only models with BOTH tools AND structuredOutputs are supported.\n` +
+        `Use modelCapabilities.getCompatibleModels() to find compatible models.`,
+    );
+  }
+
+  return nativeStructuredOutput<T>(callOptions);
 }

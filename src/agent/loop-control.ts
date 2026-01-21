@@ -10,7 +10,7 @@
  * @see https://sdk.vercel.ai/docs/agents/loop-control
  */
 
-import { stepCountIs } from 'ai';
+import { stepCountIs, type LanguageModel, type ModelMessage } from 'ai';
 import type { StopCondition } from './stop-conditions.js';
 
 // ============================================================================
@@ -77,16 +77,18 @@ export interface Message {
  * Compatible with AI SDK's PrepareStepResult
  */
 export interface StepSettings {
-    /** Model to use for this step (LanguageModel or string model ID) */
-    model?: unknown;
+    /** Model to use for this step */
+    model?: LanguageModel;
     /** Active tools for this step */
     activeTools?: string[];
     /** Tool choice mode */
     toolChoice?: 'auto' | 'none' | 'required' | { type: 'tool'; toolName: string };
     /** Messages to send */
-    messages?: Message[];
-    /** Additional instructions to append */
-    additionalInstructions?: string;
+    messages?: ModelMessage[];
+    /** System prompt override */
+    system?: string;
+    /** Experimental context (AI SDK internal) */
+    experimental_context?: unknown;
 }
 
 /**
@@ -95,7 +97,8 @@ export interface StepSettings {
 export type PrepareStepFn = (context: StepContext) => Promise<StepSettings> | StepSettings;
 
 /**
- * Phase configuration for phased execution
+ * Phase configuration for phased execution.
+ * Use LanguageModel objects for model overrides to avoid AI Gateway fallback.
  */
 export interface Phase {
     /** Phase name */
@@ -106,8 +109,8 @@ export interface Phase {
     tools: string[];
     /** Whether tools are required */
     toolChoice?: 'auto' | 'required';
-    /** Model to use (optional override) */
-    model?: string;
+    /** Model to use (optional override) - must be LanguageModel object, NOT string */
+    model?: LanguageModel;
 }
 
 // ============================================================================
@@ -134,7 +137,7 @@ export function contextWindowManager(config: {
             return {};
         }
 
-        const msgArray = [...messages] as any[];
+        const msgArray = [...messages];
         const systemMessages = keepSystem
             ? msgArray.filter(m => m.role === 'system')
             : [];
@@ -148,29 +151,53 @@ export function contextWindowManager(config: {
 }
 
 /**
+ * Configuration for dynamic model selection.
+ * Accepts LanguageModel objects to avoid AI Gateway fallback.
+ */
+export interface DynamicModelSelectorConfig {
+    /** Default model to use for simple tasks */
+    defaultModel: LanguageModel;
+    /** Model to use for complex tasks (errors, long context) */
+    complexModel: LanguageModel;
+    /** Step threshold for switching to complex model (default: 5) */
+    complexityThreshold?: number;
+    /** Message count threshold for complexity (default: 15) */
+    messageThreshold?: number;
+}
+
+/**
  * Create a prepareStep that switches models based on complexity.
  *
+ * IMPORTANT: Pass LanguageModel objects, NOT strings!
+ * Passing strings causes AI SDK to fall back to AI Gateway.
+ *
  * @example
+ * import { createModel, parseModelString } from './model-provider.js';
+ *
+ * const defaultModel = createModel(parseModelString('anthropic/claude-sonnet-4-5-20250929'));
+ * const complexModel = createModel(parseModelString('anthropic/claude-opus-4-5-20251101'));
+ *
  * const agent = new ToolLoopAgent({
  *   prepareStep: dynamicModelSelector({
- *     defaultModel: 'claude-sonnet-4-20250514',
- *     complexModel: 'claude-sonnet-4-20250514',
+ *     defaultModel,
+ *     complexModel,
  *     complexityThreshold: 5
  *   })
  * });
  */
-export function dynamicModelSelector(config: {
-    defaultModel: string;
-    complexModel: string;
-    complexityThreshold?: number;
-}): PrepareStepFn {
-    const { defaultModel, complexModel, complexityThreshold = 5 } = config;
+export function dynamicModelSelector(config: DynamicModelSelectorConfig): PrepareStepFn {
+    const {
+        defaultModel,
+        complexModel,
+        complexityThreshold = 5,
+        messageThreshold = 15
+    } = config;
 
     return ({ stepNumber, steps, messages }) => {
-        // Use complex model after threshold steps or with long context
-        const isComplex = stepNumber > complexityThreshold || messages.length > 15;
+        // Check complexity conditions
+        const isComplex = stepNumber > complexityThreshold || messages.length > messageThreshold;
 
-        // Also check if previous steps had errors
+        // Check if previous steps had errors
         const hadErrors = steps.some((step: any) =>
             step.toolResults?.some((r: any) =>
                 typeof r.result === 'object' && r.result !== null && 'error' in r.result
@@ -188,12 +215,20 @@ export function dynamicModelSelector(config: {
 /**
  * Create a prepareStep that executes in phases with different tool sets.
  *
+ * Phase.model is now properly typed as LanguageModel (not string), so it's
+ * safe to include in the return value without triggering AI Gateway fallback.
+ *
  * @example
+ * import { createModel, parseModelString } from './model-provider.js';
+ *
+ * const researchModel = createModel(parseModelString('anthropic/claude-haiku-4-5'));
+ * const outputModel = createModel(parseModelString('anthropic/claude-sonnet-4-5'));
+ *
  * const agent = new ToolLoopAgent({
  *   prepareStep: phasedExecution([
- *     { name: 'research', steps: [0, 3], tools: ['search', 'read_file'] },
+ *     { name: 'research', steps: [0, 3], tools: ['search', 'read_file'], model: researchModel },
  *     { name: 'analysis', steps: [3, 6], tools: ['analyze', 'lint'] },
- *     { name: 'output', steps: [6, 10], tools: ['write_file'], toolChoice: 'required' }
+ *     { name: 'output', steps: [6, 10], tools: ['write_file'], toolChoice: 'required', model: outputModel }
  *   ])
  * });
  */
@@ -208,11 +243,17 @@ export function phasedExecution(phases: Phase[]): PrepareStepFn {
             return {};
         }
 
-        return {
+        const result: StepSettings = {
             activeTools: currentPhase.tools,
             toolChoice: currentPhase.toolChoice ?? 'auto',
-            model: currentPhase.model
         };
+
+        // Safe to include model since Phase.model is now typed as LanguageModel, not string
+        if (currentPhase.model) {
+            result.model = currentPhase.model;
+        }
+
+        return result;
     };
 }
 
@@ -259,15 +300,15 @@ export function budgetAwareExecution(config: {
 
             case 'trim':
                 // Keep only recent messages
-                const msgArr = [...messages] as any[];
+                const msgArr = [...messages];
                 const systemMsgs = msgArr.filter(m => m.role === 'system');
                 const recentMsgs = msgArr.filter(m => m.role !== 'system').slice(-5);
                 return { messages: [...systemMsgs, ...recentMsgs] };
 
             case 'summarize':
-                // Add instruction to summarize
+                // Add instruction to summarize via system prompt
                 return {
-                    additionalInstructions: '\n\nIMPORTANT: Token budget is running low. Please summarize your findings and conclude.'
+                    system: '\n\nIMPORTANT: Token budget is running low. Please summarize your findings and conclude.'
                 };
 
             default:
