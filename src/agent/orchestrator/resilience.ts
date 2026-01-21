@@ -128,15 +128,21 @@ export class AgentResilienceLayer {
      * Check if a model is currently rate limited and wait if necessary.
      * Returns the wait time in ms (0 if not rate limited).
      */
-    private async waitForRateLimit(modelId: string): Promise<number> {
+    private async waitForRateLimit(modelId: string, abortSignal?: AbortSignal): Promise<number> {
         const until = this.rateLimitedUntil.get(modelId);
         if (!until) return 0;
 
         const waitTime = until - Date.now();
         if (waitTime <= 0) {
-            this.rateLimitedUntil.delete(modelId);
+            // Only delete if value hasn't been updated by another agent
+            if (this.rateLimitedUntil.get(modelId) === until) {
+                this.rateLimitedUntil.delete(modelId);
+            }
             return 0;
         }
+
+        // Check if already aborted
+        if (abortSignal?.aborted) return 0;
 
         this.bus.emit({
             type: 'status',
@@ -144,8 +150,19 @@ export class AgentResilienceLayer {
             label: `Model ${modelId} rate limited, waiting ${Math.ceil(waitTime / 1000)}s...`,
         });
 
-        await new Promise(resolve => setTimeout(resolve, waitTime));
-        this.rateLimitedUntil.delete(modelId);
+        // Wait with abort support
+        await new Promise<void>(resolve => {
+            const timeout = setTimeout(resolve, waitTime);
+            abortSignal?.addEventListener('abort', () => {
+                clearTimeout(timeout);
+                resolve();
+            }, { once: true });
+        });
+
+        // Only delete if value hasn't been updated by another agent during wait
+        if (this.rateLimitedUntil.get(modelId) === until) {
+            this.rateLimitedUntil.delete(modelId);
+        }
         return waitTime;
     }
 
@@ -192,7 +209,7 @@ export class AgentResilienceLayer {
     ): Promise<T> {
         // Wait for any existing rate limit on this model before proceeding
         if (modelId) {
-            await this.waitForRateLimit(modelId);
+            await this.waitForRateLimit(modelId, abortSignal);
         }
 
         const breaker = this.getCircuitBreaker(agentName);
