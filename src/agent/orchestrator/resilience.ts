@@ -128,7 +128,7 @@ export class AgentResilienceLayer {
      * Check if a model is currently rate limited and wait if necessary.
      * Returns the wait time in ms (0 if not rate limited).
      */
-    private async waitForRateLimit(modelId: string, abortSignal?: AbortSignal): Promise<number> {
+    private async waitForRateLimit(modelId: string, timeoutMs: number, abortSignal?: AbortSignal): Promise<number> {
         const until = this.rateLimitedUntil.get(modelId);
         if (!until) return 0;
 
@@ -142,7 +142,7 @@ export class AgentResilienceLayer {
         }
 
         // Check if already aborted
-        if (abortSignal?.aborted) return 0;
+        if (abortSignal?.aborted) return waitTime;
 
         this.bus.emit({
             type: 'status',
@@ -150,22 +150,32 @@ export class AgentResilienceLayer {
             label: `Model ${modelId} rate limited, waiting ${Math.ceil(waitTime / 1000)}s...`,
         });
 
-        // Wait with abort support
-        await new Promise<void>(resolve => {
-            const timeout = setTimeout(() => {
-                abortSignal?.removeEventListener('abort', onAbort);
-                resolve();
-            }, waitTime);
-            const onAbort = () => {
-                clearTimeout(timeout);
-                resolve();
-            };
-            abortSignal?.addEventListener('abort', onAbort, { once: true });
-        });
+        // Wait with abort support, respecting agent timeout
+        try {
+            await withAbortableTimeout(
+                (signal) => new Promise<void>(resolve => {
+                    const timeout = setTimeout(() => {
+                        signal.removeEventListener('abort', onAbort);
+                        resolve();
+                    }, waitTime);
+                    const onAbort = () => {
+                        clearTimeout(timeout);
+                        resolve();
+                    };
+                    signal.addEventListener('abort', onAbort, { once: true });
+                }),
+                timeoutMs,
+                `rate_limit_wait_${modelId}`,
+                abortSignal
+            );
 
-        // Only delete if value hasn't been updated by another agent during wait
-        if (this.rateLimitedUntil.get(modelId) === until) {
-            this.rateLimitedUntil.delete(modelId);
+            // Only delete if value hasn't been updated by another agent during wait
+            if (this.rateLimitedUntil.get(modelId) === until) {
+                this.rateLimitedUntil.delete(modelId);
+            }
+        } catch {
+            // Aborted or timed out - keep rateLimitedUntil so other agents respect it
+            return waitTime;
         }
         return waitTime;
     }
@@ -211,13 +221,13 @@ export class AgentResilienceLayer {
         abortSignal?: AbortSignal,
         modelId?: string
     ): Promise<T> {
-        // Wait for any existing rate limit on this model before proceeding
-        if (modelId) {
-            await this.waitForRateLimit(modelId, abortSignal);
-        }
-
         const breaker = this.getCircuitBreaker(agentName);
         const timeoutMs = AGENT_TIMEOUTS[agentName] ?? this.config.agentTimeout;
+
+        // Wait for any existing rate limit on this model before proceeding
+        if (modelId) {
+            await this.waitForRateLimit(modelId, timeoutMs, abortSignal);
+        }
 
         const retryPolicy = RetryPolicyBuilder.from('api')
             .maxAttempts(this.config.maxRetries)
