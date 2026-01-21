@@ -152,11 +152,15 @@ export class AgentResilienceLayer {
 
         // Wait with abort support
         await new Promise<void>(resolve => {
-            const timeout = setTimeout(resolve, waitTime);
-            abortSignal?.addEventListener('abort', () => {
+            const timeout = setTimeout(() => {
+                abortSignal?.removeEventListener('abort', onAbort);
+                resolve();
+            }, waitTime);
+            const onAbort = () => {
                 clearTimeout(timeout);
                 resolve();
-            }, { once: true });
+            };
+            abortSignal?.addEventListener('abort', onAbort, { once: true });
         });
 
         // Only delete if value hasn't been updated by another agent during wait
