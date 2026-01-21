@@ -233,7 +233,7 @@ export class ThinkingChain {
         };
         
         if (step.data) {
-            (event as any).data = step.data;
+            event.data = step.data;
         }
         
         this.bus.emit(event);

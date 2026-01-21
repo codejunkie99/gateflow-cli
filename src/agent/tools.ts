@@ -23,7 +23,7 @@ import type {
     SemanticSummarizer
 } from '../context/index.js';
 import type { MemoryManager, KnowledgeStore, MemoryService } from '../memory/index.js';
-import { LEARNED_TYPES } from '../memory/knowledge-service/index.js';
+import { LEARNED_TYPES, type LearnedKnowledgeType } from '../memory/knowledge-service/index.js';
 import type { SkillRegistry } from '../skills/index.js';
 import type { MCPToolSync } from '../mcp/index.js';
 import type { InputManager } from '../ui/index.js';
@@ -395,7 +395,7 @@ export const TOOL_APPROVAL_CONFIG: Record<string, boolean> = {
 // Tool Implementations
 // ============================================================================
 
-export function createToolExecutors(ctx: ToolContext) {
+export function createToolExecutors(ctx: ToolContext): Record<string, (args: any) => Promise<unknown>> {
     const requiresApproval = (toolName: string): boolean =>
         (TOOL_APPROVAL_CONFIG[toolName] ?? false) && !ctx.autoApprove;
 
@@ -2307,7 +2307,7 @@ export function createToolExecutors(ctx: ToolContext) {
                 const results = knowledgeService.search({
                     query: args.query,
                     knowledgeTypes: effectiveSources.includes('learned') && learnedTypes.length
-                        ? (learnedTypes as any)
+                        ? (learnedTypes as LearnedKnowledgeType[])
                         : undefined,
                     structuralTypes: effectiveSources.includes('structural') && structuralTypes.length
                         ? structuralTypes

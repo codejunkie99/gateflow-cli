@@ -50,6 +50,10 @@ export interface InteractiveMenuOptions {
     showHelp?: boolean;
     /** Maximum visible items before scrolling */
     maxVisibleItems?: number;
+    /** Enable search/filter functionality */
+    searchable?: boolean;
+    /** Placeholder text for search input */
+    searchPlaceholder?: string;
     /** Callback when prompt starts (for spinner coordination) */
     onPromptStart?: () => void;
     /** Callback when prompt ends */
@@ -76,19 +80,25 @@ export class InteractiveMenu<T = unknown> {
     private options: InteractiveMenuOptions;
     private currentIndex = 0;
     private flatItems: { item: MenuItem<T>; sectionIndex: number }[] = [];
+    private filteredItems: { item: MenuItem<T>; sectionIndex: number }[] = [];
     private scrollOffset = 0;
     private rl: readline.Interface | null = null;
+    private searchQuery = '';
 
     constructor(sections: MenuSection<T>[], options: InteractiveMenuOptions = {}) {
         this.sections = sections;
         this.options = {
             showHelp: true,
             maxVisibleItems: 10,
+            searchable: false,
+            searchPlaceholder: 'Type to search...',
             ...options
         };
 
         // Flatten items for navigation
         this.flattenItems();
+        // Initialize filtered items
+        this.filteredItems = [...this.flatItems];
     }
 
     private flattenItems(): void {
@@ -98,6 +108,25 @@ export class InteractiveMenu<T = unknown> {
                 this.flatItems.push({ item, sectionIndex });
             });
         });
+    }
+
+    private filterItems(): void {
+        if (!this.searchQuery) {
+            this.filteredItems = [...this.flatItems];
+        } else {
+            const query = this.searchQuery.toLowerCase();
+            this.filteredItems = this.flatItems.filter(({ item }) => {
+                const labelMatch = item.label.toLowerCase().includes(query);
+                const descMatch = item.description?.toLowerCase().includes(query) || false;
+                return labelMatch || descMatch;
+            });
+        }
+        // Reset selection to first item
+        this.currentIndex = this.findNextSelectableIndexInFiltered(0, 1);
+        if (this.currentIndex === -1) {
+            this.currentIndex = 0;
+        }
+        this.scrollOffset = 0;
     }
 
     /**
@@ -110,8 +139,12 @@ export class InteractiveMenu<T = unknown> {
                 return;
             }
 
+            // Reset search state
+            this.searchQuery = '';
+            this.filteredItems = [...this.flatItems];
+
             // Move to first selectable item
-            this.currentIndex = this.findNextSelectableIndex(0, 1);
+            this.currentIndex = this.findNextSelectableIndexInFiltered(0, 1);
             if (this.currentIndex === -1) {
                 this.currentIndex = 0;
             }
@@ -130,8 +163,10 @@ export class InteractiveMenu<T = unknown> {
                 process.stdin.resume();
             }
 
-            // Hide cursor during menu display
-            process.stdout.write('\x1B[?25l');
+            // Hide cursor during menu display (show if searchable)
+            if (!this.options.searchable) {
+                process.stdout.write('\x1B[?25l');
+            }
 
             // Initial render
             this.render();
@@ -153,7 +188,7 @@ export class InteractiveMenu<T = unknown> {
 
                     case 'return':
                         cleanup();
-                        const selected = this.flatItems[this.currentIndex];
+                        const selected = this.filteredItems[this.currentIndex];
                         if (selected && !selected.item.disabled) {
                             resolve({
                                 selected: true,
@@ -167,8 +202,24 @@ export class InteractiveMenu<T = unknown> {
                         break;
 
                     case 'escape':
-                        cleanup();
-                        resolve({ selected: false });
+                        // If searching, clear search first
+                        if (this.options.searchable && this.searchQuery) {
+                            this.searchQuery = '';
+                            this.filterItems();
+                            this.render();
+                        } else {
+                            cleanup();
+                            resolve({ selected: false });
+                        }
+                        break;
+
+                    case 'backspace':
+                        // Handle backspace for search
+                        if (this.options.searchable && this.searchQuery.length > 0) {
+                            this.searchQuery = this.searchQuery.slice(0, -1);
+                            this.filterItems();
+                            this.render();
+                        }
                         break;
 
                     case 'c':
@@ -176,6 +227,24 @@ export class InteractiveMenu<T = unknown> {
                         if (key.ctrl) {
                             cleanup();
                             resolve({ selected: false });
+                        } else if (this.options.searchable && !key.ctrl && !key.meta) {
+                            // Regular 'c' for search
+                            this.searchQuery += 'c';
+                            this.filterItems();
+                            this.render();
+                        }
+                        break;
+
+                    default:
+                        // Handle alphanumeric input for search
+                        if (this.options.searchable && key.sequence && !key.ctrl && !key.meta) {
+                            // Only add printable characters
+                            const char = key.sequence;
+                            if (char.length === 1 && char.charCodeAt(0) >= 32 && char.charCodeAt(0) < 127) {
+                                this.searchQuery += char;
+                                this.filterItems();
+                                this.render();
+                            }
                         }
                         break;
                 }
@@ -199,7 +268,7 @@ export class InteractiveMenu<T = unknown> {
     }
 
     private moveSelection(direction: number): void {
-        const newIndex = this.findNextSelectableIndex(this.currentIndex + direction, direction);
+        const newIndex = this.findNextSelectableIndexInFiltered(this.currentIndex + direction, direction);
         if (newIndex !== -1) {
             this.currentIndex = newIndex;
             this.updateScrollOffset();
@@ -230,9 +299,35 @@ export class InteractiveMenu<T = unknown> {
         return -1;
     }
 
+    private findNextSelectableIndexInFiltered(startIndex: number, direction: number): number {
+        if (this.filteredItems.length === 0) return -1;
+
+        let index = startIndex;
+        const maxIterations = this.filteredItems.length;
+        let iterations = 0;
+
+        while (iterations < maxIterations) {
+            if (index < 0) {
+                index = this.filteredItems.length - 1;
+            } else if (index >= this.filteredItems.length) {
+                index = 0;
+            }
+
+            const item = this.filteredItems[index];
+            if (item && !item.item.disabled) {
+                return index;
+            }
+
+            index += direction;
+            iterations++;
+        }
+
+        return -1;
+    }
+
     private updateScrollOffset(): void {
         const maxVisible = this.options.maxVisibleItems!;
-        const totalItems = this.flatItems.length;
+        const totalItems = this.filteredItems.length;
 
         if (totalItems <= maxVisible) {
             this.scrollOffset = 0;
@@ -258,56 +353,100 @@ export class InteractiveMenu<T = unknown> {
             lines.push('');
         }
 
-        // Build visible items with section headers
-        let itemIndex = 0;
-        let visibleCount = 0;
-        let lastRenderedSection = -1;
+        // Search input (when searchable)
+        if (this.options.searchable) {
+            const searchDisplay = this.searchQuery
+                ? chalk.white(this.searchQuery) + chalk.dim('|')
+                : chalk.dim(this.options.searchPlaceholder || 'Type to search...');
+            lines.push(`  ${chalk.cyan('⌕')} ${searchDisplay}`);
+            lines.push('');
+        }
 
-        for (const section of this.sections) {
-            const sectionStartIndex = itemIndex;
-            const sectionEndIndex = sectionStartIndex + section.items.length;
-
-            // Check if any items from this section are visible
-            const sectionHasVisibleItems =
-                sectionEndIndex > this.scrollOffset &&
-                sectionStartIndex < this.scrollOffset + maxVisible;
-
-            if (sectionHasVisibleItems && lastRenderedSection !== this.sections.indexOf(section)) {
-                // Add section header if we're at or past this section
-                if (itemIndex <= this.scrollOffset + maxVisible && itemIndex >= this.scrollOffset) {
-                    const headerColor = section.headerColor || chalk.dim;
-                    lines.push(headerColor(`  ${section.title}`));
-                    lastRenderedSection = this.sections.indexOf(section);
-                }
+        // Handle empty filtered results
+        if (this.filteredItems.length === 0) {
+            lines.push(chalk.dim('  No matching models found'));
+            lines.push('');
+            if (this.options.showHelp) {
+                lines.push(chalk.dim('  Press Escape to clear search'));
             }
+            this.clearMenu();
+            console.log(lines.join('\n'));
+            (this as any)._lastLineCount = lines.length;
+            return;
+        }
 
-            for (const menuItem of section.items) {
-                if (itemIndex >= this.scrollOffset && visibleCount < maxVisible) {
-                    const isSelected = itemIndex === this.currentIndex;
-                    const line = this.renderItem(menuItem, isSelected);
-                    lines.push(line);
-                    visibleCount++;
+        // Build visible items - use filteredItems when searching, sections otherwise
+        let visibleCount = 0;
+
+        if (this.options.searchable && this.searchQuery) {
+            // When searching, render flat filtered list without section headers
+            for (let i = this.scrollOffset; i < this.filteredItems.length && visibleCount < maxVisible; i++) {
+                const { item } = this.filteredItems[i];
+                const isSelected = i === this.currentIndex;
+                const line = this.renderItem(item, isSelected);
+                lines.push(line);
+                visibleCount++;
+            }
+        } else {
+            // Normal render with section headers
+            let itemIndex = 0;
+            let lastRenderedSection = -1;
+
+            for (const section of this.sections) {
+                const sectionStartIndex = itemIndex;
+                const sectionEndIndex = sectionStartIndex + section.items.length;
+
+                // Check if any items from this section are visible
+                const sectionHasVisibleItems =
+                    sectionEndIndex > this.scrollOffset &&
+                    sectionStartIndex < this.scrollOffset + maxVisible;
+
+                if (sectionHasVisibleItems && lastRenderedSection !== this.sections.indexOf(section)) {
+                    // Add section header if we're at or past this section
+                    if (itemIndex <= this.scrollOffset + maxVisible && itemIndex >= this.scrollOffset) {
+                        const headerColor = section.headerColor || chalk.dim;
+                        lines.push(headerColor(`  ${section.title}`));
+                        lastRenderedSection = this.sections.indexOf(section);
+                    }
                 }
-                itemIndex++;
+
+                for (const menuItem of section.items) {
+                    if (itemIndex >= this.scrollOffset && visibleCount < maxVisible) {
+                        const isSelected = itemIndex === this.currentIndex;
+                        const line = this.renderItem(menuItem, isSelected);
+                        lines.push(line);
+                        visibleCount++;
+                    }
+                    itemIndex++;
+                }
             }
         }
 
         // Scroll indicators
+        const totalItems = this.options.searchable && this.searchQuery
+            ? this.filteredItems.length
+            : this.flatItems.length;
+        const insertPos = this.options.title ? (this.options.searchable ? 5 : 3) : (this.options.searchable ? 2 : 0);
+
         if (this.scrollOffset > 0) {
-            lines.splice(this.options.title ? 3 : 0, 0, chalk.dim('    ^ more above ^'));
+            lines.splice(insertPos, 0, chalk.dim('    ↑ more above'));
         }
-        if (this.scrollOffset + maxVisible < this.flatItems.length) {
-            lines.push(chalk.dim('    v more below v'));
+        if (this.scrollOffset + maxVisible < totalItems) {
+            lines.push(chalk.dim('    ↓ more below'));
         }
 
         // Help text
         if (this.options.showHelp) {
             lines.push('');
-            lines.push(chalk.dim('  Use arrow keys to navigate, Enter to select, Escape to cancel'));
+            if (this.options.searchable) {
+                lines.push(chalk.dim('  ↑↓ navigate • Enter select • Esc clear/cancel • Type to search'));
+            } else {
+                lines.push(chalk.dim('  Use arrow keys to navigate, Enter to select, Escape to cancel'));
+            }
         }
 
         // Hint for selected item
-        const selectedItem = this.flatItems[this.currentIndex];
+        const selectedItem = this.filteredItems[this.currentIndex];
         if (selectedItem?.item.hint) {
             lines.push('');
             lines.push(chalk.yellow(`  ${selectedItem.item.hint}`));

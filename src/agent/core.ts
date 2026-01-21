@@ -8,12 +8,14 @@
  * - Integrates with PolicyEngine for path safety
  */
 
-import { streamText, generateObject, stepCountIs, type StepResult, type Tool, type ModelMessage } from 'ai';
+import { streamText, stepCountIs, type StepResult, type Tool, type ModelMessage } from 'ai';
 import { z } from 'zod';
 import {
     createModel,
     parseModelString,
+    generateStructured,
     getVariantProviderOptions,
+    PROVIDERS,
     type ModelConfig,
     type ModelConfigWithVariant,
 } from './model-provider.js';
@@ -60,6 +62,7 @@ import {
     type StepSettings
 } from './loop-control.js';
 import { prefetchOpenRouterModels } from './model-provider-openrouter.js';
+import { modelCapabilities } from './model-capabilities/index.js';
 import { truncateToFit } from '../memory/token-estimator.js';
 
 // ============================================================================
@@ -83,6 +86,29 @@ export interface AgentSession {
     currentMode: PromptMode;
     hasErrors: boolean; // Tracks if we've seen lint errors this session
     thinkingChain: ThinkingChain; // NEW: Thinking visibility
+}
+
+/**
+ * Extended usage tracking for AI SDK providers.
+ * Captures provider-specific details beyond standard inputTokens/outputTokens.
+ */
+interface ExtendedUsageDetails {
+    inputTokens?: number;
+    outputTokens?: number;
+    reasoningTokens?: number;
+    textTokens?: number;
+    cachedTokens?: number;
+    finishReason?: string;
+    rawUsage?: unknown;
+}
+
+interface UsageWithExtensions {
+    inputTokens?: number;
+    outputTokens?: number;
+    outputTokenDetails?: { reasoningTokens?: number; textTokens?: number };
+    cachedTokens?: number;
+    raw?: unknown;
+    extended?: ExtendedUsageDetails;
 }
 
 type WorkflowOutcome =
@@ -166,9 +192,8 @@ export class GateFlowAgent {
             resolvedModelConfig = parseModelString(resolvedModelString);
             resolvedModelString = `${resolvedModelConfig.provider}/${resolvedModelConfig.model}`;
         } else {
-            // Neither provided - use default
-            resolvedModelString = 'claude-sonnet-4-20250514';
-            resolvedModelConfig = parseModelString(resolvedModelString);
+            // Neither provided - use default from PROVIDERS
+            resolvedModelConfig = { provider: 'anthropic', model: PROVIDERS.anthropic.defaultModel };
             resolvedModelString = `${resolvedModelConfig.provider}/${resolvedModelConfig.model}`;
         }
 
@@ -193,6 +218,13 @@ export class GateFlowAgent {
 
         // Initialize orchestrator with worker agents
         this.initializeOrchestrator();
+
+        // Initialize model capability cache for structured output routing
+        modelCapabilities.initialize().catch(err => {
+            if (process.env.VERBOSE) {
+                console.warn('Failed to initialize model capability cache:', err);
+            }
+        });
 
         // Prefetch OpenRouter models in background for faster model switching
         prefetchOpenRouterModels().catch(err => {
@@ -243,7 +275,7 @@ export class GateFlowAgent {
                 description: spec.description,
                 inputSchema: spec.parameters, // tools.ts uses 'parameters' which maps to inputSchema
                 execute: async (args: unknown) => {
-                    const executor = (this.executors as any)[name];
+                    const executor = this.executors[name];
                     if (!executor) {
                         throw new Error(`Unknown tool: ${name}`);
                     }
@@ -436,7 +468,7 @@ export class GateFlowAgent {
         const agentStartTime = Date.now();
 
         // Track token usage for agent_complete
-        let lastUsage: { inputTokens?: number; outputTokens?: number } | undefined;
+        let lastUsage: UsageWithExtensions | undefined;
 
         try {
             // Emit status immediately so spinner shows during processing
@@ -473,15 +505,17 @@ export class GateFlowAgent {
                 0.9
             );
 
-            // AI SDK 6: Use generateObject for complexity detection
+            // AI SDK 6: Use generateStructured for complexity detection
             // Ensure modelConfig is defined (fallback to parsing model string)
             const effectiveModelConfig = this.config.modelConfig ?? parseModelString(this.config.model);
             const complexityVariantOptions = getVariantProviderOptions(
                 effectiveModelConfig.provider,
                 effectiveModelConfig.variant
             );
-            const { object: complexity } = await generateObject({
-                model: createModel(effectiveModelConfig) as any,
+            const modelId = `${effectiveModelConfig.provider}/${effectiveModelConfig.model}`;
+            const complexity = await generateStructured({
+                model: createModel(effectiveModelConfig),
+                modelId,
                 schema: ComplexityDetectionSchema,
                 prompt: `Does this request need multi-agent coordination?
 
@@ -597,12 +631,13 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
             }
 
             // AI SDK 6: Create prepareStep for dynamic control
-            const prepareStep = this.createPrepareStep(mode);
+            // Pass bundle to provide LanguageModel objects (not strings) to avoid AI Gateway fallback
+            const prepareStep = this.createPrepareStep(mode, bundle);
 
             // AI SDK 6: Use bundle configuration with stopWhen and runtime overrides
             // Spread variantOptions to apply extended thinking, reasoning effort, etc.
             const result = streamText({
-                model: bundle.model as any,
+                model: bundle.model,
                 system: systemPrompt,
                 messages: this.session.messages,
                 tools: bundle.tools,
@@ -610,7 +645,7 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
                 temperature: runtime?.temperature ?? this.config.temperature,
                 abortSignal: runtime?.signal ?? options?.signal,
                 stopWhen: effectiveStopWhen,  // AI SDK handles the loop automatically
-                prepareStep: prepareStep as any,  // Dynamic step control (cast for AI SDK compatibility)
+                prepareStep: prepareStep,  // Dynamic step control (cast for AI SDK compatibility)
                 // Apply variant options (extended thinking for Anthropic, reasoning effort for OpenAI, etc.)
                 ...bundle.variantOptions,
 
@@ -654,22 +689,24 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
                 // Enhanced with extended usage tracking
                 // Note: Tool approval is handled in tool executors via PolicyEngine (see tools.ts)
                 onFinish: ({ totalUsage, finishReason }) => {
-                    lastUsage = totalUsage;
+                    // Cast to our extended type to access provider-specific properties
+                    const usage = totalUsage as UsageWithExtensions | undefined;
+                    lastUsage = usage;
 
                     // AI SDK 6: Extended usage tracking
                     // Store detailed token breakdown for cost optimization and debugging
-                    if (totalUsage) {
+                    if (usage) {
                         // Store extended usage details for agent_complete event
-                        (lastUsage as any).extended = {
-                            inputTokens: totalUsage.inputTokens,
-                            outputTokens: totalUsage.outputTokens,
+                        usage.extended = {
+                            inputTokens: usage.inputTokens,
+                            outputTokens: usage.outputTokens,
                             // Extended usage details (when available from provider)
-                            reasoningTokens: (totalUsage as any).outputTokenDetails?.reasoningTokens,
-                            textTokens: (totalUsage as any).outputTokenDetails?.textTokens,
-                            cachedTokens: (totalUsage as any).cachedTokens,
+                            reasoningTokens: usage.outputTokenDetails?.reasoningTokens,
+                            textTokens: usage.outputTokenDetails?.textTokens,
+                            cachedTokens: usage.cachedTokens,
                             finishReason: finishReason,
                             // Raw provider usage for detailed analysis
-                            rawUsage: (totalUsage as any).raw
+                            rawUsage: usage.raw
                         };
                     }
                 }
@@ -727,9 +764,9 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
 
                     // Handle error stream parts (AI SDK v6)
                     case 'error': {
-                        const errorMsg = (part as any).error instanceof Error
-                            ? (part as any).error.message
-                            : String((part as any).error);
+                        const errorMsg = part.error instanceof Error
+                            ? part.error.message
+                            : String(part.error);
                         this.bus.emit({
                             type: 'error',
                             message: `Stream error: ${errorMsg}`
@@ -739,13 +776,12 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
 
                     // Handle tool errors (AI SDK v6)
                     case 'tool-error': {
-                        const toolError = part as any;
-                        const errorMsg = toolError.error instanceof Error
-                            ? toolError.error.message
-                            : String(toolError.error);
+                        const errorMsg = part.error instanceof Error
+                            ? part.error.message
+                            : String(part.error);
                         this.bus.emit({
                             type: 'error',
-                            message: `Tool ${toolError.toolName} failed: ${errorMsg}`
+                            message: `Tool ${part.toolName} failed: ${errorMsg}`
                         });
                         break;
                     }
@@ -783,7 +819,7 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
 
             // Emit agent lifecycle complete with token usage
             // AI SDK 6: Include extended usage details when available
-            const extendedUsage = (lastUsage as any)?.extended;
+            const extendedUsage = lastUsage?.extended;
             this.bus.emit({
                 type: 'agent_complete',
                 agentName: 'gateflow',
@@ -940,8 +976,11 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
     /**
      * Create a prepareStep function for dynamic step control.
      * Configures context management, model selection, and tool availability per step.
+     *
+     * @param mode - The prompt mode for mode-specific tool restrictions
+     * @param bundle - The agent bundle containing LanguageModel objects (required to avoid AI Gateway fallback)
      */
-    private createPrepareStep(mode: PromptMode): PrepareStepFn {
+    private createPrepareStep(mode: PromptMode, bundle: AgentBundle): PrepareStepFn {
         return combinePrepareSteps(
             // 1. Context window management - trim old messages to stay within limits
             contextWindowManager({
@@ -951,9 +990,11 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
             }),
 
             // 2. Dynamic model selection based on complexity
+            // IMPORTANT: Pass LanguageModel objects (bundle.model), NOT strings
+            // Passing strings causes AI SDK to fall back to AI Gateway
             dynamicModelSelector({
-                defaultModel: this.config.model,
-                complexModel: this.config.model, // Could use larger model
+                defaultModel: bundle.model,
+                complexModel: bundle.model, // Could use larger model for complex tasks
                 complexityThreshold: 5
             }),
 
