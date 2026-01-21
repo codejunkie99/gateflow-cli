@@ -77,12 +77,6 @@ export const RECOMMENDED_MODELS: RecommendedModel[] = [
         useCase: 'Quick iterations'
     },
     {
-        id: 'groq/llama-3.3-70b-versatile',
-        reason: 'Fastest inference for rapid prototyping',
-        badge: 'Fast',
-        useCase: 'Quick queries'
-    },
-    {
         id: 'mistral/codestral-latest',
         reason: 'Specialized for code generation and editing',
         badge: 'Coding',

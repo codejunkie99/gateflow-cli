@@ -1,18 +1,17 @@
 /**
  * Planning Agent
  * Decomposes user requests into executable tasks with dependencies
- * Uses AI SDK 6's generateObject for type-safe structured output
+ * Uses AI SDK 6's generateStructured for type-safe structured output
  */
 
-import { generateObject } from 'ai';
-import { createModelWithVariant } from '../model-provider.js';
+import { createModelWithVariant, generateStructured } from '../model-provider.js';
 import { PromptBuilder } from '../prompts/PromptBuilder.js';
 import type { ExecutionPlan } from '../../types/agent-shared.js';
 import { ExecutionPlanSchema } from '../../types/agent-shared.js';
 
 /**
  * Create an execution plan from a user request
- * Uses generateObject to guarantee type-safe structured output
+ * Uses generateStructured to guarantee type-safe structured output
  */
 export async function createPlan(
     userRequest: string,
@@ -20,7 +19,8 @@ export async function createPlan(
     modelName: string = 'claude-sonnet-4-20250514'
 ): Promise<ExecutionPlan> {
     // Parse model and get variant options for extended thinking support
-    const { model, variantOptions } = createModelWithVariant(modelName);
+    const { model, variantOptions, config } = createModelWithVariant(modelName);
+    const modelId = `${config.provider}/${config.model}`;
 
     // FIX A: Explicitly list valid agents in prompt to avoid 'planning' being assigned
     const prompt = new PromptBuilder()
@@ -48,8 +48,9 @@ export async function createPlan(
 - confidence: Overall confidence (0-1)`)
         .build();
 
-    const { object: plan } = await generateObject({
-        model: model as any,
+    const plan = await generateStructured({
+        model,
+        modelId,
         schema: ExecutionPlanSchema,
         ...variantOptions,
         prompt
@@ -59,7 +60,7 @@ export async function createPlan(
 }
 
 /**
- * Parse plan from LLM JSON response (fallback if generateObject fails)
+ * Parse plan from LLM JSON response (fallback if structured output fails)
  */
 export function parsePlan(llmOutput: string): ExecutionPlan {
     try {
@@ -88,5 +89,3 @@ export function parsePlan(llmOutput: string): ExecutionPlan {
         };
     }
 }
-
-
