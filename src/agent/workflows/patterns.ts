@@ -12,9 +12,9 @@
  * @see https://sdk.vercel.ai/docs/agents/workflows
  */
 
-import { generateText, generateObject, streamText } from 'ai';
+import { generateText, streamText } from 'ai';
 import { z, type ZodSchema } from 'zod';
-import { createModelWithVariant } from '../model-provider.js';
+import { createModelWithVariant, generateStructured } from '../model-provider.js';
 
 // ============================================================================
 // Types
@@ -195,19 +195,21 @@ export async function generateWithQualityCheck<TQuality extends Record<string, u
         maxRetries = 2
     } = config;
 
-    const { model: client, variantOptions } = createModelWithVariant(model);
+    const { model: client, variantOptions, config: modelConfig } = createModelWithVariant(model);
+    const modelId = `${modelConfig.provider}/${modelConfig.model}`;
 
     // Initial generation
     const { text: initialOutput } = await generateText({
-        model: client as any,
+        model: client,
         system,
         prompt,
         ...variantOptions
     });
 
     // Quality evaluation
-    const { object: qualityMetrics } = await generateObject({
-        model: client as any,
+    const qualityMetrics = await generateStructured({
+        model: client,
+        modelId,
         schema: qualitySchema,
         prompt: `Evaluate this output:\n\n${initialOutput}\n\nProvide quality metrics.`,
         ...variantOptions
@@ -226,14 +228,15 @@ export async function generateWithQualityCheck<TQuality extends Record<string, u
         const improvedPrompt = improvementPrompt(currentOutput, currentMetrics);
 
         const { text: improvedOutput } = await generateText({
-            model: client as any,
+            model: client,
             system,
             prompt: improvedPrompt,
             ...variantOptions
         });
 
-        const { object: newMetrics } = await generateObject({
-            model: client as any,
+        const newMetrics = await generateStructured({
+            model: client,
+            modelId,
             schema: qualitySchema,
             prompt: `Evaluate this output:\n\n${improvedOutput}\n\nProvide quality metrics.`,
             ...variantOptions
@@ -331,12 +334,14 @@ export async function parallelReview<TReview extends Record<string, unknown>>(
     summary?: string;
 }> {
     const { model = 'claude-sonnet-4-20250514', perspectives, reviewSchema, summarize } = config;
-    const { model: client, variantOptions } = createModelWithVariant(model);
+    const { model: client, variantOptions, config: modelConfig } = createModelWithVariant(model);
+    const modelId = `${modelConfig.provider}/${modelConfig.model}`;
 
     // Parallel review calls
     const reviewPromises = perspectives.map(async (perspective) => {
-        const { object } = await generateObject({
-            model: client as any,
+        const object = await generateStructured({
+            model: client,
+            modelId,
             schema: reviewSchema,
             system: perspective.system,
             prompt: `Review this content:\n\n${content}`,
@@ -360,7 +365,7 @@ export async function parallelReview<TReview extends Record<string, unknown>>(
             .join('\n\n');
 
         const { text } = await generateText({
-            model: client as any,
+            model: client,
             system: 'You are synthesizing multiple expert reviews into a concise summary.',
             prompt: `Synthesize these reviews into actionable insights:\n\n${reviewSummary}`,
             ...variantOptions
@@ -455,7 +460,8 @@ export async function translateWithFeedback(
         qualityThreshold = 8
     } = config ?? {};
 
-    const { model: client, variantOptions } = createModelWithVariant(model);
+    const { model: client, variantOptions, config: modelConfig } = createModelWithVariant(model);
+    const modelId = `${modelConfig.provider}/${modelConfig.model}`;
 
     const EvaluationSchema = z.object({
         qualityScore: z.number().min(1).max(10),
@@ -473,7 +479,7 @@ export async function translateWithFeedback(
 
             generate: async () => {
                 const { text: translation } = await generateText({
-                    model: client as any,
+                    model: client,
                     system: 'You are an expert literary translator.',
                     prompt: `Translate this text to ${targetLanguage}, preserving tone and cultural nuances:\n\n${text}`,
                     ...variantOptions
@@ -482,8 +488,9 @@ export async function translateWithFeedback(
             },
 
             evaluate: async (translation) => {
-                const { object } = await generateObject({
-                    model: client as any,
+                const object = await generateStructured({
+                    model: client,
+                    modelId,
                     schema: EvaluationSchema,
                     system: 'You are an expert in evaluating literary translations.',
                     prompt: `Evaluate this translation:
@@ -513,7 +520,7 @@ Consider:
 
             improve: async (translation, evaluation) => {
                 const { text: improved } = await generateText({
-                    model: client as any,
+                    model: client,
                     system: 'You are an expert literary translator improving a translation.',
                     prompt: `Improve this translation based on feedback:
 
@@ -580,7 +587,8 @@ export async function routeByClassification<
     output: TOutput;
 }> {
     const { model = 'claude-sonnet-4-20250514', routes, classificationPrompt, handlers } = config;
-    const { model: client, variantOptions } = createModelWithVariant(model);
+    const { model: client, variantOptions, config: modelConfig } = createModelWithVariant(model);
+    const modelId = `${modelConfig.provider}/${modelConfig.model}`;
 
     // Create dynamic schema for routes
     const ClassificationSchema = z.object({
@@ -590,8 +598,9 @@ export async function routeByClassification<
     });
 
     // Classify the input
-    const { object: classification } = await generateObject({
-        model: client as any,
+    const classification = await generateStructured({
+        model: client,
+        modelId,
         schema: ClassificationSchema,
         prompt: `${classificationPrompt}\n\nInput: ${JSON.stringify(input)}\n\nAvailable routes: ${routes.join(', ')}`,
         ...variantOptions
@@ -648,11 +657,14 @@ export async function routeByComplexity(
         system
     } = config;
 
-    const { model: classifier, variantOptions: classifierVariantOptions } = createModelWithVariant(classifierModel);
+    const { model: classifier, variantOptions: classifierVariantOptions, config: classifierConfig } =
+        createModelWithVariant(classifierModel);
+    const classifierModelId = `${classifierConfig.provider}/${classifierConfig.model}`;
 
     // Classify complexity
-    const { object: complexity } = await generateObject({
-        model: classifier as any,
+    const complexity = await generateStructured({
+        model: classifier,
+        modelId: classifierModelId,
         schema: z.object({
             score: z.number().min(0).max(1).describe('Complexity score from 0 (simple) to 1 (complex)'),
             reasoning: z.string().describe('Brief explanation of complexity assessment')
@@ -675,7 +687,7 @@ Consider:
 
     // Generate response with selected model
     const { text: response } = await generateText({
-        model: client as any,
+        model: client,
         system,
         prompt,
         ...variantOptions

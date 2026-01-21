@@ -41,7 +41,7 @@ export type ThoughtCategory =
     | "validating"   // Checking results
     | "fixing";      // Correcting errors
 
-// ============= Execution Plan Schema (for generateObject) =============
+// ============= Execution Plan Schema (for generateStructured) =============
 
 export const ExecutionPlanSchema = z.object({
     planType: z.enum(['single_file', 'multi_file', 'analysis_only']),

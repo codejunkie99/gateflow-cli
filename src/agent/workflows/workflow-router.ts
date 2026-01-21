@@ -5,9 +5,9 @@
  * based on the user's request. Integrates with GateFlowAgent.
  */
 
-import { generateObject, generateText } from 'ai';
+import { generateText } from 'ai';
 import { z } from 'zod';
-import { createModelWithVariant } from '../model-provider.js';
+import { createModelWithVariant, generateStructured } from '../model-provider.js';
 import { PromptBuilder } from '../prompts/PromptBuilder.js';
 import {
     executeChain,
@@ -111,7 +111,8 @@ export async function classifyWorkflow(
     context?: { hasLintErrors?: boolean; hasCode?: boolean; fileName?: string },
     model: string = 'claude-sonnet-4-20250514'
 ): Promise<WorkflowSelection> {
-    const { model: client, variantOptions } = createModelWithVariant(model);
+    const { model: client, variantOptions, config } = createModelWithVariant(model);
+    const modelId = `${config.provider}/${config.model}`;
 
     const prompt = new PromptBuilder()
         .addRaw('Classify this SystemVerilog development request to select the best workflow pattern.')
@@ -135,8 +136,9 @@ For testbench, extract test scenarios if mentioned.
 For code_review, extract which aspects to review.`)
         .build();
 
-    const { object } = await generateObject({
-        model: client as any,
+    const object = await generateStructured({
+        model: client,
+        modelId,
         schema: WorkflowClassificationSchema,
         prompt,
         ...variantOptions
@@ -380,8 +382,8 @@ async function executeIterativeImproveWorkflow(
     selection: WorkflowSelection,
     model: string
 ): Promise<WorkflowResult> {
-    const { model: client, variantOptions } = createModelWithVariant(model);
-    const { generateText, generateObject } = await import('ai');
+    const { model: client, variantOptions, config } = createModelWithVariant(model);
+    const modelId = `${config.provider}/${config.model}`;
 
     try {
         const result = await evaluatorOptimizer<string>({
@@ -390,7 +392,7 @@ async function executeIterativeImproveWorkflow(
 
             generate: async () => {
                 const { text } = await generateText({
-                    model: client as any,
+                    model: client,
                     prompt: request,
                     ...variantOptions
                 });
@@ -398,8 +400,9 @@ async function executeIterativeImproveWorkflow(
             },
 
             evaluate: async (output) => {
-                const { object } = await generateObject({
-                    model: client as any,
+                const object = await generateStructured({
+                    model: client,
+                    modelId,
                     schema: z.object({
                         score: z.number().min(1).max(10),
                         issues: z.array(z.string()),
@@ -419,7 +422,7 @@ async function executeIterativeImproveWorkflow(
 
             improve: async (output, evaluation) => {
                 const { text } = await generateText({
-                    model: client as any,
+                    model: client,
                     prompt: `Improve this based on feedback:\n\n${output}\n\nIssues: ${evaluation.issues.join(', ')}\nSuggestions: ${evaluation.suggestions.join(', ')}`,
                     ...variantOptions
                 });
@@ -447,7 +450,6 @@ async function executeParallelAnalysisWorkflow(
     selection: WorkflowSelection,
     model: string
 ): Promise<WorkflowResult> {
-    const { generateText } = await import('ai');
     const { model: client, variantOptions } = createModelWithVariant(model);
 
     const perspectives = ['technical', 'practical', 'alternative'];
@@ -458,7 +460,7 @@ async function executeParallelAnalysisWorkflow(
                 name: perspective,
                 execute: async () => {
                     const { text } = await generateText({
-                        model: client as any,
+                        model: client,
                         system: `Analyze from a ${perspective} perspective.`,
                         prompt: request,
                         ...variantOptions
@@ -492,13 +494,14 @@ async function executeSequentialWorkflow(
     selection: WorkflowSelection,
     model: string
 ): Promise<WorkflowResult> {
-    const { generateText, generateObject } = await import('ai');
-    const { model: client, variantOptions } = createModelWithVariant(model);
+    const { model: client, variantOptions, config } = createModelWithVariant(model);
+    const modelId = `${config.provider}/${config.model}`;
 
     try {
         // First, break down into steps
-        const { object: plan } = await generateObject({
-            model: client as any,
+        const plan = await generateStructured({
+            model: client,
+            modelId,
             schema: z.object({
                 steps: z.array(z.object({
                     name: z.string(),
@@ -514,7 +517,7 @@ async function executeSequentialWorkflow(
             name: step.name,
             execute: async (previousOutput: string) => {
                 const { text } = await generateText({
-                    model: client as any,
+                    model: client,
                     prompt: `${step.description}\n\nPrevious context:\n${previousOutput}`,
                     ...variantOptions
                 });
@@ -543,12 +546,11 @@ async function executeSimpleGeneration(
     request: string,
     model: string
 ): Promise<WorkflowResult> {
-    const { generateText } = await import('ai');
     const { model: client, variantOptions } = createModelWithVariant(model);
 
     try {
         const { text } = await generateText({
-            model: client as any,
+            model: client,
             prompt: request,
             ...variantOptions
         });

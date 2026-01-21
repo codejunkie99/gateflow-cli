@@ -99,9 +99,12 @@ export function classifyAgentErrorWithRetryAfter(error: unknown): AgentErrorClas
     }
 
     // Check if error has status code indicating rate limit
-    const errorObj = error as Record<string, unknown>;
-    if (errorObj.status === 429 || errorObj.statusCode === 429) {
-        return { type: 'rate_limited', retryAfterMs };
+    // Guard against null/undefined errors before property access
+    if (error != null && typeof error === 'object') {
+        const errorObj = error as Record<string, unknown>;
+        if (errorObj.status === 429 || errorObj.statusCode === 429) {
+            return { type: 'rate_limited', retryAfterMs };
+        }
     }
 
     return { type: 'transient', retryAfterMs };
@@ -221,12 +224,17 @@ export class AgentResilienceLayer {
         modelId?: string
     ): Promise<T> {
         const breaker = this.getCircuitBreaker(agentName);
-        const timeoutMs = AGENT_TIMEOUTS[agentName] ?? this.config.agentTimeout;
+        const totalTimeoutMs = AGENT_TIMEOUTS[agentName] ?? this.config.agentTimeout;
 
         // Wait for any existing rate limit on this model before proceeding
+        // Track time spent waiting to subtract from operation timeout budget
+        let waitedMs = 0;
         if (modelId) {
-            await this.waitForRateLimit(modelId, timeoutMs, abortSignal);
+            waitedMs = await this.waitForRateLimit(modelId, totalTimeoutMs, abortSignal);
         }
+
+        // Subtract wait time from total budget, ensuring minimum 10s for operation
+        const operationTimeoutMs = Math.max(10000, totalTimeoutMs - waitedMs);
 
         const retryPolicy = RetryPolicyBuilder.from('api')
             .maxAttempts(this.config.maxRetries)
@@ -240,7 +248,7 @@ export class AgentResilienceLayer {
                 () =>
                     withAbortableTimeout(
                         (signal) => operation(signal),
-                        timeoutMs,
+                        operationTimeoutMs,
                         `agent_${agentName}_${taskId}`,
                         abortSignal
                     ),

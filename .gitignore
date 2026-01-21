@@ -58,6 +58,7 @@ Desktop.ini
 *.temp
 .cache/
 .temp/
+.gateflow/cache/
 
 # Optional npm cache directory
 .npm
