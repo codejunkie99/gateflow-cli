@@ -173,9 +173,8 @@ export class AgentResilienceLayer {
             if (this.rateLimitedUntil.get(modelId) === until) {
                 this.rateLimitedUntil.delete(modelId);
             }
-        } catch {
-            // Aborted or timed out - keep rateLimitedUntil so other agents respect it
-            return waitTime;
+        } catch (err) {
+            throw err;
         }
         return waitTime;
     }
