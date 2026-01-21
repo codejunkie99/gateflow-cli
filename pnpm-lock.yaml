@@ -51,8 +51,8 @@ importers:
         specifier: ^12.1.0
         version: 12.1.0
       diff:
-        specifier: ^5.2.0
-        version: 5.2.0
+        specifier: ^5.2.2
+        version: 5.2.2
       dotenv:
         specifier: ^17.2.3
         version: 17.2.3
@@ -855,8 +855,8 @@ packages:
     resolution: {integrity: sha512-g7nH6P6dyDioJogAAGprGpCtVImJhpPk/roCzdb3fIh61/s/nPsfR6onyMwkCAR/OlC3yBC0lESvUoQEAssIrw==}
     engines: {node: '>= 0.8'}
 
-  diff@5.2.0:
-    resolution: {integrity: sha512-uIFDxqpRZGZ6ThOk84hEfqWoHx2devRFvpTZcTHur85vImfaxUbTW9Ryh4CpCuDnToOP1CEtXKIgytHBPVff5A==}
+  diff@5.2.2:
+    resolution: {integrity: sha512-vtcDfH3TOjP8UekytvnHH1o1P4FcUdt4eQ1Y+Abap1tk/OB2MWQvcwS2ClCd1zuIhc3JKOx6p3kod8Vfys3E+A==}
     engines: {node: '>=0.3.1'}
 
   dotenv@17.2.3:
@@ -2063,7 +2063,7 @@ snapshots:
 
   depd@2.0.0: {}
 
-  diff@5.2.0: {}
+  diff@5.2.2: {}
 
   dotenv@17.2.3: {}
 
