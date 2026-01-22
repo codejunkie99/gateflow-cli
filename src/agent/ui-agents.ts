@@ -16,7 +16,6 @@ import type { EventBus } from '../events/index.js';
 import {
     combinePrepareSteps,
     contextWindowManager,
-    dynamicModelSelector,
     phasedExecution,
     type PrepareStepFn,
     type StepContext
@@ -265,14 +264,9 @@ After completing all steps or encountering issues, signal to transition to revie
     get prepareStep(): PrepareStepFn {
         return combinePrepareSteps(
             contextWindowManager({ maxMessages: 40, keepSystem: true }),
-            // IMPORTANT: Pass LanguageModel objects, NOT strings
-            // Passing strings causes AI SDK to fall back to AI Gateway
-            dynamicModelSelector({
-                defaultModel: this.languageModel,
-                complexModel: this.languageModel, // Could use a larger model
-                complexityThreshold: 5
-            }),
-            // Executor has full tool access, phased by step
+            // Note: dynamicModelSelector omitted - UIAgent doesn't support complexModel config.
+            // To enable model switching, add complexModel to UIAgentConfig.
+            // Dynamic tool selection based on current plan step
             (context: StepContext) => {
                 const plan = this.state.context.plan;
                 const currentStep = this.state.context.completedSteps ?? 0;

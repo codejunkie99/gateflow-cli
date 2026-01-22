@@ -1,12 +1,25 @@
 /**
  * Model Capability Service
  *
- * Manages OpenRouter model capability data with filesystem and memory caching.
+ * Manages OpenRouter model capability data.
+ * Now delegates to model-provider-openrouter.ts as the single source of truth.
+ *
+ * This service provides:
+ * - Filesystem caching for offline operation
+ * - Fuzzy model ID matching (handles date suffixes, provider prefixes)
+ * - Backward compatibility with existing API
  */
 
 import path from 'path';
+import { fileURLToPath } from 'url';
 import { mkdir, readFile, writeFile } from 'fs/promises';
-import { fetchModelCapabilities } from './openrouter-fetcher.js';
+import {
+    fetchOpenRouterModels,
+    getModelCapabilities as getCapabilitiesFromProvider,
+    getAllModelCapabilities,
+    setFilesystemPricingCache,
+    type ModelCapabilities as ProviderCapabilities,
+} from '../model-provider-openrouter.js';
 import {
     type CapabilityCache,
     type ModelCapabilities,
@@ -14,6 +27,10 @@ import {
     CACHE_VERSION,
     DEFAULT_CAPABILITIES,
 } from './types.js';
+
+// Path to bundled default cache (ships with distribution for offline use)
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const BUNDLED_CACHE_PATH = path.join(__dirname, 'default-cache.json');
 
 export class ModelCapabilityService {
     private cachePath: string;
@@ -45,14 +62,13 @@ export class ModelCapabilityService {
             await this.initialize();
         }
 
-        // Generate all possible lookup keys
+        // Generate all possible lookup keys for fuzzy matching
         const keys = this.getLookupKeys(trimmed);
 
-        // Try memory cache first
+        // Try memory cache first (fastest)
         for (const key of keys) {
             const cached = this.memoryCache.get(key);
             if (cached) {
-                // Cache under original key for faster future lookups
                 if (key !== trimmed) {
                     this.memoryCache.set(trimmed, cached);
                 }
@@ -60,24 +76,42 @@ export class ModelCapabilityService {
             }
         }
 
-        // Try file cache
+        // Try centralized provider cache (single source of truth)
+        for (const key of keys) {
+            const caps = getCapabilitiesFromProvider(key);
+            // If we got non-default capabilities, it was found
+            if (caps.tools || caps.structuredOutputs || caps.reasoning) {
+                this.memoryCache.set(trimmed, caps);
+                this.memoryCache.set(key, caps);
+                return caps;
+            }
+        }
+
+        // Try file cache (offline fallback)
         for (const key of keys) {
             const fromFile = this.cache?.models?.[key];
             if (fromFile) {
-                // Cache under all keys for faster future lookups
                 this.memoryCache.set(trimmed, fromFile);
                 this.memoryCache.set(key, fromFile);
                 return fromFile;
             }
         }
 
-        // Model not found in OpenRouter cache - return defaults
-        // Note: Direct providers are handled separately in generateStructured()
+        // Model not found - return defaults
         return DEFAULT_CAPABILITIES;
     }
 
     async refresh(): Promise<void> {
-        const models = await fetchModelCapabilities();
+        // Fetch via centralized provider (which caches for us)
+        await fetchOpenRouterModels();
+
+        // Get all capabilities and build our local cache
+        const allCaps = getAllModelCapabilities();
+        const models: Record<string, ModelCapabilities> = {};
+        for (const [id, caps] of allCaps) {
+            models[id] = caps;
+        }
+
         const cache = this.buildCache(models, 'openrouter');
         await this.writeToFilesystem(cache);
         this.applyCache(cache);
@@ -149,6 +183,19 @@ export class ModelCapabilityService {
         return compatible.length;
     }
 
+    /**
+     * Fetch capabilities via centralized provider and convert to local format.
+     */
+    private async fetchCapabilitiesFromProvider(): Promise<Record<string, ModelCapabilities>> {
+        await fetchOpenRouterModels();
+        const allCaps = getAllModelCapabilities();
+        const models: Record<string, ModelCapabilities> = {};
+        for (const [id, caps] of allCaps) {
+            models[id] = caps;
+        }
+        return models;
+    }
+
     private async initializeInternal(): Promise<void> {
         const fileCache = await this.loadFromFilesystem();
 
@@ -160,7 +207,7 @@ export class ModelCapabilityService {
 
         if (fileCache && this.isStale(fileCache)) {
             try {
-                const models = await fetchModelCapabilities();
+                const models = await this.fetchCapabilitiesFromProvider();
                 const cache = this.buildCache(models, 'openrouter');
                 await this.writeToFilesystem(cache);
                 this.applyCache(cache);
@@ -174,15 +221,23 @@ export class ModelCapabilityService {
         }
 
         try {
-            const models = await fetchModelCapabilities();
+            const models = await this.fetchCapabilitiesFromProvider();
             const cache = this.buildCache(models, 'openrouter');
             await this.writeToFilesystem(cache);
             this.applyCache(cache);
             this.initialized = true;
         } catch {
-            const cache = this.buildCache({}, 'fallback');
-            this.applyCache(cache);
-            this.initialized = true;
+            // Network fetch failed - try bundled default cache (ships with distribution)
+            const bundledCache = await this.loadBundledCache();
+            if (bundledCache) {
+                this.applyCache(bundledCache);
+                this.initialized = true;
+            } else {
+                // No bundled cache either - use empty fallback
+                const cache = this.buildCache({}, 'fallback');
+                this.applyCache(cache);
+                this.initialized = true;
+            }
         }
     }
 
@@ -192,6 +247,8 @@ export class ModelCapabilityService {
         for (const [modelId, caps] of Object.entries(cache.models)) {
             this.memoryCache.set(modelId, caps);
         }
+        // Register filesystem cache with pricing system for offline support
+        setFilesystemPricingCache(cache.models);
     }
 
     /**
@@ -276,6 +333,31 @@ export class ModelCapabilityService {
     private async loadFromFilesystem(): Promise<CapabilityCache | null> {
         try {
             const raw = await readFile(this.cachePath, 'utf8');
+            return this.parseCache(raw);
+        } catch (error) {
+            if (error && typeof error === 'object' && 'code' in error) {
+                const nodeError = error as NodeJS.ErrnoException;
+                if (nodeError.code === 'ENOENT') return null;
+            }
+            return null;
+        }
+    }
+
+    /**
+     * Load bundled default cache that ships with the distribution.
+     * Used as final fallback for air-gapped/offline environments.
+     */
+    private async loadBundledCache(): Promise<CapabilityCache | null> {
+        try {
+            const raw = await readFile(BUNDLED_CACHE_PATH, 'utf8');
+            return this.parseCache(raw);
+        } catch {
+            return null;
+        }
+    }
+
+    private parseCache(raw: string): CapabilityCache | null {
+        try {
             const parsed = JSON.parse(raw) as Partial<CapabilityCache>;
             if (!parsed || typeof parsed !== 'object') return null;
             if (!parsed.models || typeof parsed.models !== 'object' || Array.isArray(parsed.models)) {
@@ -290,11 +372,7 @@ export class ModelCapabilityService {
                 version: typeof parsed.version === 'number' ? parsed.version : 0,
                 models: parsed.models as Record<string, ModelCapabilities>,
             };
-        } catch (error) {
-            if (error && typeof error === 'object' && 'code' in error) {
-                const nodeError = error as NodeJS.ErrnoException;
-                if (nodeError.code === 'ENOENT') return null;
-            }
+        } catch {
             return null;
         }
     }
