@@ -22,6 +22,7 @@ import { getSystemPrompt, type PromptMode } from './prompts.js';
 import type { CreateAgentOptions } from '../types/agent-types.js';
 import { createModeStopCondition, type StopCondition } from './stop-conditions.js';
 import { modelRegistry } from './model-registry.js';
+import { getAllModelCapabilities, type ModelCapabilities as OpenRouterCapabilities } from './model-provider-openrouter.js';
 
 // ============================================================================
 // Types
@@ -82,6 +83,57 @@ export interface AgentBundle {
 }
 
 // ============================================================================
+// Helper Functions
+// ============================================================================
+
+/**
+ * Find a reasoning-capable alternative model from OpenRouter's cache.
+ * Matches by provider prefix (e.g., 'anthropic/') and finds a more expensive
+ * reasoning model from the same provider.
+ *
+ * @param currentModelId - Current model ID (e.g., 'anthropic/claude-3-haiku')
+ * @returns Alternative model ID with reasoning capability, or undefined
+ */
+function findOpenRouterReasoningAlternative(currentModelId: string): string | undefined {
+    const allCaps = getAllModelCapabilities();
+    if (allCaps.size === 0) return undefined;
+
+    // Extract provider prefix (e.g., 'anthropic/' from 'anthropic/claude-3-haiku')
+    const providerPrefix = currentModelId.includes('/')
+        ? currentModelId.split('/')[0] + '/'
+        : undefined;
+
+    if (!providerPrefix) return undefined;
+
+    // Get current model's pricing for comparison
+    const currentCaps = allCaps.get(currentModelId);
+    const currentInputPrice = currentCaps?.pricing?.input ?? 0;
+
+    // Find reasoning-capable models from the same provider that are more expensive
+    const candidates: Array<{ id: string; caps: OpenRouterCapabilities }> = [];
+
+    for (const [id, caps] of allCaps) {
+        if (
+            id.startsWith(providerPrefix) &&
+            id !== currentModelId &&
+            caps.reasoning &&
+            caps.tools &&
+            caps.pricing &&
+            caps.pricing.input > currentInputPrice
+        ) {
+            candidates.push({ id, caps });
+        }
+    }
+
+    if (candidates.length === 0) return undefined;
+
+    // Sort by price (ascending) and pick the cheapest reasoning model that's still more capable
+    candidates.sort((a, b) => (a.caps.pricing?.input ?? 0) - (b.caps.pricing?.input ?? 0));
+
+    return candidates[0].id;
+}
+
+// ============================================================================
 // Factory Functions
 // ============================================================================
 
@@ -122,6 +174,7 @@ export function createAgentBundle(
 
     // Auto-select a more capable model if not explicitly configured
     if (!complexModelConfig) {
+        // First, try static registry
         const alternatives = modelRegistry.findAlternatives(modelConfig.model)
             .filter(m => m.provider === modelConfig.provider);
         // Find a model with reasoning capability that's more expensive (likely more capable)
@@ -134,6 +187,17 @@ export function createAgentBundle(
                 provider: reasoningModel.provider,
                 model: reasoningModel.id,
             };
+        }
+
+        // If static registry didn't find an alternative and using OpenRouter, query its cache
+        if (!complexModelConfig && modelConfig.provider === 'openrouter') {
+            const openRouterAlternative = findOpenRouterReasoningAlternative(modelConfig.model);
+            if (openRouterAlternative) {
+                complexModelConfig = {
+                    provider: 'openrouter',
+                    model: openRouterAlternative,
+                };
+            }
         }
     }
 
