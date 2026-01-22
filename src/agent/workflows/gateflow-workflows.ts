@@ -16,10 +16,7 @@ import {
     type ChainStep
 } from './patterns.js';
 import {
-    IssueCategory,
-    IssueSeverity,
     categorizeIssues,
-    hasIssuesInCategory,
     type CategorizedIssue
 } from '../../types/agent-types.js';
 
