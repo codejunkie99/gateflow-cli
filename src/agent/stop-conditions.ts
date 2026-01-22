@@ -141,7 +141,7 @@ function getAllToolResults(context: any): ToolResult[] {
     return steps.flatMap((step: any) =>
         (step.toolResults ?? []).map((r: any) => ({
             toolName: r.toolName as string,
-            value: r.output ?? r.result
+            value: 'output' in r ? r.output : r.result
         }))
     );
 }
