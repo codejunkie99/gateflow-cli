@@ -51,12 +51,12 @@ export function getTotalTokens(usage: TokenUsage | undefined | null): number {
  * Accumulate token usage across multiple steps.
  */
 export function accumulateUsage(steps: Array<{ usage?: TokenUsage }>): { input: number; output: number; total: number } {
-    const result = steps.reduce(
+    return steps.reduce(
         (acc, step) => ({
             input: acc.input + getInputTokens(step.usage),
-            output: acc.output + getOutputTokens(step.usage)
+            output: acc.output + getOutputTokens(step.usage),
+            total: acc.total + getTotalTokens(step.usage)
         }),
-        { input: 0, output: 0 }
+        { input: 0, output: 0, total: 0 }
     );
-    return { ...result, total: result.input + result.output };
 }

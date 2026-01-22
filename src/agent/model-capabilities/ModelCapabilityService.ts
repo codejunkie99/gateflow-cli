@@ -79,8 +79,8 @@ export class ModelCapabilityService {
         // Try centralized provider cache (single source of truth)
         for (const key of keys) {
             const caps = getCapabilitiesFromProvider(key);
-            // If we got non-default capabilities, it was found
-            if (caps.tools || caps.structuredOutputs || caps.reasoning) {
+            // Only cache and return when model was actually found (non-null)
+            if (caps !== null) {
                 this.memoryCache.set(trimmed, caps);
                 this.memoryCache.set(key, caps);
                 return caps;
@@ -189,6 +189,9 @@ export class ModelCapabilityService {
     private async fetchCapabilitiesFromProvider(): Promise<Record<string, ModelCapabilities>> {
         await fetchOpenRouterModels();
         const allCaps = getAllModelCapabilities();
+        if (allCaps.size === 0) {
+            throw new Error('No models fetched from provider');
+        }
         const models: Record<string, ModelCapabilities> = {};
         for (const [id, caps] of allCaps) {
             models[id] = caps;
