@@ -11,6 +11,7 @@
 
 import { streamText, type StepResult } from 'ai';
 import { createModeStopCondition, type StopCondition } from '../stop-conditions.js';
+import type { PromptMode } from '../prompts.js';
 import { createModelWithVariant, type ModelWithVariant } from '../model-provider.js';
 import type { EventBus } from '../../events/index.js';
 import type {
@@ -1110,6 +1111,6 @@ export class Orchestrator {
         };
 
         const mode = agentName ? agentNameToMode[agentName] ?? 'general' : 'general';
-        return createModeStopCondition(mode, stepLimit);
+        return createModeStopCondition({ mode: mode as PromptMode, stepLimit });
     }
 }
