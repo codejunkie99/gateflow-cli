@@ -354,9 +354,18 @@ async function executeCodeReviewWorkflow(
             aspects
         });
 
+        // Build detailed review summary with severity-based grouping
         const reviewSummary = Array.from(result.reviews.entries())
-            .map(([aspect, r]) => `**${aspect}** (${r.severity}): ${r.issues.length} issues`)
-            .join('\n');
+            .map(([aspect, r]) => {
+                const header = `**${aspect}** (${r.severity}): ${r.issues.length} issue${r.issues.length !== 1 ? 's' : ''}`;
+                // Show actual issues for better context (limit to first 5 per aspect)
+                const issueList = r.issues.length > 0
+                    ? '\n' + r.issues.slice(0, 5).map(issue => `  - ${issue}`).join('\n') +
+                      (r.issues.length > 5 ? `\n  - ... and ${r.issues.length - 5} more` : '')
+                    : '';
+                return header + issueList;
+            })
+            .join('\n\n');
 
         return {
             workflow: 'code_review',

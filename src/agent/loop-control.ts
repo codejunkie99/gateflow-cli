@@ -333,7 +333,8 @@ export interface BudgetController {
  * it impossible to forget one without the other.
  *
  * @example
- * import { createBudgetController, stopWhenAny, maxSteps } from './loop-control.js';
+ * import { createBudgetController } from './loop-control.js';
+ * import { maxSteps, stopWhenAny } from './stop-conditions.js';
  *
  * const budget = createBudgetController({
  *   maxInputTokens: 50000,

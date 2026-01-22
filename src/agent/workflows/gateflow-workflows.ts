@@ -15,6 +15,10 @@ import {
     type EvaluationResult,
     type ChainStep
 } from './patterns.js';
+import {
+    categorizeIssues,
+    type CategorizedIssue
+} from '../../types/agent-types.js';
 
 // ============================================================================
 // Types
@@ -48,6 +52,8 @@ export interface ModuleGenerationResult {
         synthesizable: boolean;
         wellDocumented: boolean;
         followsConventions: boolean;
+        /** Categorized issues for detailed analysis */
+        issues: CategorizedIssue[];
     };
     /** Iterations to reach quality */
     iterations: number;
@@ -235,6 +241,13 @@ export async function moduleGenerationWorkflow(
         suggestions: z.array(z.string())
     });
 
+    // Extended evaluation result that preserves quality flags
+    interface ExtendedEvaluationResult extends EvaluationResult {
+        synthesizable: boolean;
+        wellDocumented: boolean;
+        followsConventions: boolean;
+    }
+
     // Build port specification
     const portSpec = spec.ports
         ? spec.ports.map(p => {
@@ -314,8 +327,12 @@ Consider:
                         object.wellDocumented &&
                         object.followsConventions,
                     issues: object.issues,
-                    suggestions: object.suggestions
-                };
+                    suggestions: object.suggestions,
+                    // Preserve quality flags for final result
+                    synthesizable: object.synthesizable,
+                    wellDocumented: object.wellDocumented,
+                    followsConventions: object.followsConventions
+                } as ExtendedEvaluationResult;
             },
 
             improve: async (code, evaluation) => {
@@ -356,15 +373,24 @@ Return ONLY the improved code.`)
     // Extract port information from generated code
     const ports = extractPorts(result.output);
 
+    // Cast to extended type to access preserved quality flags
+    const extendedEval = result.finalEvaluation as ExtendedEvaluationResult;
+
+    // Convert string issues to categorized issues for better filtering
+    const categorizedIssues = categorizeIssues(result.finalEvaluation.issues);
+
     return {
         moduleCode: result.output,
         moduleName: spec.moduleName,
         ports,
         quality: {
             score: result.finalEvaluation.qualityScore,
-            synthesizable: result.finalEvaluation.issues.every(i => !i.toLowerCase().includes('synthesiz')),
-            wellDocumented: result.finalEvaluation.issues.every(i => !i.toLowerCase().includes('document')),
-            followsConventions: result.finalEvaluation.issues.every(i => !i.toLowerCase().includes('convention'))
+            // Use preserved boolean flags from evaluation (not fragile keyword matching)
+            synthesizable: extendedEval.synthesizable,
+            wellDocumented: extendedEval.wellDocumented,
+            followsConventions: extendedEval.followsConventions,
+            // Include categorized issues for detailed analysis
+            issues: categorizedIssues
         },
         iterations: result.iterations
     };

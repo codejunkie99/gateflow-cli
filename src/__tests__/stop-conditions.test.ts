@@ -76,34 +76,55 @@ describe('Stop Conditions', () => {
     });
 
     describe('tokenBudgetExhausted', () => {
-        it('should return true when tokens exceed budget', () => {
+        it('should return true when accumulated tokens exceed budget', () => {
             const condition = tokenBudgetExhausted(1000);
             const context = createContext({
-                usage: { totalTokens: 1500 }
+                steps: [
+                    { usage: { totalTokens: 600 } },
+                    { usage: { totalTokens: 500 } }
+                ]
             });
-            expect(condition(context)).toBe(true);
+            expect(condition(context)).toBe(true); // 1100 >= 1000
         });
 
-        it('should return false when tokens are within budget', () => {
+        it('should return false when accumulated tokens are within budget', () => {
             const condition = tokenBudgetExhausted(1000);
             const context = createContext({
-                usage: { totalTokens: 500 }
+                steps: [
+                    { usage: { totalTokens: 300 } },
+                    { usage: { totalTokens: 200 } }
+                ]
             });
-            expect(condition(context)).toBe(false);
+            expect(condition(context)).toBe(false); // 500 < 1000
         });
 
-        it('should return true when tokens equal budget', () => {
+        it('should return true when accumulated tokens equal budget', () => {
             const condition = tokenBudgetExhausted(1000);
             const context = createContext({
-                usage: { totalTokens: 1000 }
+                steps: [
+                    { usage: { totalTokens: 500 } },
+                    { usage: { totalTokens: 500 } }
+                ]
             });
-            expect(condition(context)).toBe(true);
+            expect(condition(context)).toBe(true); // 1000 >= 1000
         });
 
-        it('should handle missing usage', () => {
+        it('should handle empty steps array', () => {
             const condition = tokenBudgetExhausted(1000);
-            const context = createContext({ usage: undefined });
-            expect(condition(context)).toBe(false);
+            const context = createContext({ steps: [] });
+            expect(condition(context)).toBe(false); // 0 < 1000
+        });
+
+        it('should handle steps with missing usage', () => {
+            const condition = tokenBudgetExhausted(1000);
+            const context = createContext({
+                steps: [
+                    { usage: { totalTokens: 600 } },
+                    { usage: undefined },
+                    { usage: { totalTokens: 300 } }
+                ]
+            });
+            expect(condition(context)).toBe(false); // 900 < 1000
         });
     });
 
@@ -468,11 +489,14 @@ describe('Stop Conditions', () => {
             });
             expect(complexCondition(lintPassContext)).toBe(true);
 
-            // Should stop when both token budget and step limit hit
+            // Should stop when token budget exceeded (via accumulated steps)
             const budgetContext = createContext({
-                usage: { totalTokens: 1500 }
+                steps: [
+                    { usage: { totalTokens: 800 } },
+                    { usage: { totalTokens: 700 } }
+                ]
             });
-            expect(complexCondition(budgetContext)).toBe(true);
+            expect(complexCondition(budgetContext)).toBe(true); // 1500 >= 1000
 
             // Should not stop when only token budget hit (not AND condition)
             const onlyBudgetCondition = stopWhenAll(
