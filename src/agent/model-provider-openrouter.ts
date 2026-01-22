@@ -567,7 +567,7 @@ export async function getCostPerMillionAsync(modelId: string): Promise<{ input: 
     // Ensure cache is populated
     if (!cachedModels) {
         try {
-            await fetchOpenRouterModels();
+            cachedModels = await fetchOpenRouterModels();
         } catch {
             // Fetch failed, will fall back to hardcoded pricing
         }
