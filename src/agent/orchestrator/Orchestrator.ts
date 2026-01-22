@@ -1101,16 +1101,16 @@ export class Orchestrator {
      * @returns Stop condition function
      */
     private getWorkerStopCondition(agentName: string | undefined, stepLimit: number): StopCondition {
-        // Map agent names to prompt modes for stop condition selection
-        const agentNameToMode: Record<string, string> = {
+        // Map agent names to valid PromptModes for stop condition selection
+        const agentNameToMode: Record<string, PromptMode> = {
             understanding: 'general',
             codegen: 'generate',
             testbench: 'testbench',
             debug: 'debug',
-            refactoring: 'refactoring'
+            refactoring: 'edit' // Refactoring uses edit mode (code modification)
         };
 
-        const mode = agentName ? agentNameToMode[agentName] ?? 'general' : 'general';
-        return createModeStopCondition({ mode: mode as PromptMode, stepLimit });
+        const mode: PromptMode = agentName ? agentNameToMode[agentName] ?? 'general' : 'general';
+        return createModeStopCondition({ mode, stepLimit });
     }
 }
