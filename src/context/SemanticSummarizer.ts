@@ -114,6 +114,18 @@ export interface SemanticSummarizerConfig {
     maxPreserveMessages: number;
 }
 
+/**
+ * Options for abstractive summarization
+ */
+export interface AbstractiveSummarizeOptions {
+    /** Maximum number of issues to include (0 = unlimited) */
+    maxIssues?: number;
+    /** Maximum number of topics to include (0 = unlimited) */
+    maxTopics?: number;
+    /** Maximum number of actions to include (0 = unlimited) */
+    maxActions?: number;
+}
+
 // ============================================================================
 // Default Configuration
 // ============================================================================
@@ -520,8 +532,13 @@ export class SemanticSummarizer {
     /**
      * Simple abstractive summary (uses patterns, no LLM call)
      * Could be enhanced with actual LLM call for better quality
+     *
+     * @param messages - Messages to summarize
+     * @param options - Optional limits for issues, topics, and actions (0 = unlimited)
      */
-    abstractiveSummarize(messages: Message[]): string {
+    abstractiveSummarize(messages: Message[], options: AbstractiveSummarizeOptions = {}): string {
+        const { maxIssues = 0, maxTopics = 0, maxActions = 0 } = options;
+
         const topics: string[] = [];
         const actions: string[] = [];
         const issues: string[] = [];
@@ -561,12 +578,20 @@ export class SemanticSummarizer {
         const uniqueActions = [...new Set(actions)];
         const uniqueIssues = [...new Set(issues)];
 
-        let summary = `Discussed: ${uniqueTopics.join(', ') || 'general topics'}. `;
-        if (uniqueActions.length) {
-            summary += `Actions: ${uniqueActions.join(', ')}. `;
+        // Apply limits only if specified (> 0)
+        const limitedTopics = maxTopics > 0 ? uniqueTopics.slice(0, maxTopics) : uniqueTopics;
+        const limitedActions = maxActions > 0 ? uniqueActions.slice(0, maxActions) : uniqueActions;
+        const limitedIssues = maxIssues > 0 ? uniqueIssues.slice(0, maxIssues) : uniqueIssues;
+
+        let summary = `Discussed: ${limitedTopics.join(', ') || 'general topics'}. `;
+        if (limitedActions.length) {
+            summary += `Actions: ${limitedActions.join(', ')}. `;
         }
-        if (uniqueIssues.length) {
-            summary += `Unresolved: ${uniqueIssues.slice(0, 3).join('; ')}.`;
+        if (limitedIssues.length) {
+            const issuesSuffix = maxIssues > 0 && uniqueIssues.length > maxIssues
+                ? ` (+${uniqueIssues.length - maxIssues} more)`
+                : '';
+            summary += `Unresolved: ${limitedIssues.join('; ')}${issuesSuffix}.`;
         }
 
         return summary;

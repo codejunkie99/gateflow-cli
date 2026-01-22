@@ -19,6 +19,9 @@ import type { ModelConfig, ProviderInfo } from './model-provider.js';
 /**
  * OpenRouter model from API response.
  * Based on actual API response structure from https://openrouter.ai/api/v1/models
+ *
+ * NOTE: Pricing is normalized to per-1M tokens on ingest for consistency
+ * with filesystem cache format. Original API returns per-token pricing.
  */
 export interface OpenRouterModel {
     id: string;
@@ -27,11 +30,11 @@ export interface OpenRouterModel {
     /** May be undefined for some models */
     max_completion_tokens?: number;
     pricing: {
-        /** Price per token (NOT per 1k) as string, e.g., "0.00000175" */
+        /** Price per 1M tokens (normalized on ingest from per-token API format) */
         prompt: string;
-        /** Price per token (NOT per 1k) as string, e.g., "0.000007" */
+        /** Price per 1M tokens (normalized on ingest from per-token API format) */
         completion: string;
-        /** Optional image pricing */
+        /** Optional image pricing (per 1M) */
         image?: string;
         /** Optional request pricing */
         request?: string;
@@ -124,9 +127,17 @@ export async function fetchOpenRouterModels(): Promise<Map<string, OpenRouterMod
             throw new Error(`Unexpected response structure: ${JSON.stringify(Object.keys(jsonResponse))}`);
         }
         
-        // Convert to map for fast lookup
+        // Convert to map for fast lookup, normalizing pricing to per-1M tokens
         cachedModels = new Map(
-            modelsArray.map(model => [model.id, model])
+            modelsArray.map(model => [model.id, {
+                ...model,
+                pricing: model.pricing ? {
+                    ...model.pricing,
+                    // Normalize per-token to per-1M for consistency with filesystem cache
+                    prompt: String(parseFloat(model.pricing.prompt) * 1_000_000),
+                    completion: String(parseFloat(model.pricing.completion) * 1_000_000),
+                } : model.pricing
+            }])
         );
         
         lastFetchTime = Date.now();
@@ -156,7 +167,7 @@ const STANDARD_TOOL_PARAMS = ['tools', 'tool_choice', 'temperature', 'top_p', 's
 
 /**
  * Fallback models if API fetch fails or no key.
- * Pricing is per-token (matching real API format).
+ * Pricing is per-1M tokens (matching normalized cache format).
  */
 function getFallbackModels(): Map<string, OpenRouterModel> {
     return new Map([
@@ -166,8 +177,8 @@ function getFallbackModels(): Map<string, OpenRouterModel> {
             name: 'Claude Opus 4.5 (Reasoning)',
             context_length: 200000,
             max_completion_tokens: 8192,
-            // Pricing per token: $15/1M input, $75/1M output
-            pricing: { prompt: '0.000015', completion: '0.000075' },
+            // $15/1M input, $75/1M output
+            pricing: { prompt: '15', completion: '75' },
             supported_parameters: [...STANDARD_TOOL_PARAMS, 'structured_outputs']
         }],
         ['anthropic/claude-sonnet-4-20250514', {
@@ -175,8 +186,8 @@ function getFallbackModels(): Map<string, OpenRouterModel> {
             name: 'Claude Sonnet 4',
             context_length: 200000,
             max_completion_tokens: 8192,
-            // Pricing per token: $3/1M input, $15/1M output
-            pricing: { prompt: '0.000003', completion: '0.000015' },
+            // $3/1M input, $15/1M output
+            pricing: { prompt: '3', completion: '15' },
             supported_parameters: [...STANDARD_TOOL_PARAMS, 'structured_outputs']
         }],
         ['anthropic/claude-haiku-3-5-20241022', {
@@ -184,8 +195,8 @@ function getFallbackModels(): Map<string, OpenRouterModel> {
             name: 'Claude Haiku 3.5 (Fast/Cheap)',
             context_length: 200000,
             max_completion_tokens: 8192,
-            // Pricing per token: $0.25/1M input, $1.25/1M output
-            pricing: { prompt: '0.00000025', completion: '0.00000125' },
+            // $0.25/1M input, $1.25/1M output
+            pricing: { prompt: '0.25', completion: '1.25' },
             supported_parameters: [...STANDARD_TOOL_PARAMS, 'structured_outputs']
         }],
 
@@ -195,8 +206,8 @@ function getFallbackModels(): Map<string, OpenRouterModel> {
             name: 'GPT-4o',
             context_length: 128000,
             max_completion_tokens: 4096,
-            // Pricing per token: $2.5/1M input, $10/1M output
-            pricing: { prompt: '0.0000025', completion: '0.00001' },
+            // $2.5/1M input, $10/1M output
+            pricing: { prompt: '2.5', completion: '10' },
             supported_parameters: [...STANDARD_TOOL_PARAMS, 'structured_outputs', 'response_format']
         }],
         ['openai/gpt-4o-mini', {
@@ -204,8 +215,8 @@ function getFallbackModels(): Map<string, OpenRouterModel> {
             name: 'GPT-4o Mini',
             context_length: 128000,
             max_completion_tokens: 16384,
-            // Pricing per token: $0.15/1M input, $0.6/1M output
-            pricing: { prompt: '0.00000015', completion: '0.0000006' },
+            // $0.15/1M input, $0.6/1M output
+            pricing: { prompt: '0.15', completion: '0.6' },
             supported_parameters: [...STANDARD_TOOL_PARAMS, 'structured_outputs', 'response_format']
         }],
         ['openai/o1-preview', {
@@ -213,8 +224,8 @@ function getFallbackModels(): Map<string, OpenRouterModel> {
             name: 'o1 Preview (Reasoning)',
             context_length: 128000,
             max_completion_tokens: 32768,
-            // Pricing per token: $15/1M input, $60/1M output
-            pricing: { prompt: '0.000015', completion: '0.00006' },
+            // $15/1M input, $60/1M output
+            pricing: { prompt: '15', completion: '60' },
             // o1 models have limited parameter support
             supported_parameters: ['temperature', 'max_tokens', 'stream']
         }],
@@ -223,8 +234,8 @@ function getFallbackModels(): Map<string, OpenRouterModel> {
             name: 'o3-mini (Reasoning)',
             context_length: 200000,
             max_completion_tokens: 100000,
-            // Pricing per token: $1.1/1M input, $4.4/1M output
-            pricing: { prompt: '0.0000011', completion: '0.0000044' },
+            // $1.1/1M input, $4.4/1M output
+            pricing: { prompt: '1.1', completion: '4.4' },
             supported_parameters: ['temperature', 'max_tokens', 'stream', 'reasoning_effort']
         }],
 
@@ -234,8 +245,8 @@ function getFallbackModels(): Map<string, OpenRouterModel> {
             name: 'Gemini 2.5 Pro',
             context_length: 1000000,
             max_completion_tokens: 8192,
-            // Pricing per token: $1.25/1M input, $5/1M output (>128k context)
-            pricing: { prompt: '0.00000125', completion: '0.000005' },
+            // $1.25/1M input, $5/1M output (>128k context)
+            pricing: { prompt: '1.25', completion: '5' },
             supported_parameters: [...STANDARD_TOOL_PARAMS, 'structured_outputs']
         }],
         ['google/gemini-2.5-flash', {
@@ -243,8 +254,8 @@ function getFallbackModels(): Map<string, OpenRouterModel> {
             name: 'Gemini 2.5 Flash',
             context_length: 1000000,
             max_completion_tokens: 8192,
-            // Pricing per token: $0.075/1M input, $0.3/1M output
-            pricing: { prompt: '0.000000075', completion: '0.0000003' },
+            // $0.075/1M input, $0.3/1M output
+            pricing: { prompt: '0.075', completion: '0.3' },
             supported_parameters: [...STANDARD_TOOL_PARAMS, 'structured_outputs']
         }],
 
@@ -254,8 +265,8 @@ function getFallbackModels(): Map<string, OpenRouterModel> {
             name: 'Grok 2',
             context_length: 131072,
             max_completion_tokens: 8192,
-            // Pricing per token: $2/1M input, $10/1M output
-            pricing: { prompt: '0.000002', completion: '0.00001' },
+            // $2/1M input, $10/1M output
+            pricing: { prompt: '2', completion: '10' },
             supported_parameters: [...STANDARD_TOOL_PARAMS]
         }],
 
@@ -265,8 +276,8 @@ function getFallbackModels(): Map<string, OpenRouterModel> {
             name: 'DeepSeek Chat V3',
             context_length: 64000,
             max_completion_tokens: 8192,
-            // Pricing per token: $0.14/1M input, $0.28/1M output
-            pricing: { prompt: '0.00000014', completion: '0.00000028' },
+            // $0.14/1M input, $0.28/1M output
+            pricing: { prompt: '0.14', completion: '0.28' },
             supported_parameters: [...STANDARD_TOOL_PARAMS]
         }],
         ['deepseek/deepseek-reasoner', {
@@ -274,8 +285,8 @@ function getFallbackModels(): Map<string, OpenRouterModel> {
             name: 'DeepSeek R1 (Reasoning)',
             context_length: 64000,
             max_completion_tokens: 8192,
-            // Pricing per token: $0.55/1M input, $2.19/1M output
-            pricing: { prompt: '0.00000055', completion: '0.00000219' },
+            // $0.55/1M input, $2.19/1M output
+            pricing: { prompt: '0.55', completion: '2.19' },
             supported_parameters: ['temperature', 'max_tokens', 'stream']
         }],
     ]);
@@ -473,8 +484,8 @@ export function calculateCost(
     const model = cachedModels?.get(modelId);
     if (!model?.pricing) return null;
 
-    const inputCost = parseFloat(model.pricing.prompt) * inputTokens;
-    const outputCost = parseFloat(model.pricing.completion) * outputTokens;
+    const inputCost = (parseFloat(model.pricing.prompt) * inputTokens) / 1_000_000;
+    const outputCost = (parseFloat(model.pricing.completion) * outputTokens) / 1_000_000;
 
     return inputCost + outputCost;
 }
@@ -502,11 +513,12 @@ export function setFilesystemPricingCache(cache: Record<string, { pricing?: { in
  */
 export function getCostPerMillion(modelId: string): { input: number; output: number } | null {
     // 1. Try OpenRouter memory cache first (most accurate, dynamically fetched)
+    // NOTE: Pricing is already normalized to per-1M tokens on ingest
     const model = cachedModels?.get(modelId);
     if (model?.pricing) {
         return {
-            input: parseFloat(model.pricing.prompt) * 1_000_000,
-            output: parseFloat(model.pricing.completion) * 1_000_000
+            input: parseFloat(model.pricing.prompt),
+            output: parseFloat(model.pricing.completion)
         };
     }
 
@@ -516,8 +528,8 @@ export function getCostPerMillion(modelId: string): { input: number; output: num
         for (const [id, m] of cachedModels?.entries() ?? []) {
             if (id.endsWith('/' + modelId) && m.pricing) {
                 return {
-                    input: parseFloat(m.pricing.prompt) * 1_000_000,
-                    output: parseFloat(m.pricing.completion) * 1_000_000
+                    input: parseFloat(m.pricing.prompt),
+                    output: parseFloat(m.pricing.completion)
                 };
             }
         }
@@ -679,8 +691,8 @@ export function getModelCapabilities(modelId: string): ModelCapabilities | null 
     // Include pricing if available (for offline caching)
     if (model.pricing) {
         caps.pricing = {
-            input: parseFloat(model.pricing.prompt) * 1_000_000,
-            output: parseFloat(model.pricing.completion) * 1_000_000
+            input: parseFloat(model.pricing.prompt),
+            output: parseFloat(model.pricing.completion)
         };
     }
 
