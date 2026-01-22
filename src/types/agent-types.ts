@@ -46,7 +46,7 @@ export const AgentCallOptionsSchema = z.object({
     /** Session ID for memory/context management */
     sessionId: z.string(),
     /** Execution mode (affects system prompt and tool selection) */
-    mode: z.enum(['general', 'lint_fix', 'testbench', 'debug', 'edit', 'generate', 'refactoring']),
+    mode: z.enum(['general', 'lint_fix', 'testbench', 'debug', 'edit', 'generate']),
     /** Auto-approve all tool calls */
     autoApprove: z.boolean().default(false),
     /** User ID for personalization */
@@ -216,6 +216,144 @@ export interface GateFlowUIMessageBase {
             args: unknown;
         }>;
     };
+}
+
+// ============================================================================
+// Issue Category Types (for robust quality checks)
+// ============================================================================
+
+/**
+ * Categories for code quality issues.
+ * Used for structured filtering instead of fragile keyword matching.
+ */
+export enum IssueCategory {
+    /** Synthesizability problems (unsynthesizable constructs, timing issues) */
+    SYNTHESIZABILITY = 'synthesizability',
+    /** Documentation problems (missing comments, unclear descriptions) */
+    DOCUMENTATION = 'documentation',
+    /** Convention violations (naming, style, structure) */
+    CONVENTION = 'convention',
+    /** Security vulnerabilities */
+    SECURITY = 'security',
+    /** Performance concerns */
+    PERFORMANCE = 'performance',
+    /** Maintainability problems */
+    MAINTAINABILITY = 'maintainability',
+    /** Correctness/logic errors */
+    CORRECTNESS = 'correctness',
+    /** General/uncategorized issues */
+    GENERAL = 'general'
+}
+
+/**
+ * Severity levels for issues
+ */
+export enum IssueSeverity {
+    ERROR = 'error',
+    WARNING = 'warning',
+    INFO = 'info',
+    HINT = 'hint'
+}
+
+/**
+ * A structured issue with category, severity, and description
+ */
+export interface CategorizedIssue {
+    /** Issue category for filtering */
+    category: IssueCategory;
+    /** Severity level */
+    severity: IssueSeverity;
+    /** Human-readable description */
+    message: string;
+    /** Optional file location */
+    location?: {
+        file?: string;
+        line?: number;
+        column?: number;
+    };
+    /** Optional suggestion for fixing */
+    suggestion?: string;
+}
+
+/**
+ * Quality assessment result with categorized issues
+ */
+export interface QualityAssessment {
+    /** Overall quality score (0-10) */
+    score: number;
+    /** All issues found */
+    issues: CategorizedIssue[];
+    /** Whether quality threshold is met */
+    meetsThreshold: boolean;
+}
+
+/**
+ * Helper to check if any issues exist in a category
+ */
+export function hasIssuesInCategory(issues: CategorizedIssue[], category: IssueCategory): boolean {
+    return issues.some(issue => issue.category === category);
+}
+
+/**
+ * Helper to filter issues by category
+ */
+export function getIssuesByCategory(issues: CategorizedIssue[], category: IssueCategory): CategorizedIssue[] {
+    return issues.filter(issue => issue.category === category);
+}
+
+/**
+ * Helper to filter issues by severity
+ */
+export function getIssuesBySeverity(issues: CategorizedIssue[], severity: IssueSeverity): CategorizedIssue[] {
+    return issues.filter(issue => issue.severity === severity);
+}
+
+/**
+ * Helper to categorize a string issue based on keywords (migration helper)
+ */
+export function categorizeIssue(message: string, defaultCategory = IssueCategory.GENERAL): CategorizedIssue {
+    const lowerMessage = message.toLowerCase();
+
+    // Determine category from keywords
+    let category = defaultCategory;
+    if (/synthesiz|timing|clock|latch|combinator/i.test(lowerMessage)) {
+        category = IssueCategory.SYNTHESIZABILITY;
+    } else if (/document|comment|describe|explain/i.test(lowerMessage)) {
+        category = IssueCategory.DOCUMENTATION;
+    } else if (/convention|naming|style|format|indent/i.test(lowerMessage)) {
+        category = IssueCategory.CONVENTION;
+    } else if (/security|vulnerab|inject|overflow/i.test(lowerMessage)) {
+        category = IssueCategory.SECURITY;
+    } else if (/performance|slow|optimi|efficien/i.test(lowerMessage)) {
+        category = IssueCategory.PERFORMANCE;
+    } else if (/maintain|complex|readab|refactor/i.test(lowerMessage)) {
+        category = IssueCategory.MAINTAINABILITY;
+    } else if (/error|bug|incorrect|wrong|fail/i.test(lowerMessage)) {
+        category = IssueCategory.CORRECTNESS;
+    }
+
+    // Determine severity from keywords
+    let severity = IssueSeverity.WARNING;
+    if (/error|critical|fail|must/i.test(lowerMessage)) {
+        severity = IssueSeverity.ERROR;
+    } else if (/info|note|fyi/i.test(lowerMessage)) {
+        severity = IssueSeverity.INFO;
+    } else if (/hint|consider|might|could/i.test(lowerMessage)) {
+        severity = IssueSeverity.HINT;
+    }
+
+    return {
+        category,
+        severity,
+        message
+    };
+}
+
+/**
+ * Convert string array to categorized issues (migration helper)
+ */
+export function categorizeIssues(messages: string[]): CategorizedIssue[] {
+    return messages.map(msg => categorizeIssue(msg));
 }
 
 // ============================================================================

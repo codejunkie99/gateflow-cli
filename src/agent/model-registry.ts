@@ -589,6 +589,15 @@ export class ModelRegistry {
     }
 
     /**
+     * Extract date suffix from model ID (e.g., '20250514' from 'claude-sonnet-4-20250514').
+     * Returns '0' if no date suffix found (sorts earliest).
+     */
+    private extractDateSuffix(id: string): string {
+        const match = id.match(/-(\d{8})$/);
+        return match ? match[1] : '0';
+    }
+
+    /**
      * Get model metadata by ID with fuzzy matching.
      * Tries in order:
      * 1. Exact match
@@ -608,12 +617,21 @@ export class ModelRegistry {
             }
         }
 
-        // 3. Prefix match (query is prefix of registered ID)
+        // 3. Prefix match - prefer latest dated version
         // e.g., 'claude-sonnet-4' matches 'claude-sonnet-4-20250514'
+        const prefixMatches: Array<[string, ModelMetadata]> = [];
         for (const [registeredId, model] of this.modelCache) {
             if (registeredId.startsWith(id + '-')) {
-                return model;
+                prefixMatches.push([registeredId, model]);
             }
+        }
+
+        if (prefixMatches.length > 0) {
+            // Sort by date suffix descending (latest first)
+            prefixMatches.sort((a, b) =>
+                this.extractDateSuffix(b[0]).localeCompare(this.extractDateSuffix(a[0]))
+            );
+            return prefixMatches[0][1];
         }
 
         return undefined;
