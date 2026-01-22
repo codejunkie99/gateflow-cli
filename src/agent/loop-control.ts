@@ -12,6 +12,7 @@
 
 import { stepCountIs, type LanguageModel, type ModelMessage } from 'ai';
 import { accumulateUsage } from './token-helpers.js';
+import { type StopCondition } from './stop-conditions.js';
 
 // ============================================================================
 // Types
@@ -221,26 +222,52 @@ export function phasedExecution(phases: Phase[]): PrepareStepFn {
 }
 
 /**
- * Create a prepareStep that tracks and enforces a token budget.
- *
- * Note: 'stop' mode returns empty settings and relies on a separate stopWhen
- * condition (e.g., tokenBudgetExceeded) to actually terminate the loop.
- * Use 'trim' or 'summarize' for self-contained budget handling.
- *
- * @example
- * const agent = new ToolLoopAgent({
- *   prepareStep: budgetAwareExecution({
- *     maxInputTokens: 50000,
- *     maxOutputTokens: 10000,
- *     onBudgetExceeded: 'summarize'
- *   })
- * });
+ * Budget configuration for prepareStep handlers.
  */
-export function budgetAwareExecution(config: {
+export interface BudgetConfig {
     maxInputTokens: number;
     maxOutputTokens: number;
     onBudgetExceeded: 'stop' | 'summarize' | 'trim';
-}): PrepareStepFn {
+}
+
+/**
+ * Create a prepareStep that tracks and enforces a token budget.
+ *
+ * **WARNING**: 'stop' mode is a no-op by design - it returns empty settings
+ * and relies on a separate stopWhen condition to actually terminate the loop.
+ * Use 'trim' or 'summarize' for self-contained budget handling.
+ *
+ * For 'stop' mode, prefer `createBudgetController()` which returns both the
+ * prepareStep function and the matching stopWhen condition.
+ *
+ * @example
+ * // WRONG: 'stop' mode won't actually stop anything
+ * prepareStep: budgetAwareExecution({
+ *   maxInputTokens: 50000,
+ *   maxOutputTokens: 10000,
+ *   onBudgetExceeded: 'stop'  // ⚠️ No-op without matching stopWhen!
+ * })
+ *
+ * @example
+ * // CORRECT: Use createBudgetController() for 'stop' mode
+ * const budget = createBudgetController({
+ *   maxInputTokens: 50000,
+ *   maxOutputTokens: 10000
+ * });
+ * const agent = new ToolLoopAgent({
+ *   prepareStep: budget.prepareStep,
+ *   stopWhen: stopWhenAny(maxSteps(25), budget.stopWhen)
+ * });
+ *
+ * @example
+ * // Also correct: 'trim' mode is self-contained
+ * prepareStep: budgetAwareExecution({
+ *   maxInputTokens: 50000,
+ *   maxOutputTokens: 10000,
+ *   onBudgetExceeded: 'trim'  // ✓ Works without extra stopWhen
+ * })
+ */
+export function budgetAwareExecution(config: BudgetConfig): PrepareStepFn {
     const { maxInputTokens, maxOutputTokens, onBudgetExceeded } = config;
 
     return ({ steps, messages }) => {
@@ -275,6 +302,63 @@ export function budgetAwareExecution(config: {
                 return {};
         }
     };
+}
+
+/**
+ * Budget controller configuration.
+ */
+export interface BudgetControllerConfig {
+    /** Maximum input tokens before stopping */
+    maxInputTokens: number;
+    /** Maximum output tokens before stopping */
+    maxOutputTokens: number;
+}
+
+/**
+ * Budget controller return type - bundles prepareStep and stopWhen together.
+ */
+export interface BudgetController {
+    /** PrepareStep function (currently a no-op, reserved for future budget-aware features) */
+    prepareStep: PrepareStepFn;
+    /** StopWhen condition that stops when budget is exceeded */
+    stopWhen: StopCondition;
+}
+
+/**
+ * Create a budget controller that bundles prepareStep and stopWhen together.
+ *
+ * This is the recommended way to implement budget-based stopping. Unlike
+ * `budgetAwareExecution({ onBudgetExceeded: 'stop' })`, this function returns
+ * both the prepareStep function AND the matching stopWhen condition, making
+ * it impossible to forget one without the other.
+ *
+ * @example
+ * import { createBudgetController, stopWhenAny, maxSteps } from './loop-control.js';
+ *
+ * const budget = createBudgetController({
+ *   maxInputTokens: 50000,
+ *   maxOutputTokens: 10000
+ * });
+ *
+ * const agent = new ToolLoopAgent({
+ *   prepareStep: budget.prepareStep,
+ *   stopWhen: stopWhenAny(maxSteps(25), budget.stopWhen)
+ * });
+ */
+export function createBudgetController(config: BudgetControllerConfig): BudgetController {
+    const { maxInputTokens, maxOutputTokens } = config;
+
+    // PrepareStep is a no-op for 'stop' mode - all logic is in stopWhen
+    const prepareStep: PrepareStepFn = () => ({});
+
+    // StopWhen checks accumulated usage across all steps
+    const stopWhen: StopCondition = (context: any) => {
+        const steps = context.steps ?? [];
+        const usage = accumulateUsage(steps as Array<{ usage?: any }>);
+        return usage.input >= maxInputTokens || usage.output >= maxOutputTokens;
+    };
+
+    return { prepareStep, stopWhen };
 }
 
 /**
