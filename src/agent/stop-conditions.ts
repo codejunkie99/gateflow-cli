@@ -201,8 +201,9 @@ export function maxSteps(limit: number): StopCondition {
 export function tokenBudgetExhausted(maxTokens: number): StopCondition {
     return (context: any) => {
         const steps = context.steps ?? [];
-        const usage = accumulateUsage(steps);
-        return usage.total >= maxTokens;
+        const accumulated = accumulateUsage(steps);
+        const total = accumulated.total > 0 ? accumulated.total : (context.usage?.totalTokens ?? 0);
+        return total >= maxTokens;
     };
 }
 
