@@ -11,7 +11,8 @@
  */
 
 import { stepCountIs, type LanguageModel, type ModelMessage } from 'ai';
-import type { StopCondition } from './stop-conditions.js';
+import { accumulateUsage } from './token-helpers.js';
+import { type StopCondition } from './stop-conditions.js';
 
 // ============================================================================
 // Types
@@ -33,43 +34,6 @@ export interface StepContext {
     messages: readonly any[];
     /** Experimental context (AI SDK internal) */
     experimental_context?: unknown;
-}
-
-/**
- * Helper type for extracting step info (for user convenience)
- */
-export interface StepInfo {
-    /** Text generated in this step */
-    text?: string;
-    /** Tool calls made in this step */
-    toolCalls?: ToolCallInfo[];
-    /** Tool results from this step */
-    toolResults?: ToolResultInfo[];
-    /** Token usage for this step */
-    usage?: {
-        inputTokens?: number;
-        outputTokens?: number;
-    };
-}
-
-export interface ToolCallInfo {
-    toolName: string;
-    args?: unknown;
-}
-
-export interface ToolResultInfo {
-    toolName: string;
-    result?: unknown;
-    output?: unknown;
-}
-
-/**
- * Message type (compatible with AI SDK's ModelMessage)
- */
-export interface Message {
-    role: 'user' | 'assistant' | 'system' | 'tool';
-    content: string | unknown;
-    [key: string]: unknown;
 }
 
 /**
@@ -258,36 +222,59 @@ export function phasedExecution(phases: Phase[]): PrepareStepFn {
 }
 
 /**
- * Create a prepareStep that tracks and enforces a token budget.
- *
- * @example
- * const agent = new ToolLoopAgent({
- *   prepareStep: budgetAwareExecution({
- *     maxInputTokens: 50000,
- *     maxOutputTokens: 10000,
- *     onBudgetExceeded: 'summarize'
- *   })
- * });
+ * Budget configuration for prepareStep handlers.
  */
-export function budgetAwareExecution(config: {
+export interface BudgetConfig {
     maxInputTokens: number;
     maxOutputTokens: number;
     onBudgetExceeded: 'stop' | 'summarize' | 'trim';
-}): PrepareStepFn {
+}
+
+/**
+ * Create a prepareStep that tracks and enforces a token budget.
+ *
+ * **WARNING**: 'stop' mode is a no-op by design - it returns empty settings
+ * and relies on a separate stopWhen condition to actually terminate the loop.
+ * Use 'trim' or 'summarize' for self-contained budget handling.
+ *
+ * For 'stop' mode, prefer `createBudgetController()` which returns both the
+ * prepareStep function and the matching stopWhen condition.
+ *
+ * @example
+ * // WRONG: 'stop' mode won't actually stop anything
+ * prepareStep: budgetAwareExecution({
+ *   maxInputTokens: 50000,
+ *   maxOutputTokens: 10000,
+ *   onBudgetExceeded: 'stop'  // ⚠️ No-op without matching stopWhen!
+ * })
+ *
+ * @example
+ * // CORRECT: Use createBudgetController() for 'stop' mode
+ * const budget = createBudgetController({
+ *   maxInputTokens: 50000,
+ *   maxOutputTokens: 10000
+ * });
+ * const agent = new ToolLoopAgent({
+ *   prepareStep: budget.prepareStep,
+ *   stopWhen: stopWhenAny(maxSteps(25), budget.stopWhen)
+ * });
+ *
+ * @example
+ * // Also correct: 'trim' mode is self-contained
+ * prepareStep: budgetAwareExecution({
+ *   maxInputTokens: 50000,
+ *   maxOutputTokens: 10000,
+ *   onBudgetExceeded: 'trim'  // ✓ Works without extra stopWhen
+ * })
+ */
+export function budgetAwareExecution(config: BudgetConfig): PrepareStepFn {
     const { maxInputTokens, maxOutputTokens, onBudgetExceeded } = config;
 
     return ({ steps, messages }) => {
-        // Calculate total usage
-        const totalUsage = steps.reduce(
-            (acc, step) => ({
-                input: acc.input + (step.usage?.inputTokens ?? 0),
-                output: acc.output + (step.usage?.outputTokens ?? 0)
-            }),
-            { input: 0, output: 0 }
-        );
+        const usage = accumulateUsage(steps as Array<{ usage?: any }>);
 
-        const inputExceeded = totalUsage.input > maxInputTokens;
-        const outputExceeded = totalUsage.output > maxOutputTokens;
+        const inputExceeded = usage.input > maxInputTokens;
+        const outputExceeded = usage.output > maxOutputTokens;
 
         if (!inputExceeded && !outputExceeded) {
             return {};
@@ -318,35 +305,65 @@ export function budgetAwareExecution(config: {
 }
 
 /**
- * Create a prepareStep that forces specific tools at specific steps.
+ * Budget controller configuration.
+ */
+export interface BudgetControllerConfig {
+    /** Maximum input tokens before stopping */
+    maxInputTokens: number;
+    /** Maximum output tokens before stopping */
+    maxOutputTokens: number;
+}
+
+/**
+ * Budget controller return type - bundles prepareStep and stopWhen together.
+ */
+export interface BudgetController {
+    /** PrepareStep function (currently a no-op, reserved for future budget-aware features) */
+    prepareStep: PrepareStepFn;
+    /** StopWhen condition that stops when budget is exceeded */
+    stopWhen: StopCondition;
+}
+
+/**
+ * Create a budget controller that bundles prepareStep and stopWhen together.
+ *
+ * This is the recommended way to implement budget-based stopping. Unlike
+ * `budgetAwareExecution({ onBudgetExceeded: 'stop' })`, this function returns
+ * both the prepareStep function AND the matching stopWhen condition, making
+ * it impossible to forget one without the other.
  *
  * @example
+ * import { createBudgetController, stopWhenAny, maxSteps } from './loop-control.js';
+ *
+ * const budget = createBudgetController({
+ *   maxInputTokens: 50000,
+ *   maxOutputTokens: 10000
+ * });
+ *
  * const agent = new ToolLoopAgent({
- *   prepareStep: forcedToolSequence([
- *     { step: 0, tool: 'search' },
- *     { step: 3, tool: 'analyze' },
- *     { step: 6, tool: 'summarize' }
- *   ])
+ *   prepareStep: budget.prepareStep,
+ *   stopWhen: stopWhenAny(maxSteps(25), budget.stopWhen)
  * });
  */
-export function forcedToolSequence(
-    sequence: Array<{ step: number; tool: string }>
-): PrepareStepFn {
-    return ({ stepNumber }) => {
-        const forced = sequence.find(s => s.step === stepNumber);
+export function createBudgetController(config: BudgetControllerConfig): BudgetController {
+    const { maxInputTokens, maxOutputTokens } = config;
 
-        if (forced) {
-            return {
-                toolChoice: { type: 'tool', toolName: forced.tool }
-            };
-        }
+    // PrepareStep is a no-op for 'stop' mode - all logic is in stopWhen
+    const prepareStep: PrepareStepFn = () => ({});
 
-        return {};
+    // StopWhen checks accumulated usage across all steps
+    const stopWhen: StopCondition = (context: any) => {
+        const steps = context.steps ?? [];
+        const usage = accumulateUsage(steps as Array<{ usage?: any }>);
+        return usage.input >= maxInputTokens || usage.output >= maxOutputTokens;
     };
+
+    return { prepareStep, stopWhen };
 }
 
 /**
  * Combine multiple prepareStep functions.
+ * Later functions override earlier ones for conflicting keys.
  *
  * @example
  * const agent = new ToolLoopAgent({
@@ -364,150 +381,10 @@ export function combinePrepareSteps(...fns: PrepareStepFn[]): PrepareStepFn {
         for (const fn of fns) {
             const result = await fn(context);
             settings = { ...settings, ...result };
-
-            // Special handling for messages - use the most recent one
-            if (result.messages) {
-                settings.messages = result.messages;
-            }
         }
 
         return settings;
     };
-}
-
-// ============================================================================
-// Custom Stop Conditions
-// ============================================================================
-
-/**
- * Stop when budget is exceeded.
- */
-export function budgetExceeded(config: {
-    maxInputTokens?: number;
-    maxOutputTokens?: number;
-    maxTotalTokens?: number;
-    maxCost?: number;
-    inputCostPer1k?: number;
-    outputCostPer1k?: number;
-}): StopCondition {
-    const {
-        maxInputTokens = Infinity,
-        maxOutputTokens = Infinity,
-        maxTotalTokens = Infinity,
-        maxCost = Infinity,
-        inputCostPer1k = 0.003,
-        outputCostPer1k = 0.015
-    } = config;
-
-    return (context: any) => {
-        const steps = context.steps ?? [];
-        const totalUsage = steps.reduce(
-            (acc: any, step: any) => ({
-                input: acc.input + (step.usage?.inputTokens ?? 0),
-                output: acc.output + (step.usage?.outputTokens ?? 0)
-            }),
-            { input: 0, output: 0 }
-        );
-
-        const totalTokens = totalUsage.input + totalUsage.output;
-        const cost = (totalUsage.input * inputCostPer1k + totalUsage.output * outputCostPer1k) / 1000;
-
-        return (
-            totalUsage.input >= maxInputTokens ||
-            totalUsage.output >= maxOutputTokens ||
-            totalTokens >= maxTotalTokens ||
-            cost >= maxCost
-        );
-    };
-}
-
-/**
- * Stop when a specific text pattern is found in any step's output.
- */
-export function hasTextPattern(pattern: string | RegExp): StopCondition {
-    const regex = typeof pattern === 'string' ? new RegExp(pattern) : pattern;
-
-    return (context: any) => {
-        const steps = context.steps ?? [];
-        return steps.some((step: any) => step.text && regex.test(step.text));
-    };
-}
-
-/**
- * Stop when a tool returns a specific result.
- */
-export function toolReturned(
-    toolName: string,
-    predicate: (result: unknown) => boolean
-): StopCondition {
-    return (context: any) => {
-        const steps = context.steps ?? [];
-        for (const step of steps) {
-            for (const result of step.toolResults ?? []) {
-                if (result.toolName === toolName && predicate(result.result ?? result.output)) {
-                    return true;
-                }
-            }
-        }
-        return false;
-    };
-}
-
-/**
- * Stop when the 'done' tool is called (for forced tool calling pattern).
- */
-export function doneToolCalled(): StopCondition {
-    return (context: any) => {
-        const steps = context.steps ?? [];
-        const lastStep = steps[steps.length - 1];
-        return lastStep?.toolCalls?.some((c: any) => c.toolName === 'done') ?? false;
-    };
-}
-
-// ============================================================================
-// Utility Functions
-// ============================================================================
-
-/**
- * Create a 'done' tool for forced tool calling pattern.
- * This tool has no execute function, so it stops the loop.
- */
-export function createDoneTool() {
-    return {
-        description: 'Signal that you have finished your work and provide the final answer',
-        inputSchema: {
-            type: 'object' as const,
-            properties: {
-                answer: {
-                    type: 'string',
-                    description: 'The final answer or result'
-                },
-                summary: {
-                    type: 'string',
-                    description: 'Brief summary of what was accomplished'
-                }
-            },
-            required: ['answer']
-        }
-        // No execute function - this stops the agent when called
-    };
-}
-
-/**
- * Extract the final answer from a done tool call.
- */
-export function extractDoneAnswer(steps: StepInfo[]): { answer: string; summary?: string } | null {
-    for (const step of steps.reverse()) {
-        for (const call of step.toolCalls ?? []) {
-            if (call.toolName === 'done') {
-                const args = call.args as { answer?: string; summary?: string };
-                if (args?.answer) {
-                    return { answer: args.answer, summary: args.summary };
-                }
-            }
-        }
-    }
-    return null;
 }
 
 // Re-export stepCountIs for convenience

@@ -72,6 +72,14 @@ import { truncateToFit } from '../memory/token-estimator.js';
 export interface AgentConfig {
     model: string;
     modelConfig?: ModelConfigWithVariant;
+    /**
+     * Optional model for complex tasks (high step count, errors, long context).
+     * If not specified, the primary model is used for all tasks.
+     *
+     * @example "anthropic/claude-opus-4-5-20251101" for reasoning-heavy tasks
+     */
+    complexModel?: string;
+    complexModelConfig?: ModelConfigWithVariant;
     maxTokens: number;
     temperature: number;
     maxToolCalls: number;
@@ -200,6 +208,8 @@ export class GateFlowAgent {
         this.config = {
             model: resolvedModelString,
             modelConfig: resolvedModelConfig,
+            complexModel: config?.complexModel,
+            complexModelConfig: config?.complexModelConfig,
             maxTokens: config?.maxTokens ?? 8192,
             temperature: config?.temperature ?? 0.7,
             maxToolCalls: config?.maxToolCalls ?? 25,
@@ -299,6 +309,8 @@ export class GateFlowAgent {
                     mode,
                     model: this.config.model,
                     modelConfig: this.config.modelConfig,
+                    complexModel: this.config.complexModel,
+                    complexModelConfig: this.config.complexModelConfig,
                     stepLimit: this.config.maxToolCalls,
                     autoApprove: this.toolContext.autoApprove,
                 },
@@ -1034,7 +1046,8 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
             // Passing strings causes AI SDK to fall back to AI Gateway
             dynamicModelSelector({
                 defaultModel: bundle.model,
-                complexModel: bundle.model, // Could use larger model for complex tasks
+                // Use complex model if configured, otherwise fall back to default
+                complexModel: bundle.complexModel ?? bundle.model,
                 complexityThreshold: 5
             }),
 

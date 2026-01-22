@@ -117,6 +117,19 @@ export interface CreateAgentOptions {
      * Takes precedence over model string if provided
      */
     modelConfig?: ModelConfigWithVariant;
+    /**
+     * Optional model for complex tasks (high step count, errors, long context).
+     * Used by dynamicModelSelector when task complexity increases.
+     * Falls back to primary model if not specified.
+     *
+     * @example "anthropic/claude-opus-4-5-20251101" for reasoning-heavy debugging
+     */
+    complexModel?: string;
+    /**
+     * Complex model configuration (provider + model name + optional variant)
+     * Takes precedence over complexModel string if provided
+     */
+    complexModelConfig?: ModelConfigWithVariant;
     /** Maximum steps for tool loop (default: 25, used with stopWhen: stepCountIs()) */
     stepLimit?: number;
     /** Whether to auto-approve all tool calls */
