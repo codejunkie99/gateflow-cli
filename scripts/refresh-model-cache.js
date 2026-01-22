@@ -55,6 +55,7 @@ async function main() {
     let compatible = 0;
 
     for (const model of models) {
+        if (!model.id) continue;
         const params = model.supported_parameters || [];
         const tools = params.includes('tools') || params.includes('functions');
         const structuredOutputs = params.includes('structured_outputs') || params.includes('response_format');
