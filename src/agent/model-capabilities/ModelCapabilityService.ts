@@ -233,6 +233,7 @@ export class ModelCapabilityService {
             // Network fetch failed - try bundled default cache (ships with distribution)
             const bundledCache = await this.loadBundledCache();
             if (bundledCache) {
+                console.warn(`Using bundled model cache from ${bundledCache.lastUpdated} - pricing/capabilities may be outdated`);
                 this.applyCache(bundledCache);
                 this.initialized = true;
             } else {
