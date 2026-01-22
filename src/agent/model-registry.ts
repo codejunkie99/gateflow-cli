@@ -576,9 +576,50 @@ export class ModelRegistry {
     }
 
     /**
-     * Get model metadata by ID.
+     * Normalize a model ID by stripping date suffix (e.g., -20250514).
+     * Returns the base name for fuzzy matching.
+     */
+    private normalizeModelId(id: string): string {
+        // Strip date suffix pattern: -YYYYMMDD at end
+        return id.replace(/-\d{8}$/, '');
+    }
+
+    /**
+     * Get model metadata by ID with fuzzy matching.
+     * Tries in order:
+     * 1. Exact match
+     * 2. Match by normalized name (date suffix stripped)
+     * 3. Match where query is a prefix of registered ID
      */
     getModel(id: string): ModelMetadata | undefined {
+        // 1. Exact match
+        const exact = this.modelCache.get(id);
+        if (exact) return exact;
+
+        // 2. Normalized match (strip date suffix from both)
+        const normalizedQuery = this.normalizeModelId(id);
+        for (const [registeredId, model] of this.modelCache) {
+            if (this.normalizeModelId(registeredId) === normalizedQuery) {
+                return model;
+            }
+        }
+
+        // 3. Prefix match (query is prefix of registered ID)
+        // e.g., 'claude-sonnet-4' matches 'claude-sonnet-4-20250514'
+        for (const [registeredId, model] of this.modelCache) {
+            if (registeredId.startsWith(id + '-')) {
+                return model;
+            }
+        }
+
+        return undefined;
+    }
+
+    /**
+     * Get model metadata by exact ID only (no fuzzy matching).
+     * Use this when you need strict ID matching.
+     */
+    getModelExact(id: string): ModelMetadata | undefined {
         return this.modelCache.get(id);
     }
 
@@ -667,6 +708,7 @@ export class ModelRegistry {
 
     /**
      * Estimate cost for a request.
+     * Uses fuzzy matching to resolve model ID.
      *
      * @param id - Model ID
      * @param inputTokens - Number of input tokens
@@ -678,7 +720,7 @@ export class ModelRegistry {
         inputTokens: number,
         outputTokens: number
     ): number | undefined {
-        const model = this.modelCache.get(id);
+        const model = this.getModel(id);
         if (!model?.pricing) return undefined;
 
         const inputCost = (inputTokens / 1_000_000) * model.pricing.inputPer1M;
@@ -689,13 +731,19 @@ export class ModelRegistry {
 
     /**
      * Find similar models (same provider, different tier).
+     * Uses fuzzy matching to find the model, so both 'claude-sonnet-4' and
+     * 'claude-sonnet-4-20250514' will correctly resolve to alternatives.
      */
     findAlternatives(id: string): ModelMetadata[] {
-        const model = this.modelCache.get(id);
+        // Use getModel() for fuzzy matching instead of direct cache lookup
+        const model = this.getModel(id);
         if (!model) return [];
 
+        // Compare using normalized IDs to avoid excluding the same model
+        // when queried with a different ID format
+        const normalizedQueryId = this.normalizeModelId(id);
         return this.listModels(model.provider).filter(
-            m => m.id !== id && m.status !== 'deprecated'
+            m => this.normalizeModelId(m.id) !== normalizedQueryId && m.status !== 'deprecated'
         );
     }
 
