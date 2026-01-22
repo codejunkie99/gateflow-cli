@@ -745,7 +745,7 @@ export class ModelRegistry {
 
         // Compare using normalized IDs to avoid excluding the same model
         // when queried with a different ID format
-        const normalizedQueryId = this.normalizeModelId(id);
+        const normalizedQueryId = this.normalizeModelId(model.id);
         return this.listModels(model.provider).filter(
             m => this.normalizeModelId(m.id) !== normalizedQueryId && m.status !== 'deprecated'
         );
