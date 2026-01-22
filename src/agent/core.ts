@@ -835,7 +835,7 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
                     }
                 }
 
-                this.session.toolCallCount += steps.length;
+                this.session.toolCallCount += steps.flatMap(step => step.toolCalls ?? []).length;
             }
 
             // Add final text response if present
