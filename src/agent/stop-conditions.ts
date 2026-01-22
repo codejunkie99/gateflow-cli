@@ -14,7 +14,7 @@
 
 import { stepCountIs } from 'ai';
 import { getCostPerMillion } from './model-provider-openrouter.js';
-import { getInputTokens, getOutputTokens, getTotalTokens, accumulateUsage } from './token-helpers.js';
+import { accumulateUsage } from './token-helpers.js';
 import type { PromptMode } from './prompts.js';
 
 // ============================================================================
@@ -190,6 +190,7 @@ export function maxSteps(limit: number): StopCondition {
 
 /**
  * Stop when total token usage exceeds a budget.
+ * Accumulates usage across all steps.
  *
  * @param maxTokens - Maximum total tokens (prompt + completion)
  * @returns Stop condition
@@ -198,32 +199,43 @@ export function maxSteps(limit: number): StopCondition {
  * stopWhen: tokenBudgetExhausted(100000)
  */
 export function tokenBudgetExhausted(maxTokens: number): StopCondition {
-    return (context: StopConditionContext) =>
-        getTotalTokens(context.usage) >= maxTokens;
+    return (context: any) => {
+        const steps = context.steps ?? [];
+        const usage = accumulateUsage(steps);
+        return usage.total >= maxTokens;
+    };
 }
 
 /**
  * Stop when completion/output tokens exceed a limit.
+ * Accumulates usage across all steps.
  * Useful for controlling response length.
  *
  * @param maxTokens - Maximum completion tokens
  * @returns Stop condition
  */
 export function completionTokensExceeded(maxTokens: number): StopCondition {
-    return (context: StopConditionContext) =>
-        getOutputTokens(context.usage) >= maxTokens;
+    return (context: any) => {
+        const steps = context.steps ?? [];
+        const usage = accumulateUsage(steps);
+        return usage.output >= maxTokens;
+    };
 }
 
 /**
  * Stop when input/prompt tokens exceed a limit.
+ * Accumulates usage across all steps.
  * Useful for controlling context size.
  *
  * @param maxTokens - Maximum input tokens
  * @returns Stop condition
  */
 export function inputTokensExceeded(maxTokens: number): StopCondition {
-    return (context: StopConditionContext) =>
-        getInputTokens(context.usage) >= maxTokens;
+    return (context: any) => {
+        const steps = context.steps ?? [];
+        const usage = accumulateUsage(steps);
+        return usage.input >= maxTokens;
+    };
 }
 
 // ============================================================================
