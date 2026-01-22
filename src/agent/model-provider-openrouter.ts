@@ -484,8 +484,8 @@ export function calculateCost(
     const model = cachedModels?.get(modelId);
     if (!model?.pricing) return null;
 
-    const inputCost = parseFloat(model.pricing.prompt) * inputTokens;
-    const outputCost = parseFloat(model.pricing.completion) * outputTokens;
+    const inputCost = (parseFloat(model.pricing.prompt) * inputTokens) / 1_000_000;
+    const outputCost = (parseFloat(model.pricing.completion) * outputTokens) / 1_000_000;
 
     return inputCost + outputCost;
 }
@@ -691,8 +691,8 @@ export function getModelCapabilities(modelId: string): ModelCapabilities | null 
     // Include pricing if available (for offline caching)
     if (model.pricing) {
         caps.pricing = {
-            input: parseFloat(model.pricing.prompt) * 1_000_000,
-            output: parseFloat(model.pricing.completion) * 1_000_000
+            input: parseFloat(model.pricing.prompt),
+            output: parseFloat(model.pricing.completion)
         };
     }
 
