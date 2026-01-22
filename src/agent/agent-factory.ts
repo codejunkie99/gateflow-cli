@@ -68,7 +68,7 @@ export interface AgentBundle {
     /** Whether auto-approve is enabled */
     autoApprove: boolean;
     /**
-     * Provider options for variant support.
+     * Provider options for variant support (primary model).
      * Apply these in streamText/generateText calls to enable extended thinking,
      * reasoning effort, or other provider-specific features.
      *
@@ -80,6 +80,13 @@ export interface AgentBundle {
      * });
      */
     variantOptions: Record<string, unknown>;
+    /**
+     * Provider options for complex model variant support.
+     * When dynamicModelSelector switches to complexModel, use these options
+     * instead of variantOptions to ensure correct provider-specific features.
+     * Falls back to variantOptions if complexModel is not configured.
+     */
+    complexVariantOptions: Record<string, unknown>;
 }
 
 // ============================================================================
@@ -203,6 +210,10 @@ export function createAgentBundle(
 
     // Get variant options for providerOptions (used in streamText/generateText)
     const variantOptions = getVariantProviderOptions(modelConfig.provider, modelConfig.variant);
+    // Get variant options for complex model (may have different provider/variant)
+    const complexVariantOptions = complexModelConfig
+        ? getVariantProviderOptions(complexModelConfig.provider, complexModelConfig.variant)
+        : variantOptions;
 
     const specs = getToolSpecs();
     const executors = createToolExecutors(toolContext);
@@ -266,6 +277,7 @@ export function createAgentBundle(
         mode,
         autoApprove,
         variantOptions,
+        complexVariantOptions,
     };
 }
 
