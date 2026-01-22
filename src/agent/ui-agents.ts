@@ -49,6 +49,14 @@ export interface TransitionRequest {
 
 export interface UIAgentConfig {
     model: string;
+    /**
+     * Optional complex model for dynamic model switching.
+     * When configured, ExecutorAgent will auto-switch to this model when:
+     * - Step count exceeds threshold (default: 5)
+     * - Message count exceeds threshold (default: 15)
+     * - Previous steps encountered errors
+     */
+    complexModel?: string;
     tools: Record<string, Tool>;
     bus: EventBus;
 }
@@ -83,6 +91,10 @@ export abstract class UIAgent {
     protected model: string;
     /** LanguageModel object for use in prepareStep (avoids AI Gateway fallback) */
     protected languageModel: LanguageModel;
+    /** Optional complex model for dynamic model switching */
+    protected complexModel?: string;
+    /** LanguageModel object for complex model (avoids AI Gateway fallback) */
+    protected complexLanguageModel?: LanguageModel;
     protected tools: Record<string, Tool>;
     protected bus: EventBus;
     protected state: UIState;
@@ -91,6 +103,10 @@ export abstract class UIAgent {
         this.model = config.model;
         // Create LanguageModel object to avoid AI Gateway fallback in prepareStep
         this.languageModel = createModel(parseModelString(config.model));
+        this.complexModel = config.complexModel;
+        if (config.complexModel) {
+            this.complexLanguageModel = createModel(parseModelString(config.complexModel));
+        }
         this.tools = config.tools;
         this.bus = config.bus;
         this.state = { mode: initialMode, context: {} };
@@ -111,10 +127,16 @@ export abstract class UIAgent {
     /**
      * Update the model used by this agent.
      */
-    setModel(model: string): void {
+    setModel(model: string, complexModel?: string): void {
         this.model = model;
         // Keep LanguageModel object in sync
         this.languageModel = createModel(parseModelString(model));
+        if (complexModel !== undefined) {
+            this.complexModel = complexModel;
+            this.complexLanguageModel = complexModel
+                ? createModel(parseModelString(complexModel))
+                : undefined;
+        }
     }
 
     /**
@@ -263,40 +285,46 @@ After completing all steps or encountering issues, signal to transition to revie
     }
 
     get prepareStep(): PrepareStepFn {
-        return combinePrepareSteps(
-            contextWindowManager({ maxMessages: 40, keepSystem: true }),
-            // IMPORTANT: Pass LanguageModel objects, NOT strings
-            // Passing strings causes AI SDK to fall back to AI Gateway
-            dynamicModelSelector({
+        // Build the prepareStep chain
+        const steps: PrepareStepFn[] = [
+            contextWindowManager({ maxMessages: 40, keepSystem: true })
+        ];
+
+        // Add dynamic model selection if complexModel is configured
+        if (this.complexLanguageModel) {
+            steps.push(dynamicModelSelector({
                 defaultModel: this.languageModel,
-                complexModel: this.languageModel, // Could use a larger model
+                complexModel: this.complexLanguageModel,
                 complexityThreshold: 5
-            }),
-            // Executor has full tool access, phased by step
-            (context: StepContext) => {
-                const plan = this.state.context.plan;
-                const currentStep = this.state.context.completedSteps ?? 0;
+            }));
+        }
 
-                // Different tools available based on current plan step
-                if (!plan || currentStep >= plan.length) {
-                    return { toolChoice: 'auto' as const };
-                }
+        // Dynamic tool selection based on current plan step
+        steps.push((context: StepContext) => {
+            const plan = this.state.context.plan;
+            const currentStep = this.state.context.completedSteps ?? 0;
 
-                const stepDesc = plan[currentStep].toLowerCase();
-
-                if (stepDesc.includes('read') || stepDesc.includes('analyze')) {
-                    return { activeTools: ['read_file', 'search_code', 'find_module', 'list_files'] };
-                }
-                if (stepDesc.includes('generate') || stepDesc.includes('create') || stepDesc.includes('write')) {
-                    return { activeTools: ['write_file', 'edit_lines', 'search_replace'] };
-                }
-                if (stepDesc.includes('lint') || stepDesc.includes('verify')) {
-                    return { activeTools: ['lint_file', 'run_simulation'] };
-                }
-
-                return {};
+            // Different tools available based on current plan step
+            if (!plan || currentStep >= plan.length) {
+                return { toolChoice: 'auto' as const };
             }
-        );
+
+            const stepDesc = plan[currentStep].toLowerCase();
+
+            if (stepDesc.includes('read') || stepDesc.includes('analyze')) {
+                return { activeTools: ['read_file', 'search_code', 'find_module', 'list_files'] };
+            }
+            if (stepDesc.includes('generate') || stepDesc.includes('create') || stepDesc.includes('write')) {
+                return { activeTools: ['write_file', 'edit_lines', 'search_replace'] };
+            }
+            if (stepDesc.includes('lint') || stepDesc.includes('verify')) {
+                return { activeTools: ['lint_file', 'run_simulation'] };
+            }
+
+            return {};
+        });
+
+        return combinePrepareSteps(...steps);
     }
 
     /**
@@ -481,9 +509,9 @@ export class UIAgentCoordinator {
     /**
      * Update the model for all agents.
      */
-    setModel(model: string): void {
+    setModel(model: string, complexModel?: string): void {
         for (const agent of this.agents.values()) {
-            agent.setModel(model);
+            agent.setModel(model, complexModel);
         }
     }
 }

@@ -59,6 +59,7 @@ import {
 import {
     fetchOpenRouterModels,
     getAllModelIds,
+    getCompatibleModelIds,
     formatModelName,
     getModelPricing,
     cachedModels
@@ -1220,7 +1221,7 @@ async function showInteractiveModelSelector(
 
     // Separate section for OpenRouter models (capability-checked)
     const openRouterSection: MenuSection<ModelMenuItem> = {
-        title: '── OpenRouter (300+ Models) ──',
+        title: '── OpenRouter (190+ Compatible Models) ──',
         headerColor: chalk.cyan,
         items: []
     };
@@ -1245,16 +1246,14 @@ async function showInteractiveModelSelector(
         }
     }
 
-    // Populate OpenRouter section separately with all fetched models
+    // Populate OpenRouter section separately with compatible models only
     if (openRouterModels && openRouterModels.size > 0) {
-        console.log(chalk.dim(`  Adding ${openRouterModels.size} OpenRouter models to menu...`));
+        // Filter to only compatible models (tools + structured outputs)
+        const compatibleIds = getCompatibleModelIds();
         const isCurrent = currentConfig?.provider === 'openrouter';
         const openRouterInfo = PROVIDERS.openrouter;
-        
-        const modelIds = Array.from(openRouterModels.keys());
-        console.log(chalk.dim(`  Model IDs (first 5): ${modelIds.slice(0, 5).join(', ')}`));
-        
-        for (const modelId of modelIds) {
+
+        for (const modelId of compatibleIds) {
             const isCurrentModel = isCurrent && currentConfig?.model === modelId;
             const modelData = openRouterModels.get(modelId);
             

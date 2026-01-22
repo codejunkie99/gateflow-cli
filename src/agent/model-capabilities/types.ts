@@ -15,6 +15,13 @@ export interface ModelCapabilities {
     structuredOutputs: boolean;
     /** Model supports thinking/reasoning mode */
     reasoning: boolean;
+    /** Pricing per 1M tokens (optional, for offline cost tracking) */
+    pricing?: {
+        /** Cost per 1M input tokens in USD */
+        input: number;
+        /** Cost per 1M output tokens in USD */
+        output: number;
+    };
 }
 
 /**

@@ -11,6 +11,7 @@
 
 import { streamText, type StepResult } from 'ai';
 import { createModeStopCondition, type StopCondition } from '../stop-conditions.js';
+import type { PromptMode } from '../prompts.js';
 import { createModelWithVariant, type ModelWithVariant } from '../model-provider.js';
 import type { EventBus } from '../../events/index.js';
 import type {
@@ -1100,16 +1101,16 @@ export class Orchestrator {
      * @returns Stop condition function
      */
     private getWorkerStopCondition(agentName: string | undefined, stepLimit: number): StopCondition {
-        // Map agent names to prompt modes for stop condition selection
-        const agentNameToMode: Record<string, string> = {
+        // Map agent names to valid PromptModes for stop condition selection
+        const agentNameToMode: Record<string, PromptMode> = {
             understanding: 'general',
             codegen: 'generate',
             testbench: 'testbench',
             debug: 'debug',
-            refactoring: 'refactoring'
+            refactoring: 'edit' // Refactoring uses edit mode (code modification)
         };
 
-        const mode = agentName ? agentNameToMode[agentName] ?? 'general' : 'general';
-        return createModeStopCondition(mode, stepLimit);
+        const mode: PromptMode = agentName ? agentNameToMode[agentName] ?? 'general' : 'general';
+        return createModeStopCondition({ mode, stepLimit });
     }
 }
