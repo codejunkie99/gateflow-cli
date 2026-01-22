@@ -654,17 +654,19 @@ export class ModelRegistry {
 
     /**
      * Check if a model is deprecated.
+     * Uses fuzzy matching to resolve model ID.
      */
     isDeprecated(id: string): boolean {
-        const model = this.modelCache.get(id);
+        const model = this.getModel(id);
         return model?.status === 'deprecated';
     }
 
     /**
      * Get deprecation warning if model is deprecated.
+     * Uses fuzzy matching to resolve model ID.
      */
     getDeprecationWarning(id: string): string | undefined {
-        const model = this.modelCache.get(id);
+        const model = this.getModel(id);
         if (model?.status !== 'deprecated') return undefined;
 
         const date = model.deprecationDate ? ` (deprecated ${model.deprecationDate})` : '';
@@ -673,28 +675,31 @@ export class ModelRegistry {
 
     /**
      * Get context window size for a model.
+     * Uses fuzzy matching to resolve model ID.
      * Returns default if model not found.
      */
     getContextWindow(id: string, defaultSize = 128000): number {
-        return this.modelCache.get(id)?.contextWindow ?? defaultSize;
+        return this.getModel(id)?.contextWindow ?? defaultSize;
     }
 
     /**
      * Get max output tokens for a model.
+     * Uses fuzzy matching to resolve model ID.
      * Returns default if model not found.
      */
     getMaxOutputTokens(id: string, defaultTokens = 8192): number {
-        return this.modelCache.get(id)?.maxOutputTokens ?? defaultTokens;
+        return this.getModel(id)?.maxOutputTokens ?? defaultTokens;
     }
 
     /**
      * Check if a model supports a capability.
+     * Uses fuzzy matching to resolve model ID.
      */
     hasCapability(
         id: string,
         capability: keyof ModelCapabilities
     ): boolean {
-        const model = this.modelCache.get(id);
+        const model = this.getModel(id);
         return model?.capabilities[capability] ?? false;
     }
 
