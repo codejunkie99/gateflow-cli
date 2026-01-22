@@ -76,6 +76,18 @@ export interface MenuResult<T> {
 // ============================================================================
 
 export class InteractiveMenu<T = unknown> {
+    // INVARIANT: this.currentIndex always indexes into this.filteredItems.
+    // - When searching: filteredItems contains only matching items (no headers)
+    // - When not searching: filteredItems === flatItems (set at lines 101, 115, 144)
+    //   and flatItems is built in the same order as section iteration.
+    //
+    // We use two render paths because:
+    // 1. Search mode: flat list without section headers (simpler, faster)
+    // 2. Normal mode: iterate sections to render headers between item groups
+    //
+    // Both paths use this.currentIndex to determine selection, which works
+    // because findNextSelectableIndexInFiltered() always operates on filteredItems
+
     private sections: MenuSection<T>[];
     private options: InteractiveMenuOptions;
     private currentIndex = 0;
