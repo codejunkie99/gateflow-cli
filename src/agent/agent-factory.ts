@@ -196,7 +196,7 @@ export function createAgentBundle(
         instructions: getSystemPrompt(mode),
         tools,
         // Use mode-aware stop condition (e.g., lint_fix stops when lint passes)
-        stopWhen: createModeStopCondition(mode, stepLimit),
+        stopWhen: createModeStopCondition({ mode, stepLimit }),
         modelName,
         mode,
         autoApprove,

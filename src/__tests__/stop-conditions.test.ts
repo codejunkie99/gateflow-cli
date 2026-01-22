@@ -111,7 +111,7 @@ describe('Stop Conditions', () => {
         it('should check completion tokens specifically', () => {
             const condition = completionTokensExceeded(500);
             const context = createContext({
-                usage: { completionTokens: 600, promptTokens: 200, totalTokens: 800 }
+                steps: [{ usage: { completionTokens: 600, promptTokens: 200, totalTokens: 800 } }]
             });
             expect(condition(context)).toBe(true);
         });
@@ -119,9 +119,21 @@ describe('Stop Conditions', () => {
         it('should not trigger on prompt tokens', () => {
             const condition = completionTokensExceeded(500);
             const context = createContext({
-                usage: { completionTokens: 100, promptTokens: 600, totalTokens: 700 }
+                steps: [{ usage: { completionTokens: 100, promptTokens: 600, totalTokens: 700 } }]
             });
             expect(condition(context)).toBe(false);
+        });
+
+        it('should accumulate completion tokens across multiple steps', () => {
+            const condition = completionTokensExceeded(500);
+            const context = createContext({
+                steps: [
+                    { usage: { completionTokens: 200 } },
+                    { usage: { completionTokens: 200 } },
+                    { usage: { completionTokens: 150 } }
+                ]
+            });
+            expect(condition(context)).toBe(true); // 550 >= 500
         });
     });
 
@@ -390,7 +402,7 @@ describe('Stop Conditions', () => {
 
     describe('createModeStopCondition', () => {
         it('should create condition for lint_fix mode', () => {
-            const condition = createModeStopCondition('lint_fix', 10);
+            const condition = createModeStopCondition({ mode: 'lint_fix', stepLimit: 10 });
 
             // Should stop when lint passes
             const passingContext = createContext({
@@ -414,7 +426,7 @@ describe('Stop Conditions', () => {
         });
 
         it('should create condition for testbench mode', () => {
-            const condition = createModeStopCondition('testbench', 10);
+            const condition = createModeStopCondition({ mode: 'testbench', stepLimit: 10 });
 
             // Should stop when simulation passes
             const passingContext = createContext({
@@ -428,7 +440,7 @@ describe('Stop Conditions', () => {
         });
 
         it('should create basic condition for general mode', () => {
-            const condition = createModeStopCondition('general', 10);
+            const condition = createModeStopCondition({ mode: 'general', stepLimit: 10 });
             // General mode uses stepCountIs which we can't easily test here
             // but we can verify it returns a function
             expect(typeof condition).toBe('function');
