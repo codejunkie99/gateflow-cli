@@ -22,6 +22,10 @@ import type { ProviderName } from './model-provider.js';
 
 /**
  * Model capability flags.
+ *
+ * Note: This interface extends the core capabilities (tools, structuredOutputs, reasoning)
+ * with additional metadata fields (vision, streaming, codeExecution) useful for the
+ * static model registry. The core fields match model-capabilities/types.ts for consistency.
  */
 export interface ModelCapabilities {
     /** Supports tool/function calling */
@@ -32,8 +36,8 @@ export interface ModelCapabilities {
     streaming: boolean;
     /** Has reasoning/thinking capabilities (o1, o3, extended thinking) */
     reasoning: boolean;
-    /** Supports structured JSON output */
-    structuredOutput: boolean;
+    /** Supports structured JSON output (matches types.ts naming) */
+    structuredOutputs: boolean;
     /** Supports code execution/interpretation */
     codeExecution?: boolean;
 }
@@ -124,7 +128,7 @@ export const MODEL_METADATA: ModelMetadata[] = [
             vision: true,
             streaming: true,
             reasoning: true,
-            structuredOutput: true,
+            structuredOutputs: true,
         },
         pricing: { inputPer1M: 15, outputPer1M: 75 },
         status: 'stable',
@@ -143,7 +147,7 @@ export const MODEL_METADATA: ModelMetadata[] = [
             vision: true,
             streaming: true,
             reasoning: true,
-            structuredOutput: true,
+            structuredOutputs: true,
         },
         pricing: { inputPer1M: 3, outputPer1M: 15 },
         status: 'stable',
@@ -162,7 +166,7 @@ export const MODEL_METADATA: ModelMetadata[] = [
             vision: true,
             streaming: true,
             reasoning: false,
-            structuredOutput: true,
+            structuredOutputs: true,
         },
         pricing: { inputPer1M: 0.8, outputPer1M: 4 },
         status: 'stable',
@@ -183,7 +187,7 @@ export const MODEL_METADATA: ModelMetadata[] = [
             vision: true,
             streaming: true,
             reasoning: true,
-            structuredOutput: true,
+            structuredOutputs: true,
             codeExecution: true,
         },
         pricing: { inputPer1M: 10, outputPer1M: 30 },
@@ -203,7 +207,7 @@ export const MODEL_METADATA: ModelMetadata[] = [
             vision: true,
             streaming: true,
             reasoning: true,
-            structuredOutput: true,
+            structuredOutputs: true,
         },
         pricing: { inputPer1M: 5, outputPer1M: 15 },
         status: 'stable',
@@ -222,7 +226,7 @@ export const MODEL_METADATA: ModelMetadata[] = [
             vision: true,
             streaming: true,
             reasoning: true,
-            structuredOutput: true,
+            structuredOutputs: true,
         },
         pricing: { inputPer1M: 15, outputPer1M: 60 },
         status: 'stable',
@@ -241,7 +245,7 @@ export const MODEL_METADATA: ModelMetadata[] = [
             vision: true,
             streaming: true,
             reasoning: true,
-            structuredOutput: true,
+            structuredOutputs: true,
         },
         pricing: { inputPer1M: 3, outputPer1M: 12 },
         status: 'stable',
@@ -259,7 +263,7 @@ export const MODEL_METADATA: ModelMetadata[] = [
             vision: true,
             streaming: true,
             reasoning: false,
-            structuredOutput: true,
+            structuredOutputs: true,
         },
         pricing: { inputPer1M: 2.5, outputPer1M: 10 },
         status: 'stable',
@@ -279,7 +283,7 @@ export const MODEL_METADATA: ModelMetadata[] = [
             vision: true,
             streaming: true,
             reasoning: true,
-            structuredOutput: true,
+            structuredOutputs: true,
             codeExecution: true,
         },
         pricing: { inputPer1M: 2.5, outputPer1M: 10 },
@@ -298,7 +302,7 @@ export const MODEL_METADATA: ModelMetadata[] = [
             vision: true,
             streaming: true,
             reasoning: true,
-            structuredOutput: true,
+            structuredOutputs: true,
         },
         pricing: { inputPer1M: 0.15, outputPer1M: 0.6 },
         status: 'stable',
@@ -318,7 +322,7 @@ export const MODEL_METADATA: ModelMetadata[] = [
             vision: false,
             streaming: true,
             reasoning: false,
-            structuredOutput: true,
+            structuredOutputs: true,
         },
         pricing: { inputPer1M: 0.14, outputPer1M: 0.28, cachedPer1M: 0.014 },
         status: 'stable',
@@ -335,7 +339,7 @@ export const MODEL_METADATA: ModelMetadata[] = [
             vision: false,
             streaming: true,
             reasoning: true,
-            structuredOutput: true,
+            structuredOutputs: true,
         },
         pricing: { inputPer1M: 0.55, outputPer1M: 2.19, cachedPer1M: 0.14 },
         status: 'stable',
@@ -354,7 +358,7 @@ export const MODEL_METADATA: ModelMetadata[] = [
             vision: false,
             streaming: true,
             reasoning: false,
-            structuredOutput: true,
+            structuredOutputs: true,
         },
         pricing: { inputPer1M: 2, outputPer1M: 6 },
         status: 'stable',
@@ -371,7 +375,7 @@ export const MODEL_METADATA: ModelMetadata[] = [
             vision: false,
             streaming: true,
             reasoning: false,
-            structuredOutput: true,
+            structuredOutputs: true,
         },
         pricing: { inputPer1M: 0.3, outputPer1M: 0.9 },
         status: 'stable',
@@ -390,7 +394,7 @@ export const MODEL_METADATA: ModelMetadata[] = [
             vision: false,
             streaming: true,
             reasoning: false,
-            structuredOutput: true,
+            structuredOutputs: true,
         },
         status: 'stable',
         description: 'Local inference with Ollama',
@@ -406,7 +410,7 @@ export const MODEL_METADATA: ModelMetadata[] = [
             vision: false,
             streaming: true,
             reasoning: false,
-            structuredOutput: true,
+            structuredOutputs: true,
         },
         status: 'stable',
         description: 'Large local model',
@@ -422,7 +426,7 @@ export const MODEL_METADATA: ModelMetadata[] = [
             vision: false,
             streaming: true,
             reasoning: false,
-            structuredOutput: false,
+            structuredOutputs: false,
         },
         status: 'stable',
         description: 'Code-specialized local model',
@@ -440,7 +444,7 @@ export const MODEL_METADATA: ModelMetadata[] = [
             vision: true,
             streaming: true,
             reasoning: true,
-            structuredOutput: true,
+            structuredOutputs: true,
         },
         pricing: { inputPer1M: 3.3, outputPer1M: 16.5 },
         status: 'stable',
@@ -459,7 +463,7 @@ export const MODEL_METADATA: ModelMetadata[] = [
             vision: true,
             streaming: true,
             reasoning: true,
-            structuredOutput: true,
+            structuredOutputs: true,
         },
         pricing: { inputPer1M: 2, outputPer1M: 8 },
         status: 'stable',
