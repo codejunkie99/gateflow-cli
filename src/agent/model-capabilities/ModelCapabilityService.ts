@@ -189,6 +189,9 @@ export class ModelCapabilityService {
     private async fetchCapabilitiesFromProvider(): Promise<Record<string, ModelCapabilities>> {
         await fetchOpenRouterModels();
         const allCaps = getAllModelCapabilities();
+        if (allCaps.size === 0) {
+            throw new Error('No models fetched from provider');
+        }
         const models: Record<string, ModelCapabilities> = {};
         for (const [id, caps] of allCaps) {
             models[id] = caps;
