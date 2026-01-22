@@ -548,7 +548,7 @@ export function getCostPerMillion(modelId: string): { input: number; output: num
     // Try partial match for date-suffixed models
     // e.g., "claude-sonnet-4-5-20250929" matches "claude-sonnet-4-5"
     for (const [key, pricing] of Object.entries(DIRECT_PROVIDER_PRICING)) {
-        if (modelName.startsWith(key) || key.startsWith(modelName.replace(/-\d{8}$/, ''))) {
+        if (modelName.startsWith(key) || (modelName.replace(/-\d{8}$/, '') && key.startsWith(modelName.replace(/-\d{8}$/, '')))) {
             return pricing;
         }
     }
