@@ -58,7 +58,7 @@ src/
 - **Orchestrator**: Coordinates 5 worker agents (Understanding, CodeGen, Testbench, Debug, Refactoring)
 - **Workflows**: Chain, Parallel, Evaluator-Optimizer patterns in `workflows/`
 - **UI Agents**: Mode-based transitions (chat, planning, execution, review)
-  - Note: UI agents don't support `dynamicModelSelector` (no `complexModel` config)
+  - Supports `complexModel` config for dynamic model switching in ExecutorAgent
 
 ### Two-Parser Indexer
 - **Slang**: Full SV 2017 semantic analysis
