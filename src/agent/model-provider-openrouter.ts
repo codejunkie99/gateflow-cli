@@ -341,7 +341,7 @@ export function getModelsSupportingTools(): OpenRouterModel[] {
     if (!cachedModels) return [];
 
     return Array.from(cachedModels.values()).filter(model =>
-        modelSupportsParameter(model, 'tools')
+        modelSupportsParameter(model, 'tools') || modelSupportsParameter(model, 'functions')
     );
 }
 
