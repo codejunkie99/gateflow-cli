@@ -696,7 +696,7 @@ export function getModelCapabilities(modelId: string): ModelCapabilities | null 
  */
 export function isModelCompatible(modelId: string): boolean {
     const caps = getModelCapabilities(modelId);
-    return caps.tools && caps.structuredOutputs;
+    return caps !== null && caps.tools && caps.structuredOutputs;
 }
 
 /**
@@ -722,7 +722,10 @@ export function getAllModelCapabilities(): Map<string, ModelCapabilities> {
     if (!cachedModels) return result;
 
     for (const modelId of cachedModels.keys()) {
-        result.set(modelId, getModelCapabilities(modelId));
+        const caps = getModelCapabilities(modelId);
+        if (caps !== null) {
+            result.set(modelId, caps);
+        }
     }
 
     return result;
