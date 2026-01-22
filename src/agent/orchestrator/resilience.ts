@@ -241,6 +241,7 @@ export class AgentResilienceLayer {
             .initialDelay(this.config.initialRetryDelay)
             .maxDelay(this.config.maxRetryDelay)
             .retryOn((error) => !abortSignal?.aborted && isRetryableAgentError(error))
+            .timeBudget(operationTimeoutMs)  // Abort retries if insufficient time remains
             .build();
 
         return breaker.execute(async () => {
