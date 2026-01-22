@@ -642,6 +642,12 @@ const doc = new Document({
 });
 
 Packer.toBuffer(doc).then(buffer => {
-  fs.writeFileSync('C:\\Users\\adasb\\Desktop\\Buyerwatch_Offer_Document.docx', buffer);
-  console.log('Word document created successfully!');
+  try {
+    fs.writeFileSync('C:\\Users\\adasb\\Desktop\\Buyerwatch_Offer_Document.docx', buffer);
+    console.log('Word document created successfully!');
+  } catch (writeError) {
+    console.error('Error writing Word document to disk:', writeError.message);
+  }
+}).catch(packError => {
+  console.error('Error generating Word document buffer:', packError.message);
 });
