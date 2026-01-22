@@ -341,7 +341,7 @@ export function getModelsSupportingTools(): OpenRouterModel[] {
     if (!cachedModels) return [];
 
     return Array.from(cachedModels.values()).filter(model =>
-        modelSupportsParameter(model, 'tools')
+        modelSupportsParameter(model, 'tools') || modelSupportsParameter(model, 'functions')
     );
 }
 
@@ -567,7 +567,7 @@ export async function getCostPerMillionAsync(modelId: string): Promise<{ input: 
     // Ensure cache is populated
     if (!cachedModels) {
         try {
-            await fetchOpenRouterModels();
+            cachedModels = await fetchOpenRouterModels();
         } catch {
             // Fetch failed, will fall back to hardcoded pricing
         }
