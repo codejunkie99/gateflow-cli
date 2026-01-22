@@ -659,14 +659,14 @@ export interface ModelCapabilities {
  * Includes pricing for offline use.
  *
  * @param modelId - The model ID to check
- * @returns ModelCapabilities object with pricing if available
+ * @returns ModelCapabilities object with pricing if available, or null if model not found
  */
-export function getModelCapabilities(modelId: string): ModelCapabilities {
+export function getModelCapabilities(modelId: string): ModelCapabilities | null {
     const model = cachedModels?.get(modelId);
 
     if (!model) {
-        // Model not found - return safe defaults
-        return { tools: false, structuredOutputs: false, reasoning: false };
+        // Model not found - return null to distinguish from models with all false capabilities
+        return null;
     }
 
     const params = model.supported_parameters ?? [];

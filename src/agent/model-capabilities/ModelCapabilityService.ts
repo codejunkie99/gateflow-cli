@@ -79,8 +79,8 @@ export class ModelCapabilityService {
         // Try centralized provider cache (single source of truth)
         for (const key of keys) {
             const caps = getCapabilitiesFromProvider(key);
-            // If we got non-default capabilities, it was found
-            if (caps.tools || caps.structuredOutputs || caps.reasoning) {
+            // Only cache and return when model was actually found (non-null)
+            if (caps !== null) {
                 this.memoryCache.set(trimmed, caps);
                 this.memoryCache.set(key, caps);
                 return caps;
