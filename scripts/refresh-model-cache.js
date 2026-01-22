@@ -38,6 +38,10 @@ async function main() {
     const data = await response.json();
     const models = data.data || data;
 
+    if (!Array.isArray(models)) {
+        throw new Error('Unexpected API response: models is not an array');
+    }
+
     console.log(`Received ${models.length} models`);
 
     // Transform to our cache format

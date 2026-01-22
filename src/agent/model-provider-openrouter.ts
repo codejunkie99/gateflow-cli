@@ -548,7 +548,7 @@ export function getCostPerMillion(modelId: string): { input: number; output: num
     // Try partial match for date-suffixed models
     // e.g., "claude-sonnet-4-5-20250929" matches "claude-sonnet-4-5"
     for (const [key, pricing] of Object.entries(DIRECT_PROVIDER_PRICING)) {
-        if (modelName.startsWith(key) || key.startsWith(modelName.replace(/-\d{8}$/, ''))) {
+        if (modelName.startsWith(key) || (modelName.replace(/-\d{8}$/, '') && key.startsWith(modelName.replace(/-\d{8}$/, '')))) {
             return pricing;
         }
     }
@@ -659,14 +659,14 @@ export interface ModelCapabilities {
  * Includes pricing for offline use.
  *
  * @param modelId - The model ID to check
- * @returns ModelCapabilities object with pricing if available
+ * @returns ModelCapabilities object with pricing if available, or null if model not found
  */
-export function getModelCapabilities(modelId: string): ModelCapabilities {
+export function getModelCapabilities(modelId: string): ModelCapabilities | null {
     const model = cachedModels?.get(modelId);
 
     if (!model) {
-        // Model not found - return safe defaults
-        return { tools: false, structuredOutputs: false, reasoning: false };
+        // Model not found - return null to distinguish from models with all false capabilities
+        return null;
     }
 
     const params = model.supported_parameters ?? [];
