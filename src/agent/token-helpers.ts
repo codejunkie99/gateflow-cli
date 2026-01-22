@@ -5,12 +5,13 @@
  * AI SDK uses different naming conventions depending on the provider:
  * - Anthropic: inputTokens / outputTokens
  * - OpenAI: promptTokens / completionTokens
+ * - Google/Gemini: promptTokenCount / candidatesTokenCount
  *
- * These helpers work with both conventions.
+ * These helpers work with all conventions.
  */
 
 /**
- * Token usage structure (handles both naming conventions).
+ * Token usage structure (handles all provider naming conventions).
  */
 export interface TokenUsage {
     // Anthropic style
@@ -19,22 +20,26 @@ export interface TokenUsage {
     // OpenAI style
     promptTokens?: number;
     completionTokens?: number;
+    // Google/Gemini style
+    promptTokenCount?: number;
+    candidatesTokenCount?: number;
+    totalTokenCount?: number;
     // Aggregated (some providers include this)
     totalTokens?: number;
 }
 
 /**
- * Get input/prompt tokens from usage (handles both naming conventions).
+ * Get input/prompt tokens from usage (handles all provider naming conventions).
  */
 export function getInputTokens(usage: TokenUsage | undefined | null): number {
-    return usage?.inputTokens ?? usage?.promptTokens ?? 0;
+    return usage?.inputTokens ?? usage?.promptTokens ?? usage?.promptTokenCount ?? 0;
 }
 
 /**
- * Get output/completion tokens from usage (handles both naming conventions).
+ * Get output/completion tokens from usage (handles all provider naming conventions).
  */
 export function getOutputTokens(usage: TokenUsage | undefined | null): number {
-    return usage?.outputTokens ?? usage?.completionTokens ?? 0;
+    return usage?.outputTokens ?? usage?.completionTokens ?? usage?.candidatesTokenCount ?? 0;
 }
 
 /**
@@ -43,6 +48,9 @@ export function getOutputTokens(usage: TokenUsage | undefined | null): number {
 export function getTotalTokens(usage: TokenUsage | undefined | null): number {
     if (usage?.totalTokens !== undefined) {
         return usage.totalTokens;
+    }
+    if (usage?.totalTokenCount !== undefined) {
+        return usage.totalTokenCount;
     }
     return getInputTokens(usage) + getOutputTokens(usage);
 }

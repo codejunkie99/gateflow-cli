@@ -190,7 +190,7 @@ export function maxSteps(limit: number): StopCondition {
 
 /**
  * Stop when total token usage exceeds a budget.
- * Accumulates usage across all steps.
+ * Accumulates usage across all steps, with fallback to context-level usage.
  *
  * @param maxTokens - Maximum total tokens (prompt + completion)
  * @returns Stop condition
@@ -202,13 +202,20 @@ export function tokenBudgetExhausted(maxTokens: number): StopCondition {
     return (context: any) => {
         const steps = context.steps ?? [];
         const accumulated = accumulateUsage(steps);
-        return accumulated.total >= maxTokens;
+        // Fallback to context-level usage if no step-level data
+        // Handles Anthropic (inputTokens), OpenAI (promptTokens), Gemini (promptTokenCount)
+        const total = accumulated.total > 0
+            ? accumulated.total
+            : (context.usage?.totalTokens ?? context.usage?.totalTokenCount ?? 0) ||
+              ((context.usage?.promptTokens ?? context.usage?.inputTokens ?? context.usage?.promptTokenCount ?? 0) +
+               (context.usage?.completionTokens ?? context.usage?.outputTokens ?? context.usage?.candidatesTokenCount ?? 0));
+        return total >= maxTokens;
     };
 }
 
 /**
  * Stop when completion/output tokens exceed a limit.
- * Accumulates usage across all steps.
+ * Accumulates usage across all steps, with fallback to context-level usage.
  * Useful for controlling response length.
  *
  * @param maxTokens - Maximum completion tokens
@@ -217,14 +224,19 @@ export function tokenBudgetExhausted(maxTokens: number): StopCondition {
 export function completionTokensExceeded(maxTokens: number): StopCondition {
     return (context: any) => {
         const steps = context.steps ?? [];
-        const usage = accumulateUsage(steps);
-        return usage.output >= maxTokens;
+        const accumulated = accumulateUsage(steps);
+        // Fallback to context-level usage if no step-level data
+        // Handles Anthropic (outputTokens), OpenAI (completionTokens), Gemini (candidatesTokenCount)
+        const output = accumulated.output > 0
+            ? accumulated.output
+            : (context.usage?.outputTokens ?? context.usage?.completionTokens ?? context.usage?.candidatesTokenCount ?? 0);
+        return output >= maxTokens;
     };
 }
 
 /**
  * Stop when input/prompt tokens exceed a limit.
- * Accumulates usage across all steps.
+ * Accumulates usage across all steps, with fallback to context-level usage.
  * Useful for controlling context size.
  *
  * @param maxTokens - Maximum input tokens
@@ -233,8 +245,13 @@ export function completionTokensExceeded(maxTokens: number): StopCondition {
 export function inputTokensExceeded(maxTokens: number): StopCondition {
     return (context: any) => {
         const steps = context.steps ?? [];
-        const usage = accumulateUsage(steps);
-        return usage.input >= maxTokens;
+        const accumulated = accumulateUsage(steps);
+        // Fallback to context-level usage if no step-level data
+        // Handles Anthropic (inputTokens), OpenAI (promptTokens), Gemini (promptTokenCount)
+        const input = accumulated.input > 0
+            ? accumulated.input
+            : (context.usage?.inputTokens ?? context.usage?.promptTokens ?? context.usage?.promptTokenCount ?? 0);
+        return input >= maxTokens;
     };
 }
 
@@ -398,7 +415,14 @@ export function durationExceeded(ms: number, startTime: number = Date.now()): St
  *
  * Cost is calculated using per-million pricing. If modelId is provided,
  * pricing is fetched from OpenRouter's model data. Otherwise, falls back
- * to manual pricing or defaults.
+ * to manual pricing or defaults (Claude Sonnet 4: $3/$15 per million).
+ *
+ * **Timing Note**: Pricing lookup happens synchronously when the stop condition
+ * is created, not when it's evaluated. If the OpenRouter model cache hasn't been
+ * populated yet (e.g., stop condition created before `prefetchOpenRouterModels()`
+ * completes), pricing will fall back to defaults. For accurate per-model cost
+ * tracking, call `ensurePricingLoaded()` before creating budget-based stop
+ * conditions, or provide explicit `inputCostPerMillion`/`outputCostPerMillion`.
  *
  * @example
  * // Auto-fetch pricing from OpenRouter for the model
@@ -418,6 +442,14 @@ export function durationExceeded(ms: number, startTime: number = Date.now()): St
  * @example
  * // Simple token limit (no cost calculation)
  * budgetExceeded({ maxTotalTokens: 100000 })
+ *
+ * @example
+ * // Ensure accurate pricing before creating stop condition
+ * await ensurePricingLoaded();
+ * const stopCondition = budgetExceeded({
+ *   modelId: 'openai/gpt-4o',
+ *   maxCost: 1.00
+ * });
  */
 export function budgetExceeded(config: {
     maxInputTokens?: number;
@@ -518,18 +550,34 @@ interface ModeStopBehavior {
 /**
  * Unified registry of mode-specific stop behaviors.
  * Each mode can optionally specify:
- * - stepMultiplier: Adjust the base step limit
+ * - stepMultiplier: Adjust the base step limit based on typical task complexity
  * - successCondition: Early termination when task succeeds
+ *
+ * Step multipliers reflect the typical work patterns of each mode:
+ * - lint_fix: Tight feedback loop (read error → fix → verify)
+ * - testbench: Generate + simulate + iterate cycles
+ * - debug: Exploratory work requiring more headroom
+ * - edit: Code modification with verification steps
+ * - generate: Bounded artifact production
+ * - general: Q&A and exploration (default)
  */
 const MODE_BEHAVIORS: Partial<Record<PromptMode, ModeStopBehavior>> = {
     lint_fix: {
         successCondition: lintPasses,
+        // Default multiplier - tight feedback loop
     },
     testbench: {
         successCondition: simulationPasses,
+        stepMultiplier: 1.2, // Generate + simulate + iterate
     },
     debug: {
-        stepMultiplier: 1.2, // 20% more steps for debugging
+        stepMultiplier: 1.5, // Exploratory, needs headroom
+    },
+    edit: {
+        stepMultiplier: 1.3, // Code modification + verification
+    },
+    generate: {
+        stepMultiplier: 1.1, // Artifact production, usually bounded
     },
 };
 
