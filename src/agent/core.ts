@@ -806,6 +806,14 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
             const steps = await finalResult.steps;
             if (steps && steps.length > 0) {
                 for (const step of steps) {
+                    // Capture intermediate text responses (defensive: preserve text from non-final steps)
+                    if (step.text && step.text.trim() && (!step.toolCalls || step.toolCalls.length === 0)) {
+                        this.session.messages.push({
+                            role: 'assistant',
+                            content: step.text
+                        });
+                    }
+
                     // Add assistant message with tool calls if present
                     if (step.toolCalls && step.toolCalls.length > 0) {
                         this.session.messages.push({
