@@ -122,7 +122,8 @@ export function createAgentBundle(
 
     // Auto-select a more capable model if not explicitly configured
     if (!complexModelConfig) {
-        const alternatives = modelRegistry.findAlternatives(modelConfig.model);
+        const alternatives = modelRegistry.findAlternatives(modelConfig.model)
+            .filter(m => m.provider === modelConfig.provider);
         // Find a model with reasoning capability that's more expensive (likely more capable)
         const reasoningModel = alternatives.find(m =>
             m.capabilities.reasoning && m.pricing &&
