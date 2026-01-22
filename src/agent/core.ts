@@ -817,20 +817,20 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
                                 input: tc.input  // AI SDK 6 uses 'input' not 'args'
                             }))
                         });
+                    }
 
-                        // Add tool results
-                        if (step.toolResults && step.toolResults.length > 0) {
-                            for (const tr of step.toolResults) {
-                                this.session.messages.push({
-                                    role: 'tool',
-                                    content: [{
-                                        type: 'tool-result' as const,
-                                        toolCallId: tr.toolCallId,
-                                        toolName: tr.toolName,
-                                        output: tr.output  // AI SDK 6 uses 'output' not 'result'
-                                    }]
-                                });
-                            }
+                    // Add tool results (defensive: check separately from toolCalls)
+                    if (step.toolResults && step.toolResults.length > 0) {
+                        for (const tr of step.toolResults) {
+                            this.session.messages.push({
+                                role: 'tool',
+                                content: [{
+                                    type: 'tool-result' as const,
+                                    toolCallId: tr.toolCallId,
+                                    toolName: tr.toolName,
+                                    output: tr.output  // AI SDK 6 uses 'output' not 'result'
+                                }]
+                            });
                         }
                     }
                 }
