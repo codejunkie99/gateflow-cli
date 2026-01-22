@@ -65,7 +65,7 @@
     },
     "scripts": {
         "build": "tsc && npm run copy-assets",
-        "copy-assets": "node -e \"const fs=require('fs');const p=require('path');const src='src/waveform/web/viewer.html';const dst='dist/waveform/web/viewer.html';fs.mkdirSync(p.dirname(dst),{recursive:true});fs.copyFileSync(src,dst);console.log('Copied viewer.html to dist')\"",
+        "copy-assets": "node -e \"const fs=require('fs');const p=require('path');const assets=[['src/waveform/web/viewer.html','dist/waveform/web/viewer.html'],['src/agent/model-capabilities/default-cache.json','dist/agent/model-capabilities/default-cache.json']];assets.forEach(([src,dst])=>{fs.mkdirSync(p.dirname(dst),{recursive:true});fs.copyFileSync(src,dst);console.log('Copied '+src+' to dist')})\"",
         "dev": "tsx src/index.ts",
         "start": "node dist/index.js",
         "lint": "tsc --noEmit",
@@ -76,6 +76,7 @@
         "verible:download": "node scripts/download-verible.js",
         "verible:check": "verible-verilog-syntax --version || echo 'Verible not found'",
         "slang:download": "node scripts/download-slang.js",
-        "slang:check": "slang --version || echo 'slang not found'"
+        "slang:check": "slang --version || echo 'slang not found'",
+        "refresh-cache": "node scripts/refresh-model-cache.js"
     }
 }

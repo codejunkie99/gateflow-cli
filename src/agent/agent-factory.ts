@@ -21,6 +21,7 @@ import { getToolSpecs, createToolExecutors, TOOL_APPROVAL_CONFIG, type ToolConte
 import { getSystemPrompt, type PromptMode } from './prompts.js';
 import type { CreateAgentOptions } from '../types/agent-types.js';
 import { createModeStopCondition, type StopCondition } from './stop-conditions.js';
+import { modelRegistry } from './model-registry.js';
 
 // ============================================================================
 // Types
@@ -47,6 +48,12 @@ export interface AgentBundle {
     model: LanguageModel;
     /** Model configuration (provider + model name + optional variant) */
     modelConfig: ModelConfigWithVariant;
+    /**
+     * Optional model for complex tasks (high step count, errors, long context).
+     * Used by dynamicModelSelector when task complexity increases.
+     * Falls back to primary model if not specified.
+     */
+    complexModel?: LanguageModel;
     /** System prompt */
     instructions: string;
     /** Tools with approval-aware execute functions */
@@ -99,6 +106,8 @@ export function createAgentBundle(
         mode,
         model = 'claude-sonnet-4-20250514',
         modelConfig: providedModelConfig,
+        complexModel,
+        complexModelConfig: providedComplexModelConfig,
         stepLimit = 25,
         autoApprove = false,
     } = options;
@@ -106,6 +115,26 @@ export function createAgentBundle(
     // Resolve model config: use provided config or parse from model string
     // parseModelString now returns ModelConfigWithVariant (includes variant)
     const modelConfig: ModelConfigWithVariant = providedModelConfig ?? parseModelString(model);
+
+    // Resolve complex model config: explicit > string > auto-select from registry
+    let complexModelConfig = providedComplexModelConfig
+        ?? (complexModel ? parseModelString(complexModel) : undefined);
+
+    // Auto-select a more capable model if not explicitly configured
+    if (!complexModelConfig) {
+        const alternatives = modelRegistry.findAlternatives(modelConfig.model);
+        // Find a model with reasoning capability that's more expensive (likely more capable)
+        const reasoningModel = alternatives.find(m =>
+            m.capabilities.reasoning && m.pricing &&
+            (m.pricing.inputPer1M > (modelRegistry.getModel(modelConfig.model)?.pricing?.inputPer1M ?? 0))
+        );
+        if (reasoningModel) {
+            complexModelConfig = {
+                provider: reasoningModel.provider,
+                model: reasoningModel.id,
+            };
+        }
+    }
 
     // Get variant options for providerOptions (used in streamText/generateText)
     const variantOptions = getVariantProviderOptions(modelConfig.provider, modelConfig.variant);
@@ -162,6 +191,8 @@ export function createAgentBundle(
     return {
         model: createModel(modelConfig),
         modelConfig,
+        // Create complex model if config was provided
+        complexModel: complexModelConfig ? createModel(complexModelConfig) : undefined,
         instructions: getSystemPrompt(mode),
         tools,
         // Use mode-aware stop condition (e.g., lint_fix stops when lint passes)
