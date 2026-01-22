@@ -208,6 +208,8 @@ export class GateFlowAgent {
         this.config = {
             model: resolvedModelString,
             modelConfig: resolvedModelConfig,
+            complexModel: config?.complexModel,
+            complexModelConfig: config?.complexModelConfig,
             maxTokens: config?.maxTokens ?? 8192,
             temperature: config?.temperature ?? 0.7,
             maxToolCalls: config?.maxToolCalls ?? 25,
