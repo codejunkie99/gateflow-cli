@@ -17,6 +17,8 @@ export interface RetryPolicy {
     backoffMultiplier: number;
     jitter: boolean;
     retryOn: (error: unknown) => boolean;
+    /** Optional: Total time budget in ms. Retry will abort if insufficient time remains. */
+    timeBudgetMs?: number;
 }
 
 export interface RetryContext {
@@ -320,8 +322,21 @@ export async function withRetry<T>(
             const shouldRetry = attempt < policy.maxAttempts && policy.retryOn(error);
 
             if (shouldRetry) {
-                callbacks?.onRetry?.(context);
                 const delay = getRetryDelayFromError(error, policy, attempt);
+
+                // Check time budget before waiting and retrying
+                if (policy.timeBudgetMs !== undefined) {
+                    const elapsed = Date.now() - startTime;
+                    const remaining = policy.timeBudgetMs - elapsed;
+                    // Need enough time for delay + at least a minimal attempt (5s buffer)
+                    const minTimeNeeded = delay + 5000;
+                    if (remaining < minTimeNeeded) {
+                        callbacks?.onFailure?.(lastError, context);
+                        throw lastError;
+                    }
+                }
+
+                callbacks?.onRetry?.(context);
                 await sleep(delay);
             } else {
                 callbacks?.onFailure?.(lastError, context);
@@ -416,6 +431,15 @@ export class RetryPolicyBuilder {
      */
     retryOn(predicate: (error: unknown) => boolean): this {
         this.policy.retryOn = predicate;
+        return this;
+    }
+
+    /**
+     * Set total time budget for all retry attempts.
+     * Retry will abort early if insufficient time remains for delay + attempt.
+     */
+    timeBudget(ms: number): this {
+        this.policy.timeBudgetMs = ms;
         return this;
     }
 
