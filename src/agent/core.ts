@@ -1329,6 +1329,10 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
         while (segmentNumber < segmentLimit) {
             segmentNumber++;
 
+            // Reset continuation checkpoint at start of each segment to prevent
+            // stale checkpoints from previous segments being returned
+            this.lastContinuationCheckpoint = null;
+
             const statusLabel = isDynamic
                 ? (segmentNumber > 1 ? `Continuing... (segment ${segmentNumber}, making progress)` : 'Processing...')
                 : (segmentNumber > 1 ? `Continuing... (segment ${segmentNumber}/${segmentLimit})` : 'Processing...');
