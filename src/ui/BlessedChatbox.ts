@@ -325,7 +325,9 @@ export class InlineChatbox {
         const h = this.currentHeight;
         // Move cursor up to the first content line (h-1 lines up from bottom)
         // Then move right to after "│ " + prompt + inputText
-        const cursorX = 2 + prompt.length + truncatedInput.length + 1; // +1 for the space after "│"
+        // Strip ANSI escape codes to get visual length (codes like colors from chalk are invisible)
+        const visualPromptLength = prompt.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '').length;
+        const cursorX = 2 + visualPromptLength + truncatedInput.length + 1; // +1 for the space after "│"
         const cursorY = h - 1; // lines to move up from current position
         process.stdout.write(`\x1B[${cursorY}A`); // Move up
         process.stdout.write(`\x1B[${cursorX}G`); // Move to column
