@@ -629,5 +629,30 @@ export function createModeStopCondition(
     return stepCondition;
 }
 
+// ============================================================================
+// Continuation System
+// ============================================================================
+
+/**
+ * Stop when the agent requests continuation via the request_continuation tool.
+ * This allows multi-segment execution by detecting when the agent has checkpointed
+ * its progress and needs to continue in a fresh segment.
+ *
+ * @returns Stop condition that triggers when request_continuation tool returns
+ *
+ * @example
+ * stopWhen: stopWhenAny(
+ *     maxSteps(25),
+ *     continuationRequested()
+ * )
+ */
+export function continuationRequested(): StopCondition {
+    return anyToolResultMatches((toolName, result) => {
+        if (toolName !== 'request_continuation') return false;
+        if (typeof result !== 'object' || result === null) return false;
+        return (result as Record<string, unknown>)._continuation === true;
+    });
+}
+
 // Re-export stepCountIs for backwards compatibility (prefer maxSteps for type safety)
 export { stepCountIs };
