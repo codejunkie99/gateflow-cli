@@ -407,13 +407,14 @@ export function combinePrepareSteps(...fns: PrepareStepFn[]): PrepareStepFn {
 
 /**
  * Configuration for continuation warning injection.
+ * All step values are 1-indexed (human-readable step counts).
  */
 export interface ContinuationWarningConfig {
-    /** Step number to start showing warning (default: 20) */
+    /** Step number to start showing warning, 1-indexed (default: 20) */
     warningStep?: number;
-    /** Step number to show critical warning (default: 23) */
+    /** Step number to show critical warning, 1-indexed (default: 23) */
     criticalStep?: number;
-    /** Total step limit for reference in messages (default: 25) */
+    /** Total step limit for reference in messages, 1-indexed (default: 25) */
     stepLimit?: number;
 }
 
@@ -441,14 +442,16 @@ export function continuationWarning(config: ContinuationWarningConfig = {}): Pre
     } = config;
 
     return ({ stepNumber }) => {
-        // Clamp remaining to 0 to avoid negative step counts in messages
-        const remaining = Math.max(0, stepLimit - stepNumber);
+        // stepNumber is 0-indexed (AI SDK convention), but warningStep/criticalStep/stepLimit
+        // are 1-indexed (human-readable step counts). Convert for correct comparison and display.
+        const currentStep = stepNumber + 1;  // 1-indexed for display and threshold comparison
+        const remaining = Math.max(0, stepLimit - currentStep);  // Steps remaining after this one
 
-        if (stepNumber >= criticalStep) {
+        if (currentStep >= criticalStep) {
             // Special message when at or past the limit
             if (remaining === 0) {
                 return {
-                    system: `\n\n**CRITICAL**: Step limit reached (${stepNumber}/${stepLimit}). ` +
+                    system: `\n\n**CRITICAL**: Step limit reached (${currentStep}/${stepLimit}). ` +
                         `You MUST use the request_continuation tool IMMEDIATELY to checkpoint your progress. ` +
                         `Include completedTasks (what you've done), remainingTasks (what's left), and notes (key context).`
                 };
@@ -460,9 +463,9 @@ export function continuationWarning(config: ContinuationWarningConfig = {}): Pre
             };
         }
 
-        if (stepNumber >= warningStep) {
+        if (currentStep >= warningStep) {
             return {
-                system: `\n\n**WARNING**: Approaching step limit (${stepNumber}/${stepLimit}, ${remaining} remaining). ` +
+                system: `\n\n**WARNING**: Approaching step limit (${currentStep}/${stepLimit}, ${remaining} remaining). ` +
                     `If you have more work to do, use the request_continuation tool to checkpoint progress before reaching the limit.`
             };
         }
