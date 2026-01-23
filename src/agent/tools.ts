@@ -299,6 +299,14 @@ export const searchKnowledgeSchema = z.object({
 // Get Token Budget - Get current token budget status
 export const getTokenBudgetSchema = z.object({});
 
+// Request Continuation - Signal that task requires continuation
+export const requestContinuationSchema = z.object({
+    completedTasks: z.array(z.string()).describe('List of tasks completed so far in this turn'),
+    remainingTasks: z.array(z.string()).describe('List of tasks that still need to be done'),
+    partialResults: z.string().optional().describe('Summary of partial results or progress made'),
+    notes: z.string().optional().describe('Any notes for the next continuation turn')
+});
+
 // ============================================================================
 // Tool Setup Schemas
 // ============================================================================
@@ -364,6 +372,9 @@ export const TOOL_APPROVAL_CONFIG: Record<string, boolean> = {
     select_chunks: false,
     search_knowledge: false,
     get_token_budget: false,
+
+    // Continuation coordination - no approval (doesn't modify files)
+    request_continuation: false,
 
     // Skills and MCP - read operations (no approval)
     search_skills: false,
@@ -2383,6 +2394,17 @@ export function createToolExecutors(ctx: ToolContext): Record<string, (args: any
                     tools: ctx.tokenBudgetManager.getAvailable('tools')
                 }
             };
+        },
+
+        // Request continuation - signal that task needs more turns to complete
+        request_continuation: async (args: z.infer<typeof requestContinuationSchema>) => {
+            return {
+                _continuation: true,
+                completedTasks: args.completedTasks,
+                remainingTasks: args.remainingTasks,
+                partialResults: args.partialResults,
+                notes: args.notes
+            };
         }
     };
 }
@@ -2638,6 +2660,13 @@ export function getToolSpecs(): Record<string, ToolSpec> {
             description: 'Interactive helper for setting up missing analysis tools. Use this when the user asks for help setting up tools, when a tool operation fails due to missing tools, when the user asks "why isnt X working", or when they want guided setup assistance. Automatically detects which tools are missing and runs an interactive setup conversation. Preferred over individual setup_verible/setup_slang for general setup help.',
             parameters: helpSetupToolsSchema,
             needsApproval: TOOL_APPROVAL_CONFIG.help_setup_tools
+        },
+
+        // Continuation coordination - for multi-turn task management
+        request_continuation: {
+            description: 'Signal that the current task requires additional turns to complete. Call this when you have made progress but cannot finish in the current turn due to context limits or task complexity. Provides structured handoff to the next turn.',
+            parameters: requestContinuationSchema,
+            needsApproval: TOOL_APPROVAL_CONFIG.request_continuation
         }
     };
 }

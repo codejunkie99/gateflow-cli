@@ -258,19 +258,19 @@ export class InlineChatbox {
      */
     private drawFrame(inputText: string = ''): string[] {
         const lines: string[] = [];
+        // Use the configured width (affected by Ctrl+Left/Right resize handlers)
         const w = this.currentWidth;
         const h = this.currentHeight;
 
-        // Top border with label
+        // Top border with label (no size hint)
         const label = this.options.label;
         const labelStr = label ? ` ${label} ` : '';
-        const sizeHint = ` ${w}x${h} `;
-        const lineLength = Math.max(0, w - 2 - labelStr.length - sizeHint.length);
+        const lineLength = Math.max(0, w - 2 - labelStr.length);
         const leftLine = Math.floor(lineLength / 2);
         const rightLine = lineLength - leftLine;
 
         lines.push(
-            chalk.cyan('┌' + '─'.repeat(leftLine) + labelStr + '─'.repeat(rightLine) + chalk.dim(sizeHint) + '┐')
+            chalk.cyan('┌' + '─'.repeat(leftLine) + labelStr + '─'.repeat(rightLine) + '┐')
         );
 
         // Middle lines (input area)
@@ -290,7 +290,7 @@ export class InlineChatbox {
         }
 
         // Bottom border with help
-        const help = ' Ctrl+↑↓←→:resize  Enter:send  Esc:cancel ';
+        const help = ' Enter:send  Esc:cancel ';
         const bottomLineLen = Math.max(0, w - 2 - help.length);
         const bottomLeft = Math.floor(bottomLineLen / 2);
         const bottomRight = bottomLineLen - bottomLeft;
@@ -306,19 +306,36 @@ export class InlineChatbox {
      * Clear the drawn box
      */
     private clearBox(lineCount: number): void {
+        const h = lineCount;
+        // Cursor is inside the box (h-1 lines from bottom), move to bottom first
+        process.stdout.write(`\x1B[${h - 1}B`); // Move down to bottom
+        process.stdout.write('\x1B[0G'); // Move to start of line
+
         // Move cursor up and clear each line
         for (let i = 0; i < lineCount; i++) {
-            process.stdout.write('\x1B[1A'); // Move up
             process.stdout.write('\x1B[2K'); // Clear line
+            process.stdout.write('\x1B[1A'); // Move up
         }
+        process.stdout.write('\x1B[2K'); // Clear the top line too
     }
 
     /**
-     * Render the box
+     * Render the box and position cursor inside
      */
     private render(inputText: string = ''): number {
         const lines = this.drawFrame(inputText);
         console.log(lines.join('\n'));
+
+        // Position cursor inside the box (on the input line)
+        const prompt = this.options.prompt || '> ';
+        const h = this.currentHeight;
+        // Move cursor up to the first content line (h-1 lines up from bottom)
+        // Then move right to after "│ " + prompt + inputText
+        const cursorX = 2 + prompt.length + inputText.length + 1; // +1 for the space after "│"
+        const cursorY = h - 1; // lines to move up from current position
+        process.stdout.write(`\x1B[${cursorY}A`); // Move up
+        process.stdout.write(`\x1B[${cursorX}G`); // Move to column
+
         return lines.length;
     }
 

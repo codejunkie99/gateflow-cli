@@ -7,6 +7,12 @@
  * - createAgentBundle: Factory for creating agent bundles with approval-aware tools
  * - toolNeedsApproval: Helper to check if a tool requires approval
  *
+ * Continuation System:
+ * - request_continuation tool: Allows agent to checkpoint progress when approaching step limit
+ * - continuationRequested(): Stop condition that detects checkpoint requests
+ * - continuationWarning(): PrepareStep that warns agent as it approaches limits
+ * - runWithContinuation(): Wraps run() in a loop for multi-segment execution (up to 125 steps)
+ *
  * Workflow Patterns:
  * - executeChain: Sequential processing with quality checks
  * - executeParallel: Parallel processing with aggregation
@@ -23,5 +29,6 @@ export * from './stop-conditions.js';
 export * from './workflows/index.js';
 export * from './loop-control.js';
 export * from './ui-agents.js';
+export * from './recommended-models.js';
 // Note: grep_context, tail_context, head_context tools are in tools.ts
 

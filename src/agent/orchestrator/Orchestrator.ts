@@ -32,6 +32,7 @@ import {
     AgentResilienceLayer,
     type AgentResilienceConfig
 } from './resilience.js';
+import { withAbortableTimeout } from '../../resilience/timeout.js';
 import { PromptBuilder } from '../prompts/PromptBuilder.js';
 import { metrics } from '../../observability/index.js';
 
@@ -50,6 +51,8 @@ export interface OrchestratorConfig {
     summaryTokenBudget?: number;
     planConfidenceThreshold?: number;
     resilience?: Partial<AgentResilienceConfig>;
+    /** Per-task timeout in ms for parallel execution (Issue #13 fix) */
+    parallelTaskTimeoutMs?: number;
 }
 
 const DEFAULT_ORCHESTRATOR_CONFIG = {
@@ -57,7 +60,9 @@ const DEFAULT_ORCHESTRATOR_CONFIG = {
     concurrencyLimit: 3,
     planningTokenBudget: 2000,
     summaryTokenBudget: 500,
-    planConfidenceThreshold: 0.6
+    planConfidenceThreshold: 0.6,
+    /** Default 3 minutes per parallel task - defensive timeout */
+    parallelTaskTimeoutMs: 180000
 };
 
 class OrchestratorAbortError extends Error {
@@ -83,6 +88,7 @@ export class Orchestrator {
         planningTokenBudget: number;
         summaryTokenBudget: number;
         planConfidenceThreshold: number;
+        parallelTaskTimeoutMs: number;
     };
 
     constructor(
@@ -113,7 +119,9 @@ export class Orchestrator {
                 config?.planningTokenBudget ?? DEFAULT_ORCHESTRATOR_CONFIG.planningTokenBudget,
             summaryTokenBudget:
                 config?.summaryTokenBudget ?? DEFAULT_ORCHESTRATOR_CONFIG.summaryTokenBudget,
-            planConfidenceThreshold
+            planConfidenceThreshold,
+            parallelTaskTimeoutMs:
+                config?.parallelTaskTimeoutMs ?? DEFAULT_ORCHESTRATOR_CONFIG.parallelTaskTimeoutMs
         };
 
         this.resilienceLayer = new AgentResilienceLayer(bus, config?.resilience);
@@ -802,19 +810,31 @@ export class Orchestrator {
         return levels;
     }
 
+    /**
+     * Execute tasks in parallel with concurrency limit and per-task timeout
+     * Issue #13 fix: Added defensive per-task timeout to prevent hanging
+     */
     private async executeParallelWithLimit<T>(
         tasks: Array<() => Promise<T>>,
-        concurrencyLimit: number
+        concurrencyLimit: number,
+        taskTimeoutMs?: number
     ): Promise<PromiseSettledResult<T>[]> {
         const results: PromiseSettledResult<T>[] = new Array(tasks.length);
         const executing = new Set<Promise<void>>();
+        const timeout = taskTimeoutMs ?? this.config.parallelTaskTimeoutMs;
 
         for (let i = 0; i < tasks.length; i++) {
             const task = tasks[i];
 
             const p = (async () => {
                 try {
-                    results[i] = { status: 'fulfilled', value: await task() };
+                    // Wrap task with defensive timeout to prevent indefinite hanging
+                    const value = await withAbortableTimeout(
+                        () => task(),
+                        timeout,
+                        `parallel_task_${i}`
+                    );
+                    results[i] = { status: 'fulfilled', value };
                 } catch (reason) {
                     results[i] = { status: 'rejected', reason };
                 }
