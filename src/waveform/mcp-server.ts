@@ -614,7 +614,7 @@ export class WaveformMCPServer {
     async close(): Promise<void> {
         try {
             await this.server.close();
-            this.store.close();
+            await this.store.close();
             console.error('[GateFlow MCP] Server shut down gracefully');
         } catch (error) {
             console.error('[GateFlow MCP] Error during shutdown:', error);
