@@ -17,10 +17,7 @@ import type {
     TerminalSessionManager,
     DynamicContextManager,
     FileChunker,
-    TokenBudgetManager,
-    SkillManager,
-    ToolDescriptionManager,
-    SemanticSummarizer
+    TokenBudgetManager
 } from '../context/index.js';
 import type { MemoryManager, KnowledgeStore, MemoryService } from '../memory/index.js';
 import { LEARNED_TYPES, type LearnedKnowledgeType } from '../memory/knowledge-service/index.js';
@@ -62,9 +59,6 @@ export interface ToolContext {
     dynamicContextManager?: DynamicContextManager;
     fileChunker?: FileChunker;
     tokenBudgetManager?: TokenBudgetManager;
-    skillManager?: SkillManager;
-    toolDescriptionManager?: ToolDescriptionManager;
-    semanticSummarizer?: SemanticSummarizer;
 }
 
 // ============================================================================
@@ -322,6 +316,26 @@ export const helpSetupToolsSchema = z.object({
 });
 
 // ============================================================================
+// Continuation System
+// ============================================================================
+
+/**
+ * Request Continuation Tool
+ * Called by the agent when approaching step limit but more work remains.
+ * Triggers checkpoint and continuation in a new segment.
+ */
+export const requestContinuationSchema = z.object({
+    completedTasks: z.array(z.string())
+        .describe('List of tasks completed in this segment'),
+    remainingTasks: z.array(z.string())
+        .describe('List of tasks still to be done'),
+    partialResults: z.string().optional()
+        .describe('Any partial output to preserve for the next segment'),
+    notes: z.string().optional()
+        .describe('Context notes for the next segment (key decisions, state, etc.)')
+});
+
+// ============================================================================
 // Tool Approval Configuration (AI SDK 6)
 // ============================================================================
 
@@ -389,6 +403,9 @@ export const TOOL_APPROVAL_CONFIG: Record<string, boolean> = {
     // Interactive tools - no approval (they prompt user directly)
     ask_user: false,
     open_waveform: false,
+
+    // Continuation system - no approval (internal control flow)
+    request_continuation: false,
 };
 
 // ============================================================================
@@ -2383,6 +2400,25 @@ export function createToolExecutors(ctx: ToolContext): Record<string, (args: any
                     tools: ctx.tokenBudgetManager.getAvailable('tools')
                 }
             };
+        },
+
+        // Continuation system - checkpoint for multi-segment execution
+        request_continuation: async (args: z.infer<typeof requestContinuationSchema>) => {
+            // This tool returns a special marker that signals the continuation system
+            // The agent loop detects this and triggers a new segment
+            ctx.bus.emit({
+                type: 'status',
+                phase: 'tool',
+                label: `Checkpointing: ${args.completedTasks.length} done, ${args.remainingTasks.length} remaining`
+            });
+
+            return {
+                _continuation: true,
+                completedTasks: args.completedTasks,
+                remainingTasks: args.remainingTasks,
+                partialResults: args.partialResults,
+                notes: args.notes
+            };
         }
     };
 }
@@ -2638,6 +2674,13 @@ export function getToolSpecs(): Record<string, ToolSpec> {
             description: 'Interactive helper for setting up missing analysis tools. Use this when the user asks for help setting up tools, when a tool operation fails due to missing tools, when the user asks "why isnt X working", or when they want guided setup assistance. Automatically detects which tools are missing and runs an interactive setup conversation. Preferred over individual setup_verible/setup_slang for general setup help.',
             parameters: helpSetupToolsSchema,
             needsApproval: TOOL_APPROVAL_CONFIG.help_setup_tools
+        },
+
+        // Continuation system
+        request_continuation: {
+            description: 'Request continuation to a new segment when approaching the step limit but more work remains. Call this when you have completed some tasks but need more steps to finish. Provide a checkpoint of completed tasks, remaining tasks, and any context notes. The system will continue execution in a new segment with fresh step budget.',
+            parameters: requestContinuationSchema,
+            needsApproval: TOOL_APPROVAL_CONFIG.request_continuation
         }
     };
 }
