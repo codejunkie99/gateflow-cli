@@ -44,6 +44,7 @@ import {
 } from './agent-factory.js';
 import {
     stopWhenAny,
+    continuationRequested,
     type StopCondition
 } from './stop-conditions.js';
 import type { RuntimeCallOptions } from '../types/agent-types.js';
@@ -58,6 +59,7 @@ import {
     contextWindowManager,
     dynamicModelSelector,
     budgetAwareExecution,
+    continuationWarning,
     type PrepareStepFn,
     type StepSettings
 } from './loop-control.js';
@@ -158,6 +160,48 @@ export interface RunOptions {
     callOptions?: AgentCallOptions;
     /** Runtime configuration overrides (per-request) */
     runtimeOptions?: RuntimeCallOptions;
+}
+
+// ============================================================================
+// Continuation Types
+// ============================================================================
+
+/**
+ * Checkpoint data from request_continuation tool.
+ * Contains progress information for multi-segment execution.
+ */
+export interface ContinuationCheckpoint {
+    /** Tasks completed in this segment */
+    completedTasks: string[];
+    /** Tasks remaining to be done */
+    remainingTasks: string[];
+    /** Partial output to preserve */
+    partialResults?: string;
+    /** Context notes for the next segment */
+    notes?: string;
+    /** Current segment number */
+    segmentNumber: number;
+    /** Cumulative steps across all segments */
+    cumulativeSteps: number;
+}
+
+/**
+ * Options for runWithContinuation method.
+ * Extends RunOptions with continuation-specific configuration.
+ */
+export interface ContinuationOptions extends RunOptions {
+    /** Maximum number of segments (default: 5, = 125 total steps). Ignored if dynamicSegments is true. */
+    maxSegments?: number;
+    /**
+     * Enable progress-based dynamic segments.
+     * When true, continues as long as progress is being made (tasks completing).
+     * Stops when: no progress detected, task complete, or safety cap (20 segments) reached.
+     */
+    dynamicSegments?: boolean;
+    /** Safety cap for dynamic segments (default: 20 = 500 steps max) */
+    dynamicSegmentsCap?: number;
+    /** Callback when a segment completes with continuation */
+    onSegmentComplete?: (checkpoint: ContinuationCheckpoint) => void;
 }
 
 // ============================================================================
@@ -496,29 +540,18 @@ export class GateFlowAgent {
                 this.toolContext.sessionId = callOptions.sessionId;
             }
 
-            // Detect mode for this query (can be overridden by call options)
-            const modeContext: DetectModeContext = {
-                hasErrors: this.session.hasErrors,
-                ...options?.modeContext
-            };
-            const mode = callOptions?.mode ?? options?.mode ?? detectMode(userMessage, modeContext);
-            this.session.currentMode = mode;
-
             // Apply approval policy overrides from call options
             if (callOptions?.approvalPolicy) {
                 // This would integrate with PolicyEngine to override auto-approve settings
                 // For now, we track it for potential future use
             }
 
-            // Add thinking step at mode detection
-            this.session.thinkingChain.addAnalysisStep(
-                `Analyzing request in ${mode} mode`,
-                { mode, userMessage },
-                0.9
-            );
+            // ========================================================================
+            // Issue #11 Fix: Complexity detection BEFORE mode detection
+            // This allows multi-agent orchestration to override mode-based routing
+            // ========================================================================
 
-            // AI SDK 6: Use generateStructured for complexity detection
-            // Ensure modelConfig is defined (fallback to parsing model string)
+            // AI SDK 6: Use generateStructured for complexity detection FIRST
             const effectiveModelConfig = this.config.modelConfig ?? parseModelString(this.config.model);
             const complexityVariantOptions = getVariantProviderOptions(
                 effectiveModelConfig.provider,
@@ -544,6 +577,45 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
                 ...complexityVariantOptions,
             });
 
+            // Route to orchestrator immediately if multi-agent is needed
+            // This happens BEFORE mode detection to prevent mode from blocking orchestration
+            if (complexity.needsMultiAgent && this.orchestrator) {
+                this.session.thinkingChain.addCoordinationStep(
+                    'Using multi-agent orchestrator',
+                    { reasoning: complexity.reasoning },
+                    0.9
+                );
+
+                // Update spinner for multi-agent mode
+                this.bus.emit({
+                    type: 'status',
+                    phase: 'thinking',
+                    label: 'Planning multi-agent execution...'
+                });
+
+                // Use orchestrator for complex requests
+                return this.orchestrator.executeWithPlan(userMessage);
+            }
+
+            // ========================================================================
+            // Single-agent flow: Mode detection happens AFTER complexity check
+            // ========================================================================
+
+            // Detect mode for this query (can be overridden by call options)
+            const modeContext: DetectModeContext = {
+                hasErrors: this.session.hasErrors,
+                ...options?.modeContext
+            };
+            const mode = callOptions?.mode ?? options?.mode ?? detectMode(userMessage, modeContext);
+            this.session.currentMode = mode;
+
+            // Add thinking step at mode detection
+            this.session.thinkingChain.addAnalysisStep(
+                `Analyzing request in ${mode} mode`,
+                { mode, userMessage },
+                0.9
+            );
+
             // Check if request matches a specialized workflow pattern
             const workflowOutcome = await this.tryWorkflowExecution(userMessage, mode);
             switch (workflowOutcome.status) {
@@ -568,24 +640,6 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
                 }
                 case 'not_applicable':
                     break;
-            }
-
-            if (complexity.needsMultiAgent && this.orchestrator) {
-                this.session.thinkingChain.addCoordinationStep(
-                    'Using multi-agent orchestrator',
-                    { reasoning: complexity.reasoning },
-                    0.9
-                );
-
-                // Update spinner for multi-agent mode
-                this.bus.emit({
-                    type: 'status',
-                    phase: 'thinking',
-                    label: 'Planning multi-agent execution...'
-                });
-
-                // Use orchestrator for complex requests
-                return this.orchestrator.executeWithPlan(userMessage);
             }
 
             // Simple requests: continue with single-agent flow
@@ -1058,7 +1112,14 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
                 onBudgetExceeded: 'summarize'
             }),
 
-            // 4. Mode-specific tool control
+            // 4. Continuation warnings - alert agent as it approaches step limit
+            continuationWarning({
+                warningStep: 20,
+                criticalStep: 23,
+                stepLimit: this.config.maxToolCalls
+            }),
+
+            // 5. Mode-specific tool control
             this.createModeSpecificPrepareStep(mode)
         );
     }
@@ -1222,5 +1283,199 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
      */
     getHistory(): ModelMessage[] {
         return [...this.session.messages];
+    }
+
+    // ========================================================================
+    // Continuation System
+    // ========================================================================
+
+    /** Last continuation checkpoint from request_continuation tool */
+    private lastContinuationCheckpoint: ContinuationCheckpoint | null = null;
+
+    /**
+     * Run the agent with automatic continuation support.
+     * Wraps run() in a loop that handles continuation checkpoints,
+     * allowing tasks to complete across multiple segments.
+     *
+     * Each segment gets up to maxToolCalls steps. When the agent calls
+     * request_continuation, a new segment starts with fresh step budget.
+     *
+     * Supports two modes:
+     * - Fixed: Uses maxSegments (default 5) as hard limit
+     * - Dynamic: Continues while progress is being made (tasks completing)
+     *
+     * @param userMessage - The user's request
+     * @param options - Continuation options including maxSegments or dynamicSegments
+     * @returns Combined response from all segments
+     */
+    async runWithContinuation(
+        userMessage: string,
+        options?: ContinuationOptions
+    ): Promise<string> {
+        const isDynamic = options?.dynamicSegments ?? false;
+        const segmentLimit = isDynamic
+            ? (options?.dynamicSegmentsCap ?? 20)  // Safety cap for dynamic mode
+            : (options?.maxSegments ?? 5);         // Fixed limit
+
+        let accumulatedResponse = '';
+        let segmentNumber = 0;
+        let cumulativeSteps = 0;
+        let currentMessage = userMessage;
+        let previousRemainingCount = Infinity;  // For progress tracking
+
+        // Reset continuation tracking
+        this.lastContinuationCheckpoint = null;
+
+        while (segmentNumber < segmentLimit) {
+            segmentNumber++;
+
+            const statusLabel = isDynamic
+                ? (segmentNumber > 1 ? `Continuing... (segment ${segmentNumber}, making progress)` : 'Processing...')
+                : (segmentNumber > 1 ? `Continuing... (segment ${segmentNumber}/${segmentLimit})` : 'Processing...');
+
+            this.bus.emit({
+                type: 'status',
+                phase: 'thinking',
+                label: statusLabel
+            });
+
+            // Run a segment with continuation stop condition added
+            const response = await this.run(currentMessage, {
+                ...options,
+                runtimeOptions: {
+                    ...options?.runtimeOptions,
+                    stopConditions: [
+                        ...(options?.runtimeOptions?.stopConditions ?? []),
+                        continuationRequested()
+                    ]
+                }
+            });
+
+            accumulatedResponse += response;
+
+            // Check for continuation checkpoint
+            const checkpoint = this.extractContinuationCheckpoint();
+            cumulativeSteps += this.session.toolCallCount;
+
+            if (!checkpoint || checkpoint.remainingTasks.length === 0) {
+                // Task complete - no continuation requested or no remaining tasks
+                break;
+            }
+
+            // Progress-based check for dynamic mode
+            if (isDynamic) {
+                const currentRemainingCount = checkpoint.remainingTasks.length;
+
+                if (currentRemainingCount >= previousRemainingCount) {
+                    // No progress - remaining tasks same or increased
+                    this.bus.emit({
+                        type: 'status',
+                        phase: 'thinking',
+                        label: `No progress detected (${currentRemainingCount} tasks remaining). Stopping.`
+                    });
+                    break;
+                }
+
+                previousRemainingCount = currentRemainingCount;
+            }
+
+            // Update checkpoint with segment info
+            checkpoint.segmentNumber = segmentNumber;
+            checkpoint.cumulativeSteps = cumulativeSteps;
+
+            // Emit continuation event
+            this.bus.emit({
+                type: 'status',
+                phase: 'tool',
+                label: `Segment ${segmentNumber} complete: ${checkpoint.completedTasks.length} tasks done, ${checkpoint.remainingTasks.length} remaining`
+            });
+
+            // Callback for progress tracking
+            options?.onSegmentComplete?.(checkpoint);
+
+            // Build continuation prompt for next segment
+            currentMessage = this.buildContinuationPrompt(checkpoint, userMessage);
+        }
+
+        // Final status
+        if (segmentNumber >= segmentLimit) {
+            this.bus.emit({
+                type: 'status',
+                phase: 'thinking',
+                label: isDynamic
+                    ? `Reached safety cap (${segmentLimit} segments). Partial completion.`
+                    : `Reached maximum segments (${segmentLimit}). Partial completion.`
+            });
+        }
+
+        return accumulatedResponse;
+    }
+
+    /**
+     * Extract continuation checkpoint from the last tool result.
+     * Looks for request_continuation tool output with _continuation marker.
+     */
+    private extractContinuationCheckpoint(): ContinuationCheckpoint | null {
+        // Search recent messages for tool results from request_continuation
+        for (let i = this.session.messages.length - 1; i >= 0; i--) {
+            const msg = this.session.messages[i];
+            if (msg.role !== 'tool') continue;
+
+            // Tool messages have content array with tool-result items
+            const content = msg.content;
+            if (!Array.isArray(content)) continue;
+
+            for (const item of content) {
+                if (typeof item !== 'object' || item === null) continue;
+                const toolResult = item as { type?: string; toolName?: string; output?: unknown };
+
+                if (toolResult.type === 'tool-result' &&
+                    toolResult.toolName === 'request_continuation') {
+
+                    const output = toolResult.output as Record<string, unknown> | null;
+                    if (output && output._continuation === true) {
+                        this.lastContinuationCheckpoint = {
+                            completedTasks: (output.completedTasks as string[]) ?? [],
+                            remainingTasks: (output.remainingTasks as string[]) ?? [],
+                            partialResults: output.partialResults as string | undefined,
+                            notes: output.notes as string | undefined,
+                            segmentNumber: 0,
+                            cumulativeSteps: 0
+                        };
+                        return this.lastContinuationCheckpoint;
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /**
+     * Build continuation prompt for the next segment.
+     * Adds context summary to session and returns focused continuation message.
+     */
+    private buildContinuationPrompt(
+        checkpoint: ContinuationCheckpoint,
+        _originalMessage: string
+    ): string {
+        // Add continuation context as system message
+        const contextSummary = [
+            `[Continuation - Segment ${checkpoint.segmentNumber + 1}]`,
+            `Completed: ${checkpoint.completedTasks.join(', ')}`,
+            `Remaining: ${checkpoint.remainingTasks.join(', ')}`
+        ];
+
+        if (checkpoint.notes) {
+            contextSummary.push(`Notes: ${checkpoint.notes}`);
+        }
+
+        this.session.messages.push({
+            role: 'system',
+            content: contextSummary.join('\n')
+        });
+
+        // Return focused continuation prompt
+        return `Continue with the remaining tasks: ${checkpoint.remainingTasks.join(', ')}`;
     }
 }

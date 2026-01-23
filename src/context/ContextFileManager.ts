@@ -1,13 +1,3 @@
-/**
- * Context File Manager
- *
- * Implements Cursor's "Long Tool Responses as Files" strategy:
- * - Write large tool outputs to temporary files
- * - Return file reference + summary instead of full content
- * - Agent reads portions on-demand via read_context_output
- * - Expected 30-40% token reduction for verification sessions
- */
-
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
