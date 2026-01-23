@@ -39,8 +39,11 @@ let isShuttingDown = false;
 /**
  * Clean up all resources gracefully
  */
-async function gracefulShutdown(exitCode: number = 0): Promise<void> {
-    if (isShuttingDown) return;
+async function gracefulShutdown(exitCode: number = 0, force: boolean = false): Promise<void> {
+    if (isShuttingDown) {
+        if (force) process.exit(exitCode);
+        return;
+    }
     isShuttingDown = true;
 
     // Give a brief moment for any pending I/O
