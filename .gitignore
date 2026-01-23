@@ -94,6 +94,7 @@ binaries/
 
 # Deprecated code (kept for reference, not for production use)
 deprecated/
+src/context/_deprecated/
 
 # Debug/audit files
 debug-*.cjs
