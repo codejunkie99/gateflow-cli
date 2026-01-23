@@ -400,15 +400,23 @@ export class Orchestrator {
         this.emitDelegation(task);
         this.emitAgentStart(task);
 
-        // Link to external signal instead of creating new controller
-        const abortHandler = () => {
-            this.bus.emit({
-                type: 'status',
-                phase: 'thinking',
-                label: `Task ${task.id} aborted by timeout`
-            });
-        };
-        signal.addEventListener('abort', abortHandler, { once: true });
+        const controller = new AbortController();
+        this.abortControllers.set(task.id, controller);
+
+        // Chain external signal to our controller
+        if (signal.aborted) {
+            controller.abort();
+        } else {
+            const abortHandler = () => {
+                controller.abort();
+                this.bus.emit({
+                    type: 'status',
+                    phase: 'thinking',
+                    label: `Task ${task.id} aborted by timeout`
+                });
+            };
+            signal.addEventListener('abort', abortHandler, { once: true });
+        }
 
         try {
             const modelId = worker.modelName ?? this.modelName;
@@ -417,7 +425,7 @@ export class Orchestrator {
                 task.agent,
                 task.id,
                 (innerSignal) => this.runTaskStream(worker, task, taskContext, innerSignal),
-                signal, // Pass the timeout signal through
+                controller.signal, // Use controller.signal instead of signal
                 modelId
             );
 
@@ -447,7 +455,8 @@ export class Orchestrator {
 
             throw error;
         } finally {
-            signal.removeEventListener('abort', abortHandler);
+            this.abortControllers.delete(task.id);
+            // No need to remove listener - it was registered with { once: true }
         }
     }
 
