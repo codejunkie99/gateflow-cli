@@ -306,7 +306,7 @@ export class InlineChatbox {
      * Clear the drawn box
      */
     private clearBox(lineCount: number): void {
-        const h = this.currentHeight;
+        const h = lineCount;
         // Cursor is inside the box (h-1 lines from bottom), move to bottom first
         process.stdout.write(`\x1B[${h - 1}B`); // Move down to bottom
         process.stdout.write('\x1B[0G'); // Move to start of line

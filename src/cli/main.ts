@@ -21,19 +21,17 @@ import {
     versionCommand,
     waveCommand,
     waveWebCommand,
+    getCurrentContext,
     type GlobalOptions
 } from './commands.js';
 import { startMCPServer } from '../waveform/mcp-server.js';
 
 import { hasAnyProvider, PROVIDERS } from '../agent/model-provider.js';
-import type { CommandContext } from './commands.js';
 
 // ============================================================================
 // Global Shutdown Handler (Issue #15 fix)
 // ============================================================================
 
-/** Track current context for cleanup on shutdown */
-let currentContext: CommandContext | null = null;
 let isShuttingDown = false;
 
 /**
@@ -46,6 +44,7 @@ async function gracefulShutdown(exitCode: number = 0): Promise<void> {
     // Give a brief moment for any pending I/O
     await new Promise(resolve => setTimeout(resolve, 50));
 
+    const currentContext = getCurrentContext();
     if (currentContext) {
         try {
             // Stop renderer (unsubscribes from bus, clears timers)
@@ -65,13 +64,6 @@ async function gracefulShutdown(exitCode: number = 0): Promise<void> {
     }
 
     process.exit(exitCode);
-}
-
-/**
- * Set the current context for shutdown handling
- */
-function setCurrentContext(ctx: CommandContext): void {
-    currentContext = ctx;
 }
 
 // Register global signal handlers
@@ -202,7 +194,6 @@ program
     .action(async (queryParts: string[], cmdOpts: { model?: string }) => {
         const opts = program.opts() as GlobalOptions & { model?: string };
         const ctx = await setupContext(opts);
-        setCurrentContext(ctx);
 
         const query = queryParts.length > 0 ? queryParts.join(' ') : undefined;
         const modelSpec = cmdOpts.model || opts.model; // Command option takes precedence
@@ -217,7 +208,6 @@ program
     .action(async (queryParts: string[]) => {
         const opts = program.opts() as GlobalOptions & { model?: string };
         const ctx = await setupContext(opts);
-        setCurrentContext(ctx);
 
         const query = queryParts.length > 0 ? queryParts.join(' ') : undefined;
         const exitCode = await chatCommand(ctx, query, opts.model);
@@ -235,7 +225,6 @@ program
     .action(async () => {
         const opts = program.opts() as GlobalOptions;
         const ctx = await setupContext(opts);
-        setCurrentContext(ctx);
         const exitCode = await scanCommand(ctx);
         await gracefulShutdown(exitCode);
     });
@@ -250,7 +239,6 @@ program
     .action(async (files: string[]) => {
         const opts = program.opts() as GlobalOptions;
         const ctx = await setupContext(opts);
-        setCurrentContext(ctx);
         const exitCode = await lintCommand(ctx, files);
         await gracefulShutdown(exitCode);
     });
@@ -266,7 +254,6 @@ program
     .action(async (file: string, cmdOpts: { model?: string }) => {
         const opts = program.opts() as GlobalOptions;
         const ctx = await setupContext(opts);
-        setCurrentContext(ctx);
         const modelSpec = cmdOpts.model || opts.model;
         const exitCode = await fixCommand(ctx, file, modelSpec);
         await gracefulShutdown(exitCode);
@@ -282,7 +269,6 @@ program
     .action(async (patterns: string[]) => {
         const opts = program.opts() as GlobalOptions;
         const ctx = await setupContext(opts);
-        setCurrentContext(ctx);
         const exitCode = await watchCommand(ctx, patterns);
         await gracefulShutdown(exitCode);
     });
@@ -304,7 +290,6 @@ program
 
         const opts = program.opts() as GlobalOptions;
         const ctx = await setupContext(opts);
-        setCurrentContext(ctx);
         const modelSpec = cmdOpts.model || opts.model;
         const exitCode = await generateCommand(
             ctx,
@@ -326,7 +311,6 @@ program
     .action(async () => {
         const opts = program.opts() as GlobalOptions;
         const ctx = await setupContext(opts);
-        setCurrentContext(ctx);
         const exitCode = await doctorCommand(ctx);
         await gracefulShutdown(exitCode);
     });
@@ -341,7 +325,6 @@ program
     .action(async (tools: string[]) => {
         const opts = program.opts() as GlobalOptions;
         const ctx = await setupContext(opts);
-        setCurrentContext(ctx);
         const exitCode = await setupCommand(ctx, tools);
         await gracefulShutdown(exitCode);
     });
@@ -356,7 +339,6 @@ program
     .action(async (vcdFile: string) => {
         const opts = program.opts() as GlobalOptions;
         const ctx = await setupContext(opts);
-        setCurrentContext(ctx);
         const exitCode = await waveCommand(ctx, vcdFile);
         await gracefulShutdown(exitCode);
     });
@@ -368,7 +350,6 @@ program
     .action(async (vcdFile: string, options: { port: string }) => {
         const opts = program.opts() as GlobalOptions;
         const ctx = await setupContext(opts);
-        setCurrentContext(ctx);
         const exitCode = await waveWebCommand(ctx, vcdFile, parseInt(options.port, 10));
         await gracefulShutdown(exitCode);
     });
