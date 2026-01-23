@@ -986,7 +986,9 @@ export class Orchestrator {
 
             const p = (async () => {
                 // Set warning timer at 80% of timeout
-                const warningMs = timeout * 0.8;
+                // Clamp to max safe setTimeout delay (~24.8 days) to prevent overflow
+                const MAX_SAFE_TIMEOUT = 2_147_483_647;
+                const warningMs = Math.min(timeout * 0.8, MAX_SAFE_TIMEOUT);
                 const warningTimer = setTimeout(() => {
                     this.bus.emit({
                         type: 'status',
