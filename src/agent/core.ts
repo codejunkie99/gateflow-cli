@@ -605,6 +605,13 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
                         content: orchestratorResult
                     });
                 }
+                // Emit agent_complete to match agent_start
+                this.bus.emit({
+                    type: 'agent_complete',
+                    agentName: 'gateflow',
+                    success: true,
+                    durationMs: Date.now() - agentStartTime
+                });
                 return orchestratorResult;
             }
 
