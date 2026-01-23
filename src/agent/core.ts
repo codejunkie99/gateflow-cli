@@ -1527,7 +1527,7 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
 
     /**
      * Prune session messages to prevent unbounded growth across continuation segments.
-     * Keeps: first user message, system messages (continuation context), and recent messages.
+     * Keeps: first user message, non-continuation system messages, consolidated continuation context, and recent messages.
      * @param keepRecent - Number of recent messages to preserve (default: 10)
      */
     private pruneSegmentMessages(keepRecent: number = 10): void {
@@ -1535,6 +1535,23 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
         if (messages.length <= keepRecent + 5) {
             // Not enough messages to warrant pruning
             return;
+        }
+
+        // Separate continuation system messages from other system messages
+        const continuationPrefix = '[Continuation -';
+        const continuationMessages: Array<{ index: number; content: string }> = [];
+        const otherSystemIndices: number[] = [];
+
+        for (let i = 0; i < messages.length; i++) {
+            if (messages[i].role === 'system') {
+                const msgContent = messages[i].content;
+                const content = typeof msgContent === 'string' ? msgContent : '';
+                if (content.startsWith(continuationPrefix)) {
+                    continuationMessages.push({ index: i, content });
+                } else {
+                    otherSystemIndices.push(i);
+                }
+            }
         }
 
         // Find indices to keep
@@ -1548,11 +1565,44 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
             }
         }
 
-        // Keep all system messages (they contain continuation context)
-        for (let i = 0; i < messages.length; i++) {
-            if (messages[i].role === 'system') {
-                keepIndices.add(i);
+        // Keep all non-continuation system messages
+        for (const idx of otherSystemIndices) {
+            keepIndices.add(idx);
+        }
+
+        // For continuation messages: keep only the most recent one
+        // If there are multiple, consolidate older ones into the most recent
+        if (continuationMessages.length > 0) {
+            const lastContinuation = continuationMessages[continuationMessages.length - 1];
+
+            if (continuationMessages.length > 1) {
+                // Consolidate: extract completed tasks from all previous continuations
+                const allCompletedTasks: string[] = [];
+                for (const cm of continuationMessages.slice(0, -1)) {
+                    const completedMatch = cm.content.match(/Completed: ([^\n]+)/);
+                    if (completedMatch) {
+                        allCompletedTasks.push(...completedMatch[1].split(', ').filter(t => t.trim()));
+                    }
+                }
+
+                // Update the last continuation message to include all completed tasks
+                const lastCompletedMatch = lastContinuation.content.match(/Completed: ([^\n]+)/);
+                if (lastCompletedMatch) {
+                    const lastCompleted = lastCompletedMatch[1].split(', ').filter(t => t.trim());
+                    const mergedCompleted = [...new Set([...allCompletedTasks, ...lastCompleted])];
+                    const updatedContent = lastContinuation.content.replace(
+                        /Completed: [^\n]+/,
+                        `Completed: ${mergedCompleted.join(', ')}`
+                    );
+                    messages[lastContinuation.index] = {
+                        role: 'system',
+                        content: updatedContent
+                    };
+                }
             }
+
+            // Only keep the (now consolidated) last continuation message
+            keepIndices.add(lastContinuation.index);
         }
 
         // Keep the most recent messages
