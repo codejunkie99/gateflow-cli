@@ -1396,6 +1396,10 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
                 }
             });
 
+            // Add delimiter between segments to prevent merged/ambiguous output
+            if (segmentNumber > 1 && response.trim()) {
+                accumulatedResponse += '\n\n';
+            }
             accumulatedResponse += response;
 
             // Check for continuation checkpoint
