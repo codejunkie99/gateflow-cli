@@ -249,7 +249,8 @@ export class InlineChatbox {
     private drawFrame(inputText: string = ''): string[] {
         const lines: string[] = [];
         // Use the configured width (affected by Ctrl+Left/Right resize handlers)
-        const w = this.currentWidth;
+        // Math.max guard prevents negative width edge cases
+        const w = Math.max(10, this.currentWidth);
         const h = this.currentHeight;
 
         // Top border with label (no size hint)
@@ -326,7 +327,8 @@ export class InlineChatbox {
      */
     private render(inputText: string = ''): number {
         // Calculate available width for input
-        const w = process.stdout.columns || 80;
+        // Math.max guard prevents negative width edge cases
+        const w = Math.max(10, process.stdout.columns || 80);
         const innerWidth = w - 4; // Account for "│ " and " │"
         const prompt = this.options.prompt || '> ';
         // Use stringWidth for accurate visual length (handles ANSI, emoji, CJK chars)
