@@ -1124,15 +1124,11 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
             }),
 
             // 4. Continuation warnings - alert agent as it approaches step limit
-            // Use effective step limit that accounts for mode-specific multipliers
-            (() => {
-                const effectiveLimit = getEffectiveStepLimit(mode, this.config.maxToolCalls);
-                return continuationWarning({
-                    warningStep: Math.max(1, effectiveLimit - 5),
-                    criticalStep: Math.max(1, effectiveLimit - 2),
-                    stepLimit: effectiveLimit
-                });
-            })(),
+            continuationWarning({
+                warningStep: Math.max(0, this.config.maxToolCalls - 5),
+                criticalStep: Math.max(0, this.config.maxToolCalls - 2),
+                stepLimit: this.config.maxToolCalls
+            }),
 
             // 5. Mode-specific tool control
             this.createModeSpecificPrepareStep(mode)
