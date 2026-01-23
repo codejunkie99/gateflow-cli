@@ -100,30 +100,34 @@ async function gracefulShutdown(options: ShutdownOptions | number = {}): Promise
     return cleanupSucceeded;
 }
 
-// Register global signal handlers
-process.on('SIGINT', () => {
-    if (isShuttingDown) {
-        process.exit(0);
-    }
-    gracefulShutdown(0);
-});
-process.on('SIGTERM', () => {
-    if (isShuttingDown) {
-        process.exit(0);
-    }
-    gracefulShutdown(0);
-});
+// Register global signal handlers (skip for MCP mode - it has its own shutdown path)
+const isMcpMode = process.argv.includes('mcp');
 
-// Handle uncaught errors gracefully
-process.on('uncaughtException', (error) => {
-    console.error('\nUncaught exception:', error instanceof Error ? error.message : String(error));
-    gracefulShutdown(1);
-});
+if (!isMcpMode) {
+    process.on('SIGINT', () => {
+        if (isShuttingDown) {
+            process.exit(0);
+        }
+        gracefulShutdown(0);
+    });
+    process.on('SIGTERM', () => {
+        if (isShuttingDown) {
+            process.exit(0);
+        }
+        gracefulShutdown(0);
+    });
 
-process.on('unhandledRejection', (reason) => {
-    console.error('\nUnhandled rejection:', reason);
-    gracefulShutdown(1);
-});
+    // Handle uncaught errors gracefully
+    process.on('uncaughtException', (error) => {
+        console.error('\nUncaught exception:', error instanceof Error ? error.message : String(error));
+        gracefulShutdown(1);
+    });
+
+    process.on('unhandledRejection', (reason) => {
+        console.error('\nUnhandled rejection:', reason);
+        gracefulShutdown(1);
+    });
+}
 
 /**
  * Validate required environment variables
