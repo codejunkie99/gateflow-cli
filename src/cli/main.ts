@@ -67,8 +67,18 @@ async function gracefulShutdown(exitCode: number = 0): Promise<void> {
 }
 
 // Register global signal handlers
-process.on('SIGINT', () => gracefulShutdown(0));
-process.on('SIGTERM', () => gracefulShutdown(0));
+process.on('SIGINT', () => {
+    if (isShuttingDown) {
+        process.exit(0);
+    }
+    gracefulShutdown(0);
+});
+process.on('SIGTERM', () => {
+    if (isShuttingDown) {
+        process.exit(0);
+    }
+    gracefulShutdown(0);
+});
 
 // Handle uncaught errors gracefully
 process.on('uncaughtException', (error) => {
