@@ -202,12 +202,10 @@ export class BlessedChatbox {
  */
 export class InlineChatbox {
     private options: Required<ChatboxOptions>;
-    private currentWidth: number;
     private currentHeight: number;
 
     constructor(options?: ChatboxOptions) {
         this.options = { ...DEFAULT_OPTIONS, ...options };
-        this.currentWidth = this.calculateWidth(this.options.width);
         this.currentHeight = this.options.height;
     }
 
@@ -216,40 +214,30 @@ export class InlineChatbox {
      */
     updateOptions(options: Partial<ChatboxOptions>): void {
         this.options = { ...this.options, ...options };
-        if (options.width !== undefined) {
-            this.currentWidth = this.calculateWidth(options.width);
-        }
         if (options.height !== undefined) {
             this.currentHeight = options.height;
         }
     }
 
     /**
-     * Calculate width from number or percentage
+     * Get terminal width
      */
-    private calculateWidth(width: number | string): number {
-        if (typeof width === 'number') {
-            return width;
-        }
-        const percent = parseInt(width) || 100;
-        return Math.floor((process.stdout.columns || 80) * (percent / 100));
+    private getTerminalWidth(): number {
+        return process.stdout.columns || 80;
     }
 
     /**
      * Get current dimensions
      */
     getDimensions(): { width: number; height: number } {
-        return { width: this.currentWidth, height: this.currentHeight };
+        return { width: this.getTerminalWidth(), height: this.currentHeight };
     }
 
     /**
-     * Resize the chatbox
+     * Resize the chatbox height
      */
-    resize(widthDelta: number, heightDelta: number): void {
-        const termWidth = process.stdout.columns || 80;
+    resize(heightDelta: number): void {
         const termHeight = process.stdout.rows || 24;
-
-        this.currentWidth = Math.max(20, Math.min(termWidth - 2, this.currentWidth + widthDelta));
         this.currentHeight = Math.max(3, Math.min(termHeight - 5, this.currentHeight + heightDelta));
     }
 
@@ -341,7 +329,7 @@ export class InlineChatbox {
 
     /**
      * Render a visual box around the input area and get input
-     * Supports resizing with Ctrl+Arrow keys
+     * Supports height resizing with Ctrl+Up/Down keys
      */
     async getInput(): Promise<ChatboxResult> {
         return new Promise((resolve) => {
@@ -376,23 +364,15 @@ export class InlineChatbox {
             const handleKeypress = (str: string | undefined, key: { name: string; ctrl?: boolean; shift?: boolean; sequence?: string }) => {
                 if (!key) return;
 
-                // Resize with Ctrl+Arrow
+                // Resize height with Ctrl+Arrow
                 if (key.ctrl) {
                     switch (key.name) {
                         case 'up':
-                            this.resize(0, -1);
+                            this.resize(-1);
                             redraw();
                             return;
                         case 'down':
-                            this.resize(0, 1);
-                            redraw();
-                            return;
-                        case 'left':
-                            this.resize(-5, 0);
-                            redraw();
-                            return;
-                        case 'right':
-                            this.resize(5, 0);
+                            this.resize(1);
                             redraw();
                             return;
                         case 'c':
