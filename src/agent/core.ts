@@ -182,8 +182,8 @@ export interface ContinuationCheckpoint {
     notes?: string;
     /** Current segment number */
     segmentNumber: number;
-    /** Cumulative steps across all segments */
-    cumulativeSteps: number;
+    /** Cumulative tool calls across all segments */
+    cumulativeToolCalls: number;
 }
 
 /**
@@ -1310,12 +1310,20 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
      * Wraps run() in a loop that handles continuation checkpoints,
      * allowing tasks to complete across multiple segments.
      *
-     * Each segment gets up to maxToolCalls steps. When the agent calls
-     * request_continuation, a new segment starts with fresh step budget.
+     * Each segment gets a step budget determined by the agent's mode:
+     * - Base limit is maxToolCalls (default 25)
+     * - Mode multipliers apply (e.g., debug mode uses 1.5x)
+     * - Actual per-segment steps = getEffectiveStepLimit(mode, maxToolCalls)
+     *
+     * When the agent calls request_continuation, a new segment starts
+     * with a fresh step budget.
      *
      * Supports two modes:
      * - Fixed: Uses maxSegments (default 5) as hard limit
      * - Dynamic: Continues while progress is being made (tasks completing)
+     *
+     * Note: Total steps across all segments can exceed maxSegments * maxToolCalls
+     * when mode multipliers are active.
      *
      * @param userMessage - The user's request
      * @param options - Continuation options including maxSegments or dynamicSegments
@@ -1332,7 +1340,7 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
 
         let accumulatedResponse = '';
         let segmentNumber = 0;
-        let cumulativeSteps = 0;
+        let cumulativeToolCalls = 0;
         let currentMessage = userMessage;
         let previousRemainingCount = Infinity;  // For progress tracking
         let cumulativeCompletedCount = 0;       // Track total completed across segments
@@ -1342,6 +1350,15 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
 
         while (segmentNumber < segmentLimit) {
             segmentNumber++;
+
+            // One-time warning when dynamic mode starts
+            if (isDynamic && segmentNumber === 1) {
+                this.bus.emit({
+                    type: 'status',
+                    phase: 'thinking',
+                    label: `Dynamic continuation enabled (up to ${segmentLimit} segments if making progress)`
+                });
+            }
 
             // Snapshot tool call count at segment start to compute delta later
             const segmentStartToolCalls = this.session.toolCallCount;
@@ -1379,7 +1396,7 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
             // Check for continuation checkpoint
             const checkpoint = this.extractContinuationCheckpoint();
             // Add only the delta (tool calls made in THIS segment), not the session total
-            cumulativeSteps += this.session.toolCallCount - segmentStartToolCalls;
+            cumulativeToolCalls += this.session.toolCallCount - segmentStartToolCalls;
 
             if (!checkpoint || checkpoint.remainingTasks.length === 0) {
                 // Task complete - no continuation requested or no remaining tasks
@@ -1411,7 +1428,7 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
 
             // Update checkpoint with segment info
             checkpoint.segmentNumber = segmentNumber;
-            checkpoint.cumulativeSteps = cumulativeSteps;
+            checkpoint.cumulativeToolCalls = cumulativeToolCalls;
 
             // Emit continuation event
             this.bus.emit({
@@ -1467,8 +1484,14 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
      * Only searches messages from the current segment (since segmentStartMessageIndex).
      */
     private extractContinuationCheckpoint(): ContinuationCheckpoint | null {
+        // If summarization pruned messages during this segment, the saved index may be
+        // out of bounds. Fall back to scanning all messages to ensure we find the checkpoint.
+        const scanStartIndex = this.segmentStartMessageIndex < this.session.messages.length
+            ? this.segmentStartMessageIndex
+            : 0;
+
         // Search only current segment's messages for tool results from request_continuation
-        for (let i = this.session.messages.length - 1; i >= this.segmentStartMessageIndex; i--) {
+        for (let i = this.session.messages.length - 1; i >= scanStartIndex; i--) {
             const msg = this.session.messages[i];
             if (msg.role !== 'tool') continue;
 
@@ -1491,7 +1514,7 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
                             partialResults: typeof output.partialResults === 'string' ? output.partialResults : undefined,
                             notes: typeof output.notes === 'string' ? output.notes : undefined,
                             segmentNumber: 0,
-                            cumulativeSteps: 0
+                            cumulativeToolCalls: 0
                         };
                         return this.lastContinuationCheckpoint;
                     }
@@ -1616,7 +1639,11 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
         }
 
         // Keep the most recent messages
-        const startRecent = Math.max(0, messages.length - keepRecent);
+        let startRecent = Math.max(0, messages.length - keepRecent);
+        // Ensure we don't start on a tool message (which needs its parent assistant)
+        while (startRecent > 0 && messages[startRecent].role === 'tool') {
+            startRecent--;
+        }
         for (let i = startRecent; i < messages.length; i++) {
             keepIndices.add(i);
         }
