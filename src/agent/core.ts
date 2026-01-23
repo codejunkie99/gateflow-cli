@@ -1135,31 +1135,32 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
     private createModeSpecificPrepareStep(mode: PromptMode): PrepareStepFn {
         return ({ stepNumber, steps }) => {
             // Mode-specific tool restrictions
+            // NOTE: request_continuation is always included to support multi-segment execution
             switch (mode) {
                 case 'lint_fix':
                     // For lint fix, prioritize lint and edit tools
                     if (stepNumber === 0) {
-                        return { activeTools: ['lint_file', 'read_file'] };
+                        return { activeTools: ['lint_file', 'read_file', 'request_continuation'] };
                     }
-                    return { activeTools: ['lint_file', 'read_file', 'edit_lines', 'search_replace'] };
+                    return { activeTools: ['lint_file', 'read_file', 'edit_lines', 'search_replace', 'request_continuation'] };
 
                 case 'testbench':
                     // For testbench, focus on read then write
                     if (stepNumber < 2) {
-                        return { activeTools: ['read_file', 'find_module', 'list_files'] };
+                        return { activeTools: ['read_file', 'find_module', 'list_files', 'request_continuation'] };
                     }
-                    return { activeTools: ['write_file', 'read_file', 'run_simulation'] };
+                    return { activeTools: ['write_file', 'read_file', 'run_simulation', 'request_continuation'] };
 
                 case 'generate':
                     // For generation, analyze first then write
                     if (stepNumber < 2) {
-                        return { activeTools: ['read_file', 'find_module', 'list_files', 'search_code'] };
+                        return { activeTools: ['read_file', 'find_module', 'list_files', 'search_code', 'request_continuation'] };
                     }
                     return {}; // All tools available
 
                 case 'debug':
                     // Debug mode - focus on analysis tools
-                    return { activeTools: ['read_file', 'search_code', 'grep_context', 'tail_context', 'lint_file'] };
+                    return { activeTools: ['read_file', 'search_code', 'grep_context', 'tail_context', 'lint_file', 'request_continuation'] };
 
                 default:
                     // General mode - no restrictions
@@ -1296,6 +1297,8 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
 
     /** Last continuation checkpoint from request_continuation tool */
     private lastContinuationCheckpoint: ContinuationCheckpoint | null = null;
+    /** Message index at start of current segment (for scoped checkpoint extraction) */
+    private segmentStartMessageIndex: number = 0;
 
     /**
      * Run the agent with automatic continuation support.
@@ -1327,6 +1330,7 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
         let cumulativeSteps = 0;
         let currentMessage = userMessage;
         let previousRemainingCount = Infinity;  // For progress tracking
+        let cumulativeCompletedCount = 0;       // Track total completed across segments
 
         // Reset continuation tracking
         this.lastContinuationCheckpoint = null;
@@ -1334,9 +1338,14 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
         while (segmentNumber < segmentLimit) {
             segmentNumber++;
 
+            // Snapshot tool call count at segment start to compute delta later
+            const segmentStartToolCalls = this.session.toolCallCount;
+
             // Reset continuation checkpoint at start of each segment to prevent
             // stale checkpoints from previous segments being returned
             this.lastContinuationCheckpoint = null;
+            // Track message boundary for scoped checkpoint extraction
+            this.segmentStartMessageIndex = this.session.messages.length;
 
             const statusLabel = isDynamic
                 ? (segmentNumber > 1 ? `Continuing... (segment ${segmentNumber}, making progress)` : 'Processing...')
@@ -1364,7 +1373,8 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
 
             // Check for continuation checkpoint
             const checkpoint = this.extractContinuationCheckpoint();
-            cumulativeSteps += this.session.toolCallCount;
+            // Add only the delta (tool calls made in THIS segment), not the session total
+            cumulativeSteps += this.session.toolCallCount - segmentStartToolCalls;
 
             if (!checkpoint || checkpoint.remainingTasks.length === 0) {
                 // Task complete - no continuation requested or no remaining tasks
@@ -1374,13 +1384,19 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
             // Progress-based check for dynamic mode
             if (isDynamic) {
                 const currentRemainingCount = checkpoint.remainingTasks.length;
+                const newlyCompleted = checkpoint.completedTasks.length;
+                cumulativeCompletedCount += newlyCompleted;
 
-                if (currentRemainingCount >= previousRemainingCount) {
-                    // No progress - remaining tasks same or increased
+                // Progress is made if: remaining decreased OR tasks were completed this segment
+                const remainingDecreased = currentRemainingCount < previousRemainingCount;
+                const tasksCompleted = newlyCompleted > 0;
+
+                if (!remainingDecreased && !tasksCompleted) {
+                    // No progress - remaining didn't decrease AND no tasks completed
                     this.bus.emit({
                         type: 'status',
                         phase: 'thinking',
-                        label: `No progress detected (${currentRemainingCount} tasks remaining). Stopping.`
+                        label: `No progress detected (${currentRemainingCount} tasks remaining, 0 completed). Stopping.`
                     });
                     break;
                 }
@@ -1402,6 +1418,9 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
             // Callback for progress tracking
             options?.onSegmentComplete?.(checkpoint);
 
+            // Prune old messages to prevent unbounded growth
+            this.pruneSegmentMessages();
+
             // Build continuation prompt for next segment
             currentMessage = this.buildContinuationPrompt(checkpoint, userMessage);
         }
@@ -1421,12 +1440,30 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
     }
 
     /**
+     * Safely coerce an unknown value to a string array.
+     * Handles malformed LLM outputs gracefully:
+     * - Arrays: filters to string elements only
+     * - Strings: wraps in array
+     * - null/undefined/other: returns empty array
+     */
+    private toStringArray(value: unknown): string[] {
+        if (Array.isArray(value)) {
+            return value.filter((item): item is string => typeof item === 'string');
+        }
+        if (typeof value === 'string' && value.trim() !== '') {
+            return [value];
+        }
+        return [];
+    }
+
+    /**
      * Extract continuation checkpoint from the last tool result.
      * Looks for request_continuation tool output with _continuation marker.
+     * Only searches messages from the current segment (since segmentStartMessageIndex).
      */
     private extractContinuationCheckpoint(): ContinuationCheckpoint | null {
-        // Search recent messages for tool results from request_continuation
-        for (let i = this.session.messages.length - 1; i >= 0; i--) {
+        // Search only current segment's messages for tool results from request_continuation
+        for (let i = this.session.messages.length - 1; i >= this.segmentStartMessageIndex; i--) {
             const msg = this.session.messages[i];
             if (msg.role !== 'tool') continue;
 
@@ -1444,10 +1481,10 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
                     const output = toolResult.output as Record<string, unknown> | null;
                     if (output && output._continuation === true) {
                         this.lastContinuationCheckpoint = {
-                            completedTasks: (output.completedTasks as string[]) ?? [],
-                            remainingTasks: (output.remainingTasks as string[]) ?? [],
-                            partialResults: output.partialResults as string | undefined,
-                            notes: output.notes as string | undefined,
+                            completedTasks: this.toStringArray(output.completedTasks),
+                            remainingTasks: this.toStringArray(output.remainingTasks),
+                            partialResults: typeof output.partialResults === 'string' ? output.partialResults : undefined,
+                            notes: typeof output.notes === 'string' ? output.notes : undefined,
                             segmentNumber: 0,
                             cumulativeSteps: 0
                         };
@@ -1486,5 +1523,47 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
 
         // Return focused continuation prompt
         return `Continue with the remaining tasks: ${checkpoint.remainingTasks.join(', ')}`;
+    }
+
+    /**
+     * Prune session messages to prevent unbounded growth across continuation segments.
+     * Keeps: first user message, system messages (continuation context), and recent messages.
+     * @param keepRecent - Number of recent messages to preserve (default: 10)
+     */
+    private pruneSegmentMessages(keepRecent: number = 10): void {
+        const messages = this.session.messages;
+        if (messages.length <= keepRecent + 5) {
+            // Not enough messages to warrant pruning
+            return;
+        }
+
+        // Find indices to keep
+        const keepIndices = new Set<number>();
+
+        // Always keep the first user message (original request)
+        for (let i = 0; i < messages.length; i++) {
+            if (messages[i].role === 'user') {
+                keepIndices.add(i);
+                break;
+            }
+        }
+
+        // Keep all system messages (they contain continuation context)
+        for (let i = 0; i < messages.length; i++) {
+            if (messages[i].role === 'system') {
+                keepIndices.add(i);
+            }
+        }
+
+        // Keep the most recent messages
+        const startRecent = Math.max(0, messages.length - keepRecent);
+        for (let i = startRecent; i < messages.length; i++) {
+            keepIndices.add(i);
+        }
+
+        // Build pruned array
+        const prunedMessages = messages.filter((_, i) => keepIndices.has(i));
+        this.session.messages.length = 0;
+        this.session.messages.push(...prunedMessages);
     }
 }

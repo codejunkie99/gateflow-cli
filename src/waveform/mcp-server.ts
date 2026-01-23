@@ -607,9 +607,33 @@ export class WaveformMCPServer {
         await this.server.connect(transport);
         console.error('[GateFlow MCP] Waveform server v2.0 started');
     }
+
+    /**
+     * Close the MCP server and release resources.
+     */
+    async close(): Promise<void> {
+        try {
+            await this.server.close();
+            this.store.close();
+            console.error('[GateFlow MCP] Server shut down gracefully');
+        } catch (error) {
+            console.error('[GateFlow MCP] Error during shutdown:', error);
+        }
+    }
 }
 
-export async function startMCPServer(): Promise<void> {
+export async function startMCPServer(): Promise<WaveformMCPServer> {
     const server = new WaveformMCPServer();
+
+    // Register signal handlers for graceful shutdown
+    const shutdown = async () => {
+        await server.close();
+        process.exit(0);
+    };
+
+    process.on('SIGINT', shutdown);
+    process.on('SIGTERM', shutdown);
+
     await server.run();
+    return server;
 }

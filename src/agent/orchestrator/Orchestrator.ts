@@ -33,6 +33,7 @@ import {
     type AgentResilienceConfig
 } from './resilience.js';
 import { withAbortableTimeout } from '../../resilience/timeout.js';
+import { ToolTimeoutError } from '../../error/classes.js';
 import { PromptBuilder } from '../prompts/PromptBuilder.js';
 import { metrics } from '../../observability/index.js';
 
@@ -61,8 +62,8 @@ const DEFAULT_ORCHESTRATOR_CONFIG = {
     planningTokenBudget: 2000,
     summaryTokenBudget: 500,
     planConfidenceThreshold: 0.6,
-    /** Default 3 minutes per parallel task - defensive timeout */
-    parallelTaskTimeoutMs: 180000
+    /** Default 5 minutes per parallel task - defensive timeout for complex AI tasks */
+    parallelTaskTimeoutMs: 300000
 };
 
 class OrchestratorAbortError extends Error {
@@ -331,18 +332,38 @@ export class Orchestrator {
             const taskResult = this.createFailedTaskResult(task, error, startTime);
             this.taskResults.set(task.id, taskResult);
 
-            const errorMsg = error instanceof Error ? error.message : String(error);
             const durationMs = Date.now() - startTime;
-            this.bus.emit({
-                type: 'error',
-                message: `Task ${task.id} (${task.agent}) failed after ${durationMs}ms: ${errorMsg}`
-            });
+            const isTimeout = error instanceof ToolTimeoutError;
+
+            if (isTimeout) {
+                // Emit dedicated timeout event for clearer UI feedback
+                this.bus.emit({
+                    type: 'timeout',
+                    taskId: task.id,
+                    agentName: task.agent,
+                    timeoutMs: error.timeoutMs,
+                    durationMs,
+                    message: `Task ${task.id} (${task.agent}) timed out after ${durationMs}ms (limit: ${error.timeoutMs}ms)`
+                });
+
+                // Track timeout metrics
+                metrics.taskTimeouts.inc({ agent: task.agent });
+                metrics.timeoutDuration.observe(durationMs / 1000, { agent: task.agent });
+            } else {
+                // Regular error event
+                const errorMsg = error instanceof Error ? error.message : String(error);
+                this.bus.emit({
+                    type: 'error',
+                    message: `Task ${task.id} (${task.agent}) failed after ${durationMs}ms: ${errorMsg}`
+                });
+            }
 
             this.emitAgentComplete(task, false, undefined, startTime);
 
+            const errorMsg = error instanceof Error ? error.message : String(error);
             this.thinkingChain.addFixingStep(
-                `Task ${task.id} failed: ${errorMsg}`,
-                { task, error: errorMsg },
+                `Task ${task.id} ${isTimeout ? 'timed out' : 'failed'}: ${errorMsg}`,
+                { task, error: errorMsg, isTimeout },
                 0.3
             );
 
@@ -438,18 +459,38 @@ export class Orchestrator {
             const taskResult = this.createFailedTaskResult(task, error, startTime);
             this.taskResults.set(task.id, taskResult);
 
-            const errorMsg = error instanceof Error ? error.message : String(error);
             const durationMs = Date.now() - startTime;
-            this.bus.emit({
-                type: 'error',
-                message: `Task ${task.id} (${task.agent}) failed after ${durationMs}ms: ${errorMsg}`
-            });
+            const isTimeout = error instanceof ToolTimeoutError;
+
+            if (isTimeout) {
+                // Emit dedicated timeout event for clearer UI feedback
+                this.bus.emit({
+                    type: 'timeout',
+                    taskId: task.id,
+                    agentName: task.agent,
+                    timeoutMs: error.timeoutMs,
+                    durationMs,
+                    message: `Task ${task.id} (${task.agent}) timed out after ${durationMs}ms (limit: ${error.timeoutMs}ms)`
+                });
+
+                // Track timeout metrics
+                metrics.taskTimeouts.inc({ agent: task.agent });
+                metrics.timeoutDuration.observe(durationMs / 1000, { agent: task.agent });
+            } else {
+                // Regular error event
+                const errorMsg = error instanceof Error ? error.message : String(error);
+                this.bus.emit({
+                    type: 'error',
+                    message: `Task ${task.id} (${task.agent}) failed after ${durationMs}ms: ${errorMsg}`
+                });
+            }
 
             this.emitAgentComplete(task, false, undefined, startTime);
 
+            const errorMsg = error instanceof Error ? error.message : String(error);
             this.thinkingChain.addFixingStep(
-                `Task ${task.id} failed: ${errorMsg}`,
-                { task, error: errorMsg },
+                `Task ${task.id} ${isTimeout ? 'timed out' : 'failed'}: ${errorMsg}`,
+                { task, error: errorMsg, isTimeout },
                 0.3
             );
 
@@ -935,6 +976,16 @@ export class Orchestrator {
             const task = tasks[i];
 
             const p = (async () => {
+                // Set warning timer at 80% of timeout
+                const warningMs = timeout * 0.8;
+                const warningTimer = setTimeout(() => {
+                    this.bus.emit({
+                        type: 'status',
+                        phase: 'thinking',
+                        label: `Task ${i} running long (${Math.round(warningMs / 1000)}s elapsed, ${Math.round(timeout / 1000)}s limit)...`
+                    });
+                }, warningMs);
+
                 try {
                     // Wrap task with defensive timeout to prevent indefinite hanging
                     const value = await withAbortableTimeout(
@@ -946,6 +997,8 @@ export class Orchestrator {
                     results[i] = { status: 'fulfilled', value };
                 } catch (reason) {
                     results[i] = { status: 'rejected', reason };
+                } finally {
+                    clearTimeout(warningTimer);
                 }
             })();
 

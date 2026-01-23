@@ -456,6 +456,19 @@ export const metrics = {
         'Agent session duration in seconds',
         [60, 300, 600, 1800, 3600]
     ),
+
+    // Timeout metrics
+    taskTimeouts: registry.createCounter(
+        'gateflow_task_timeouts_total',
+        'Total number of task timeouts',
+        ['agent']
+    ),
+    timeoutDuration: registry.createHistogram(
+        'gateflow_timeout_duration_seconds',
+        'Duration at which tasks timed out',
+        [30, 60, 120, 180, 300, 600],
+        ['agent']
+    ),
 };
 
 /**

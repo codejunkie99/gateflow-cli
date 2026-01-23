@@ -337,6 +337,9 @@ export class TerminalRenderer {
             case 'error':
                 this.handleError(event.message, event.code);
                 break;
+            case 'timeout':
+                this.handleTimeout(event.taskId, event.agentName, event.timeoutMs, event.durationMs, event.message);
+                break;
             case 'final':
                 this.handleFinal(event.summary, event.filesModified, event.exitCode);
                 break;
@@ -615,6 +618,15 @@ export class TerminalRenderer {
         if (code !== undefined) {
             this.log(chalk.gray(`   Exit code: ${code}`));
         }
+    }
+
+    private handleTimeout(taskId: string, agentName: string, timeoutMs: number, durationMs: number, message: string): void {
+        this.spinnerFail(`Task timed out`);
+        this.clearStatus();
+        console.log('');
+        this.log(chalk.yellow(`TIMEOUT: ${message}`));
+        this.log(chalk.gray(`   Task: ${taskId} (${agentName})`));
+        this.log(chalk.gray(`   Duration: ${(durationMs / 1000).toFixed(1)}s / Limit: ${(timeoutMs / 1000).toFixed(1)}s`));
     }
 
     private handleFinal(summary: string, filesModified: string[], exitCode: number): void {
