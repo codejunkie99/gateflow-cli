@@ -1557,6 +1557,16 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
             contextSummary.push(`Notes: ${checkpoint.notes}`);
         }
 
+        // Include partial results so agent can continue from intermediate work
+        if (checkpoint.partialResults) {
+            // Truncate to prevent context overflow (keep last 2000 chars)
+            const maxLength = 2000;
+            const partial = checkpoint.partialResults.length > maxLength
+                ? '...' + checkpoint.partialResults.slice(-maxLength)
+                : checkpoint.partialResults;
+            contextSummary.push(`Partial results from previous segment:\n${partial}`);
+        }
+
         this.session.messages.push({
             role: 'system',
             content: contextSummary.join('\n')
