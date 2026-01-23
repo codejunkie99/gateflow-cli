@@ -126,5 +126,35 @@ describe('Loop Control', () => {
             expect(getResult(prepareStep, createStepContext(22)).system).toContain('WARNING');
             expect(getResult(prepareStep, createStepContext(23)).system).toContain('CRITICAL');
         });
+
+        it('should never show negative remaining steps', () => {
+            const prepareStep = continuationWarning({ stepLimit: 25 });
+
+            // At step 26 (past limit), remaining should be clamped to 0
+            const result = getResult(prepareStep, createStepContext(26));
+            expect(result.system).toContain('CRITICAL');
+            expect(result.system).not.toContain('-1');
+            expect(result.system).not.toContain('negative');
+        });
+
+        it('should show special message when step limit is reached', () => {
+            const prepareStep = continuationWarning({ stepLimit: 25, criticalStep: 23 });
+
+            // At exactly step 25, remaining = 0
+            const result = getResult(prepareStep, createStepContext(25));
+            expect(result.system).toContain('Step limit reached');
+            expect(result.system).toContain('IMMEDIATELY');
+            expect(result.system).toContain('25/25');
+        });
+
+        it('should show special message when past step limit', () => {
+            const prepareStep = continuationWarning({ stepLimit: 25, criticalStep: 23 });
+
+            // At step 30 (well past limit)
+            const result = getResult(prepareStep, createStepContext(30));
+            expect(result.system).toContain('Step limit reached');
+            expect(result.system).toContain('30/25');
+            expect(result.system).not.toContain('-5');
+        });
     });
 });
