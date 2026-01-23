@@ -598,10 +598,13 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
 
                 // Use orchestrator for complex requests
                 const orchestratorResult = await this.orchestrator.executeWithPlan(userMessage);
-                this.session.messages.push({
-                    role: 'assistant',
-                    content: orchestratorResult
-                });
+                // Guard against empty content which violates LLM API contracts
+                if (orchestratorResult.trim()) {
+                    this.session.messages.push({
+                        role: 'assistant',
+                        content: orchestratorResult
+                    });
+                }
                 return orchestratorResult;
             }
 
