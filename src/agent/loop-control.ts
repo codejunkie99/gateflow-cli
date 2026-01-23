@@ -162,10 +162,12 @@ export function dynamicModelSelector(config: DynamicModelSelectorConfig): Prepar
         const isComplex = stepNumber > complexityThreshold || messages.length > messageThreshold;
 
         // Check if previous steps had errors
+        // Normalize tool result access: AI SDK v6 uses 'output', older versions use 'result'
         const hadErrors = steps.some((step: any) =>
-            step.toolResults?.some((r: any) =>
-                typeof r.result === 'object' && r.result !== null && 'error' in r.result
-            )
+            step.toolResults?.some((r: any) => {
+                const result = 'output' in r ? r.output : r.result;
+                return typeof result === 'object' && result !== null && 'error' in result;
+            })
         );
 
         if (isComplex || hadErrors) {

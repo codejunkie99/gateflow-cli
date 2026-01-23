@@ -1123,8 +1123,8 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
             (() => {
                 const effectiveLimit = getEffectiveStepLimit(mode, this.config.maxToolCalls);
                 return continuationWarning({
-                    warningStep: Math.max(0, effectiveLimit - 5),
-                    criticalStep: Math.max(0, effectiveLimit - 2),
+                    warningStep: Math.max(1, effectiveLimit - 5),
+                    criticalStep: Math.max(1, effectiveLimit - 2),
                     stepLimit: effectiveLimit
                 });
             })(),
@@ -1304,8 +1304,6 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
     private lastContinuationCheckpoint: ContinuationCheckpoint | null = null;
     /** Message index at start of current segment (for scoped checkpoint extraction) */
     private segmentStartMessageIndex: number = 0;
-    /** Index of the original user request (not context injection) for pruning */
-    private originalUserRequestIndex: number = -1;
 
     /**
      * Run the agent with automatic continuation support.
@@ -1341,10 +1339,6 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
 
         // Reset continuation tracking
         this.lastContinuationCheckpoint = null;
-
-        // Track the original user request index (will be set on first segment)
-        // This is the index where run() will add the user message
-        this.originalUserRequestIndex = this.session.messages.length;
 
         while (segmentNumber < segmentLimit) {
             segmentNumber++;
@@ -1518,7 +1512,7 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
     ): string {
         // Add continuation context as system message
         const contextSummary = [
-            `[Continuation - Segment ${checkpoint.segmentNumber + 1}]`,
+            `[Continuation - Segment ${checkpoint.segmentNumber}]`,
             `Completed: ${checkpoint.completedTasks.join(', ')}`,
             `Remaining: ${checkpoint.remainingTasks.join(', ')}`
         ];
@@ -1569,19 +1563,14 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
         const keepIndices = new Set<number>();
 
         // Always keep the original user request (not context injection)
-        // Use tracked index if valid, otherwise fall back to first non-context user message
-        if (this.originalUserRequestIndex >= 0 && this.originalUserRequestIndex < messages.length) {
-            keepIndices.add(this.originalUserRequestIndex);
-        } else {
-            // Fallback: find first user message that isn't a context injection
-            for (let i = 0; i < messages.length; i++) {
-                if (messages[i].role === 'user') {
-                    const msgContent = messages[i].content;
-                    const content = typeof msgContent === 'string' ? msgContent : '';
-                    if (!content.startsWith('[Context]:')) {
-                        keepIndices.add(i);
-                        break;
-                    }
+        // Find by content rather than numeric index since indices shift after each prune
+        for (let i = 0; i < messages.length; i++) {
+            if (messages[i].role === 'user') {
+                const msgContent = messages[i].content;
+                const content = typeof msgContent === 'string' ? msgContent : '';
+                if (!content.startsWith('[Context]:')) {
+                    keepIndices.add(i);
+                    break;
                 }
             }
         }
