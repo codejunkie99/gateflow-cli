@@ -37,6 +37,9 @@ import { ToolTimeoutError } from '../../error/classes.js';
 import { PromptBuilder } from '../prompts/PromptBuilder.js';
 import { metrics } from '../../observability/index.js';
 
+/** Max safe value for setTimeout (~24.8 days) - larger values cause platform-dependent overflow */
+const MAX_SAFE_TIMEOUT_MS = 2_147_483_647;
+
 interface TaskExecutionOutput {
     output: string;
     usage?: { inputTokens?: number; outputTokens?: number };
@@ -121,8 +124,12 @@ export class Orchestrator {
             summaryTokenBudget:
                 config?.summaryTokenBudget ?? DEFAULT_ORCHESTRATOR_CONFIG.summaryTokenBudget,
             planConfidenceThreshold,
-            parallelTaskTimeoutMs:
-                config?.parallelTaskTimeoutMs ?? DEFAULT_ORCHESTRATOR_CONFIG.parallelTaskTimeoutMs
+            parallelTaskTimeoutMs: Math.min(
+                Number.isFinite(config?.parallelTaskTimeoutMs)
+                    ? Math.max(1, config!.parallelTaskTimeoutMs!)
+                    : DEFAULT_ORCHESTRATOR_CONFIG.parallelTaskTimeoutMs,
+                MAX_SAFE_TIMEOUT_MS
+            )
         };
 
         this.resilienceLayer = new AgentResilienceLayer(bus, config?.resilience);
@@ -979,16 +986,16 @@ export class Orchestrator {
     ): Promise<PromiseSettledResult<T>[]> {
         const results: PromiseSettledResult<T>[] = new Array(tasks.length);
         const executing = new Set<Promise<void>>();
-        const timeout = taskTimeoutMs ?? this.config.parallelTaskTimeoutMs;
+        // Clamp timeout to max safe setTimeout value to prevent overflow
+        const rawTimeout = taskTimeoutMs ?? this.config.parallelTaskTimeoutMs;
+        const timeout = Math.min(rawTimeout, MAX_SAFE_TIMEOUT_MS);
 
         for (let i = 0; i < tasks.length; i++) {
             const { id: taskId, agent, fn } = tasks[i];
 
             const p = (async () => {
                 // Set warning timer at 80% of timeout
-                // Clamp to max safe setTimeout delay (~24.8 days) to prevent overflow
-                const MAX_SAFE_TIMEOUT = 2_147_483_647;
-                const warningMs = Math.min(timeout * 0.8, MAX_SAFE_TIMEOUT);
+                const warningMs = timeout * 0.8;
                 const warningTimer = setTimeout(() => {
                     this.bus.emit({
                         type: 'status',
