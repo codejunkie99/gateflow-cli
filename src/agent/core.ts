@@ -594,7 +594,12 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
                 });
 
                 // Use orchestrator for complex requests
-                return this.orchestrator.executeWithPlan(userMessage);
+                const orchestratorResult = await this.orchestrator.executeWithPlan(userMessage);
+                this.session.messages.push({
+                    role: 'assistant',
+                    content: orchestratorResult
+                });
+                return orchestratorResult;
             }
 
             // ========================================================================
