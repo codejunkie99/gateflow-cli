@@ -441,8 +441,18 @@ export function continuationWarning(config: ContinuationWarningConfig = {}): Pre
     } = config;
 
     return ({ stepNumber }) => {
+        // Clamp remaining to 0 to avoid negative step counts in messages
+        const remaining = Math.max(0, stepLimit - stepNumber);
+
         if (stepNumber >= criticalStep) {
-            const remaining = stepLimit - stepNumber;
+            // Special message when at or past the limit
+            if (remaining === 0) {
+                return {
+                    system: `\n\n**CRITICAL**: Step limit reached (${stepNumber}/${stepLimit}). ` +
+                        `You MUST use the request_continuation tool IMMEDIATELY to checkpoint your progress. ` +
+                        `Include completedTasks (what you've done), remainingTasks (what's left), and notes (key context).`
+                };
+            }
             return {
                 system: `\n\n**CRITICAL**: You have ${remaining} step${remaining !== 1 ? 's' : ''} remaining. ` +
                     `You MUST use the request_continuation tool NOW to checkpoint your progress. ` +
@@ -451,7 +461,6 @@ export function continuationWarning(config: ContinuationWarningConfig = {}): Pre
         }
 
         if (stepNumber >= warningStep) {
-            const remaining = stepLimit - stepNumber;
             return {
                 system: `\n\n**WARNING**: Approaching step limit (${stepNumber}/${stepLimit}, ${remaining} remaining). ` +
                     `If you have more work to do, use the request_continuation tool to checkpoint progress before reaching the limit.`
