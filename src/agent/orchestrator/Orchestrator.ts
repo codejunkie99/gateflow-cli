@@ -429,10 +429,12 @@ export class Orchestrator {
         this.abortControllers.set(task.id, controller);
 
         // Chain external signal to our controller
+        // Hoist abortHandler so it can be cleaned up in finally
+        let abortHandler: (() => void) | null = null;
         if (signal.aborted) {
             controller.abort();
         } else {
-            const abortHandler = () => {
+            abortHandler = () => {
                 controller.abort();
                 this.bus.emit({
                     type: 'status',
@@ -501,7 +503,10 @@ export class Orchestrator {
             throw error;
         } finally {
             this.abortControllers.delete(task.id);
-            // No need to remove listener - it was registered with { once: true }
+            // Always remove listener - { once: true } only auto-removes if it fires
+            if (abortHandler) {
+                signal.removeEventListener('abort', abortHandler);
+            }
         }
     }
 
