@@ -82,7 +82,7 @@ process.on('SIGTERM', () => {
 
 // Handle uncaught errors gracefully
 process.on('uncaughtException', (error) => {
-    console.error('\nUncaught exception:', error.message);
+    console.error('\nUncaught exception:', error instanceof Error ? error.message : String(error));
     gracefulShutdown(1);
 });
 
