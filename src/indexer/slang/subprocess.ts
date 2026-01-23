@@ -195,12 +195,13 @@ async function execSlang(
       shell: false,
     });
 
-    // Handle abort signal (use { once: true } to avoid memory leak)
+    // Handle abort signal
+    const abortHandler = () => {
+      killed = true;
+      proc.kill('SIGTERM');
+    };
     if (signal) {
-      signal.addEventListener('abort', () => {
-        killed = true;
-        proc.kill('SIGTERM');
-      }, { once: true });
+      signal.addEventListener('abort', abortHandler);
     }
 
     // Set timeout
@@ -224,12 +225,14 @@ async function execSlang(
     // Handle errors
     proc.on('error', (err) => {
       if (timeoutId) clearTimeout(timeoutId);
+      if (signal) signal.removeEventListener('abort', abortHandler);
       reject(new Error(`Failed to execute slang: ${err.message}`));
     });
 
     // Handle completion
     proc.on('close', (exitCode) => {
       if (timeoutId) clearTimeout(timeoutId);
+      if (signal) signal.removeEventListener('abort', abortHandler);
 
       resolve({
         exitCode,
