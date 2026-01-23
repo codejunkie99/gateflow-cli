@@ -45,6 +45,7 @@ import {
 import {
     stopWhenAny,
     continuationRequested,
+    getEffectiveStepLimit,
     type StopCondition
 } from './stop-conditions.js';
 import type { RuntimeCallOptions } from '../types/agent-types.js';
@@ -1118,11 +1119,15 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
             }),
 
             // 4. Continuation warnings - alert agent as it approaches step limit
-            continuationWarning({
-                warningStep: 20,
-                criticalStep: 23,
-                stepLimit: this.config.maxToolCalls
-            }),
+            // Use effective step limit that accounts for mode-specific multipliers
+            (() => {
+                const effectiveLimit = getEffectiveStepLimit(mode, this.config.maxToolCalls);
+                return continuationWarning({
+                    warningStep: Math.max(0, effectiveLimit - 5),
+                    criticalStep: Math.max(0, effectiveLimit - 2),
+                    stepLimit: effectiveLimit
+                });
+            })(),
 
             // 5. Mode-specific tool control
             this.createModeSpecificPrepareStep(mode)

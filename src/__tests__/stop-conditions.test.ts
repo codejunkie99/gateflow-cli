@@ -19,6 +19,8 @@ import {
     durationExceeded,
     createModeStopCondition,
     continuationRequested,
+    getEffectiveStepLimit,
+    getModeStepMultiplier,
     type StopConditionContext
 } from '../agent/stop-conditions.js';
 
@@ -466,6 +468,53 @@ describe('Stop Conditions', () => {
             // General mode uses stepCountIs which we can't easily test here
             // but we can verify it returns a function
             expect(typeof condition).toBe('function');
+        });
+
+        it('should apply step multiplier for debug mode', () => {
+            // debug mode has 1.5x multiplier, so stepLimit 10 becomes 15
+            const condition = createModeStopCondition({ mode: 'debug', stepLimit: 10 });
+            expect(typeof condition).toBe('function');
+            // The condition should allow 15 steps (10 * 1.5)
+            // We can't easily test the internal limit, but getEffectiveStepLimit is tested separately
+        });
+    });
+
+    describe('getEffectiveStepLimit', () => {
+        it('should return base limit for modes without multiplier', () => {
+            expect(getEffectiveStepLimit('general', 25)).toBe(25);
+            expect(getEffectiveStepLimit('lint_fix', 25)).toBe(25);
+        });
+
+        it('should apply 1.5x multiplier for debug mode', () => {
+            expect(getEffectiveStepLimit('debug', 25)).toBe(38); // ceil(25 * 1.5) = 38
+            expect(getEffectiveStepLimit('debug', 20)).toBe(30); // ceil(20 * 1.5) = 30
+        });
+
+        it('should apply 1.3x multiplier for edit mode', () => {
+            expect(getEffectiveStepLimit('edit', 25)).toBe(33); // ceil(25 * 1.3) = 33
+            expect(getEffectiveStepLimit('edit', 10)).toBe(13); // ceil(10 * 1.3) = 13
+        });
+
+        it('should apply 1.2x multiplier for testbench mode', () => {
+            expect(getEffectiveStepLimit('testbench', 25)).toBe(30); // ceil(25 * 1.2) = 30
+        });
+
+        it('should apply 1.1x multiplier for generate mode', () => {
+            expect(getEffectiveStepLimit('generate', 25)).toBe(28); // ceil(25 * 1.1) = 28
+        });
+    });
+
+    describe('getModeStepMultiplier', () => {
+        it('should return 1 for modes without multiplier', () => {
+            expect(getModeStepMultiplier('general')).toBe(1);
+            expect(getModeStepMultiplier('lint_fix')).toBe(1);
+        });
+
+        it('should return correct multipliers for each mode', () => {
+            expect(getModeStepMultiplier('debug')).toBe(1.5);
+            expect(getModeStepMultiplier('edit')).toBe(1.3);
+            expect(getModeStepMultiplier('testbench')).toBe(1.2);
+            expect(getModeStepMultiplier('generate')).toBe(1.1);
         });
     });
 
