@@ -976,8 +976,13 @@ export class Orchestrator {
     }
 
     /**
-     * Execute tasks in parallel with concurrency limit and per-task timeout
-     * Issue #13 fix: Added defensive per-task timeout to prevent hanging
+     * Execute tasks in parallel with concurrency limit and per-task timeout.
+     * Issue #13 fix: Added defensive per-task timeout to prevent hanging.
+     *
+     * @param tasks - Task descriptors with id/agent for logging and fn for execution.
+     *                The fn receives an AbortSignal for timeout cancellation.
+     * @param concurrencyLimit - Max concurrent tasks
+     * @param taskTimeoutMs - Per-task timeout (defaults to config.parallelTaskTimeoutMs)
      */
     private async executeParallelWithLimit<T>(
         tasks: Array<{ id: string; agent: string; fn: (signal: AbortSignal) => Promise<T> }>,
