@@ -1,5 +1,5 @@
 /**
- * Dynamic Context Discovery Module
+ * Context Management Module
  *
  * Context optimization strategies:
  * 1. Long Tool Responses as Files - 30-40% for verification sessions
@@ -7,7 +7,9 @@
  * 3. Token Budget Management - Pre-flight context estimation
  * 4. File Chunking - AST-based large file handling
  *
- * Core principle: Files as the universal context primitive
+ * Note: SkillManager, ToolDescriptionManager, and SemanticSummarizer
+ * were removed in favor of AI SDK 6 native features (pruneMessages,
+ * prepareStep, contextWindowManager).
  */
 
 // Types
