@@ -364,7 +364,8 @@ export function createBudgetController(config: BudgetControllerConfig): BudgetCo
 
 /**
  * Combine multiple prepareStep functions.
- * Later functions override earlier ones for conflicting keys.
+ * Later functions override earlier ones for conflicting keys,
+ * EXCEPT for 'system' which is concatenated to preserve all injected prompts.
  *
  * @example
  * const agent = new ToolLoopAgent({
@@ -378,10 +379,22 @@ export function createBudgetController(config: BudgetControllerConfig): BudgetCo
 export function combinePrepareSteps(...fns: PrepareStepFn[]): PrepareStepFn {
     return async (context) => {
         let settings: StepSettings = {};
+        const systemParts: string[] = [];
 
         for (const fn of fns) {
             const result = await fn(context);
-            settings = { ...settings, ...result };
+            // Collect system prompts separately for concatenation
+            if (result.system) {
+                systemParts.push(result.system);
+            }
+            // Spread other properties (override behavior)
+            const { system: _system, ...rest } = result;
+            settings = { ...settings, ...rest };
+        }
+
+        // Concatenate all system prompts if any were provided
+        if (systemParts.length > 0) {
+            settings.system = systemParts.join('');
         }
 
         return settings;

@@ -144,6 +144,18 @@ export interface WaveformAnalysisEvent {
 }
 
 /**
+ * Timeout events - distinct from errors for clearer UI feedback
+ */
+export interface TimeoutEvent {
+    type: 'timeout';
+    taskId: string;
+    agentName: string;
+    timeoutMs: number;
+    durationMs: number;
+    message: string;
+}
+
+/**
  * Completion events
  */
 export interface ErrorEvent {
@@ -303,6 +315,8 @@ export type UiEvent =
     // Setup
     | SetupStageEvent
     | PrereqInstallStageEvent
+    // Timeout
+    | TimeoutEvent
     // Completion
     | ErrorEvent
     | FinalEvent
@@ -337,6 +351,10 @@ export function isApprovalEvent(event: UiEvent): event is ApprovalRequestEvent |
 
 export function isErrorEvent(event: UiEvent): event is ErrorEvent {
     return event.type === 'error';
+}
+
+export function isTimeoutEvent(event: UiEvent): event is TimeoutEvent {
+    return event.type === 'timeout';
 }
 
 export function isWaveformEvent(event: UiEvent): event is WaveformLoadedEvent | WaveformAnalysisEvent {

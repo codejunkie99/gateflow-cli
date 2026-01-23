@@ -33,20 +33,36 @@ import { hasAnyProvider, PROVIDERS } from '../agent/model-provider.js';
 // ============================================================================
 
 let isShuttingDown = false;
+const SHUTDOWN_TIMEOUT_MS = 5000;
+
+interface ShutdownOptions {
+    /** Exit code (default: 0) */
+    exitCode?: number;
+    /** Whether to call process.exit after cleanup (default: true) */
+    shouldExit?: boolean;
+}
 
 /**
- * Clean up all resources gracefully
+ * Clean up all resources gracefully with timeout protection.
+ * @param options - Shutdown configuration
+ * @returns true if cleanup completed, false if timed out
  */
-async function gracefulShutdown(exitCode: number = 0): Promise<void> {
-    if (isShuttingDown) return;
+async function gracefulShutdown(options: ShutdownOptions | number = {}): Promise<boolean> {
+    // Support legacy signature: gracefulShutdown(exitCode)
+    const opts: ShutdownOptions = typeof options === 'number'
+        ? { exitCode: options }
+        : options;
+    const { exitCode = 0, shouldExit = true } = opts;
+
+    if (isShuttingDown) return true;
     isShuttingDown = true;
 
     // Give a brief moment for any pending I/O
     await new Promise(resolve => setTimeout(resolve, 50));
 
-    const currentContext = getCurrentContext();
-    if (currentContext) {
-        try {
+    const cleanup = async (): Promise<void> => {
+        const currentContext = getCurrentContext();
+        if (currentContext) {
             // Stop renderer (unsubscribes from bus, clears timers)
             currentContext.renderer?.stop();
 
@@ -58,12 +74,30 @@ async function gracefulShutdown(exitCode: number = 0): Promise<void> {
 
             // Clear event bus (removes all listeners, clears pending approvals)
             currentContext.bus?.clear();
-        } catch {
-            // Ignore errors during shutdown
         }
+    };
+
+    const timeout = new Promise<'timeout'>(resolve =>
+        setTimeout(() => resolve('timeout'), SHUTDOWN_TIMEOUT_MS)
+    );
+
+    let cleanupSucceeded = true;
+    try {
+        const result = await Promise.race([cleanup(), timeout]);
+        if (result === 'timeout') {
+            console.error('\nShutdown timed out, forcing exit...');
+            cleanupSucceeded = false;
+        }
+    } catch {
+        // Ignore errors during shutdown
+        cleanupSucceeded = false;
     }
 
-    process.exit(exitCode);
+    if (shouldExit) {
+        process.exit(exitCode);
+    }
+
+    return cleanupSucceeded;
 }
 
 // Register global signal handlers

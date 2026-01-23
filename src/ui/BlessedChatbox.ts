@@ -203,6 +203,8 @@ export class BlessedChatbox {
 export class InlineChatbox {
     private options: Required<ChatboxOptions>;
     private currentHeight: number;
+    /** Track whether cursor is positioned inside the rendered box */
+    private cursorInBox: boolean = false;
 
     constructor(options?: ChatboxOptions) {
         this.options = { ...DEFAULT_OPTIONS, ...options };
@@ -294,6 +296,17 @@ export class InlineChatbox {
      * Clear the drawn box
      */
     private clearBox(lineCount: number): void {
+        if (!this.cursorInBox) {
+            // Cursor not in expected position - just clear from current position
+            for (let i = 0; i < lineCount + 1; i++) {
+                process.stdout.write('\x1B[2K'); // Clear line
+                if (i < lineCount) {
+                    process.stdout.write('\x1B[1A'); // Move up
+                }
+            }
+            return;
+        }
+
         const h = lineCount;
         // Cursor is inside the box (h-1 lines from bottom), move to bottom first
         process.stdout.write(`\x1B[${h - 1}B`); // Move down to bottom
@@ -305,6 +318,7 @@ export class InlineChatbox {
             process.stdout.write('\x1B[1A'); // Move up
         }
         process.stdout.write('\x1B[2K'); // Clear the top line too
+        this.cursorInBox = false;
     }
 
     /**
@@ -332,6 +346,7 @@ export class InlineChatbox {
         process.stdout.write(`\x1B[${cursorY}A`); // Move up
         process.stdout.write(`\x1B[${cursorX}G`); // Move to column
 
+        this.cursorInBox = true;
         return lines.length;
     }
 
