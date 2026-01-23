@@ -196,7 +196,7 @@ program
         // MCP command needs clean stdin/stdout for JSON-RPC protocol
         // Check both the command name and raw args (for when preAction fires with program)
         const commandName = thisCommand.name();
-        const isMcpCommand = commandName === 'mcp' || process.argv.includes('mcp');
+        const isMcpCommand = commandName === 'mcp' || process.argv[2] === 'mcp';
 
         // Show banner unless JSON mode or MCP mode
         if (!opts.json && !isMcpCommand) {
