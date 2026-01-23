@@ -184,6 +184,8 @@ export interface ContinuationCheckpoint {
     segmentNumber: number;
     /** Cumulative tool calls across all segments */
     cumulativeToolCalls: number;
+    /** Cumulative completed tasks across all segments */
+    cumulativeCompletedTasks: number;
 }
 
 /**
@@ -1403,11 +1405,13 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
                 break;
             }
 
+            // Track cumulative completed tasks across all segments (for both modes)
+            const newlyCompleted = checkpoint.completedTasks.length;
+            cumulativeCompletedCount += newlyCompleted;
+
             // Progress-based check for dynamic mode
             if (isDynamic) {
                 const currentRemainingCount = checkpoint.remainingTasks.length;
-                const newlyCompleted = checkpoint.completedTasks.length;
-                cumulativeCompletedCount += newlyCompleted;
 
                 // Progress is made if: remaining decreased OR tasks were completed this segment
                 const remainingDecreased = currentRemainingCount < previousRemainingCount;
@@ -1429,6 +1433,7 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
             // Update checkpoint with segment info
             checkpoint.segmentNumber = segmentNumber;
             checkpoint.cumulativeToolCalls = cumulativeToolCalls;
+            checkpoint.cumulativeCompletedTasks = cumulativeCompletedCount;
 
             // Emit continuation event
             this.bus.emit({
@@ -1514,7 +1519,8 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
                             partialResults: typeof output.partialResults === 'string' ? output.partialResults : undefined,
                             notes: typeof output.notes === 'string' ? output.notes : undefined,
                             segmentNumber: 0,
-                            cumulativeToolCalls: 0
+                            cumulativeToolCalls: 0,
+                            cumulativeCompletedTasks: 0
                         };
                         return this.lastContinuationCheckpoint;
                     }
