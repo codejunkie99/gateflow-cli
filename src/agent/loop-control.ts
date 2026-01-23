@@ -421,11 +421,9 @@ export interface ContinuationWarningConfig {
  * )
  */
 export function continuationWarning(config: ContinuationWarningConfig = {}): PrepareStepFn {
-    const {
-        warningStep = 20,
-        criticalStep = 23,
-        stepLimit = 25
-    } = config;
+    const stepLimit = config.stepLimit ?? 25;
+    const warningStep = config.warningStep ?? stepLimit - 5;
+    const criticalStep = config.criticalStep ?? stepLimit - 2;
 
     return ({ stepNumber }) => {
         if (stepNumber >= criticalStep) {
