@@ -8,6 +8,7 @@
 import blessed from 'blessed';
 import chalk from 'chalk';
 import readline from 'readline';
+import stringWidth from 'string-width';
 
 export interface ChatboxOptions {
     /** Width of the chatbox (number or percentage string like '80%') */
@@ -196,7 +197,6 @@ export class BlessedChatbox {
  *
  * Keyboard shortcuts:
  * - Ctrl+Up/Down: Resize height
- * - Ctrl+Left/Right: Resize width
  * - Enter: Submit input
  * - Escape: Cancel
  */
@@ -325,23 +325,34 @@ export class InlineChatbox {
      * Render the box and position cursor inside
      */
     private render(inputText: string = ''): number {
-        // Truncate input text to prevent wrapping past terminal width
+        // Calculate available width for input
         const w = process.stdout.columns || 80;
         const innerWidth = w - 4; // Account for "│ " and " │"
         const prompt = this.options.prompt || '> ';
-        const maxInputLength = innerWidth - prompt.length;
-        const truncatedInput = inputText.slice(0, Math.max(0, maxInputLength));
+        // Use stringWidth for accurate visual length (handles ANSI, emoji, CJK chars)
+        const visualPromptLength = stringWidth(prompt);
+        const maxInputWidth = innerWidth - visualPromptLength;
 
-        const lines = this.drawFrame(truncatedInput);
+        // Truncate input by visual width, not character count
+        let truncatedInput = inputText;
+        let isTruncated = false;
+        while (stringWidth(truncatedInput) > maxInputWidth && truncatedInput.length > 0) {
+            truncatedInput = truncatedInput.slice(0, -1);
+            isTruncated = true;
+        }
+
+        // Show truncation indicator if input was cut off
+        const displayInput = isTruncated && truncatedInput.length > 0
+            ? truncatedInput.slice(0, -1) + '…'
+            : truncatedInput;
+
+        const lines = this.drawFrame(displayInput);
         console.log(lines.join('\n'));
 
         // Position cursor inside the box (on the input line)
         const h = this.currentHeight;
-        // Move cursor up to the first content line (h-1 lines up from bottom)
-        // Then move right to after "│ " + prompt + inputText
-        // Strip ANSI escape codes to get visual length (codes like colors from chalk are invisible)
-        const visualPromptLength = prompt.replace(/\x1B\[[0-9;]*[a-zA-Z]/g, '').length;
-        const cursorX = 2 + visualPromptLength + truncatedInput.length + 1; // +1 for the space after "│"
+        // Use stringWidth for accurate cursor positioning with multi-byte chars
+        const cursorX = 2 + visualPromptLength + stringWidth(displayInput) + 1; // +1 for the space after "│"
         const cursorY = h - 1; // lines to move up from current position
         process.stdout.write(`\x1B[${cursorY}A`); // Move up
         process.stdout.write(`\x1B[${cursorX}G`); // Move to column
