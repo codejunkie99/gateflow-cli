@@ -388,5 +388,66 @@ export function combinePrepareSteps(...fns: PrepareStepFn[]): PrepareStepFn {
     };
 }
 
+// ============================================================================
+// Continuation System
+// ============================================================================
+
+/**
+ * Configuration for continuation warning injection.
+ */
+export interface ContinuationWarningConfig {
+    /** Step number to start showing warning (default: 20) */
+    warningStep?: number;
+    /** Step number to show critical warning (default: 23) */
+    criticalStep?: number;
+    /** Total step limit for reference in messages (default: 25) */
+    stepLimit?: number;
+}
+
+/**
+ * Injects continuation warnings into the system prompt as the agent approaches step limits.
+ * Warns at warningStep (default 20), escalates to critical at criticalStep (default 23).
+ *
+ * This prepareStep function appends to the system prompt to remind the agent
+ * to call `request_continuation` before hitting the hard limit.
+ *
+ * @param config - Warning configuration
+ * @returns PrepareStep function that injects warnings
+ *
+ * @example
+ * prepareStep: combinePrepareSteps(
+ *     contextWindowManager({ maxMessages: 40 }),
+ *     continuationWarning({ warningStep: 20, criticalStep: 23 })
+ * )
+ */
+export function continuationWarning(config: ContinuationWarningConfig = {}): PrepareStepFn {
+    const {
+        warningStep = 20,
+        criticalStep = 23,
+        stepLimit = 25
+    } = config;
+
+    return ({ stepNumber }) => {
+        if (stepNumber >= criticalStep) {
+            const remaining = stepLimit - stepNumber;
+            return {
+                system: `\n\n**CRITICAL**: You have ${remaining} step${remaining !== 1 ? 's' : ''} remaining. ` +
+                    `You MUST use the request_continuation tool NOW to checkpoint your progress. ` +
+                    `Include completedTasks (what you've done), remainingTasks (what's left), and notes (key context).`
+            };
+        }
+
+        if (stepNumber >= warningStep) {
+            const remaining = stepLimit - stepNumber;
+            return {
+                system: `\n\n**WARNING**: Approaching step limit (${stepNumber}/${stepLimit}, ${remaining} remaining). ` +
+                    `If you have more work to do, use the request_continuation tool to checkpoint progress before reaching the limit.`
+            };
+        }
+
+        return {};
+    };
+}
+
 // Re-export stepCountIs for convenience
 export { stepCountIs };

@@ -18,6 +18,7 @@ import {
     alwaysStop,
     durationExceeded,
     createModeStopCondition,
+    continuationRequested,
     type StopConditionContext
 } from '../agent/stop-conditions.js';
 
@@ -504,6 +505,112 @@ describe('Stop Conditions', () => {
                 () => false // step limit not hit
             );
             expect(onlyBudgetCondition(budgetContext)).toBe(false);
+        });
+    });
+
+    describe('continuationRequested', () => {
+        it('should return true when request_continuation tool returns with _continuation marker', () => {
+            const condition = continuationRequested();
+            const context = createContext({
+                steps: [{
+                    toolResults: [
+                        {
+                            toolName: 'request_continuation',
+                            result: {
+                                _continuation: true,
+                                completedTasks: ['task1', 'task2'],
+                                remainingTasks: ['task3']
+                            }
+                        }
+                    ]
+                }]
+            });
+            expect(condition(context)).toBe(true);
+        });
+
+        it('should return false when request_continuation lacks _continuation marker', () => {
+            const condition = continuationRequested();
+            const context = createContext({
+                steps: [{
+                    toolResults: [
+                        {
+                            toolName: 'request_continuation',
+                            result: {
+                                completedTasks: ['task1'],
+                                remainingTasks: ['task2']
+                            }
+                        }
+                    ]
+                }]
+            });
+            expect(condition(context)).toBe(false);
+        });
+
+        it('should return false for other tools with _continuation marker', () => {
+            const condition = continuationRequested();
+            const context = createContext({
+                steps: [{
+                    toolResults: [
+                        {
+                            toolName: 'some_other_tool',
+                            result: { _continuation: true }
+                        }
+                    ]
+                }]
+            });
+            expect(condition(context)).toBe(false);
+        });
+
+        it('should return false when no tool results exist', () => {
+            const condition = continuationRequested();
+            expect(condition(createContext())).toBe(false);
+            expect(condition(createContext({ steps: [] }))).toBe(false);
+        });
+
+        it('should return false when result is null', () => {
+            const condition = continuationRequested();
+            const context = createContext({
+                steps: [{
+                    toolResults: [
+                        { toolName: 'request_continuation', result: null }
+                    ]
+                }]
+            });
+            expect(condition(context)).toBe(false);
+        });
+
+        it('should return false when result is not an object', () => {
+            const condition = continuationRequested();
+            const context = createContext({
+                steps: [{
+                    toolResults: [
+                        { toolName: 'request_continuation', result: 'string result' }
+                    ]
+                }]
+            });
+            expect(condition(context)).toBe(false);
+        });
+
+        it('should detect continuation in any step', () => {
+            const condition = continuationRequested();
+            const context = createContext({
+                steps: [
+                    {
+                        toolResults: [
+                            { toolName: 'read_file', result: { content: 'file content' } }
+                        ]
+                    },
+                    {
+                        toolResults: [
+                            {
+                                toolName: 'request_continuation',
+                                result: { _continuation: true, remainingTasks: [] }
+                            }
+                        ]
+                    }
+                ]
+            });
+            expect(condition(context)).toBe(true);
         });
     });
 });
