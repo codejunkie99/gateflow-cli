@@ -626,13 +626,14 @@ export async function startMCPServer(): Promise<WaveformMCPServer> {
     const server = new WaveformMCPServer();
 
     // Register signal handlers for graceful shutdown
+    // Use process.once() to prevent duplicate handlers if called multiple times
     const shutdown = async () => {
         await server.close();
         process.exit(0);
     };
 
-    process.on('SIGINT', shutdown);
-    process.on('SIGTERM', shutdown);
+    process.once('SIGINT', shutdown);
+    process.once('SIGTERM', shutdown);
 
     await server.run();
     return server;
