@@ -225,7 +225,7 @@ export class Orchestrator {
                 }
             } else {
                 const levelResults = await this.executeParallelWithLimit(
-                    level.map(task => () => this.executeSingleTask(task, projectContext, plan)),
+                    level.map(task => (signal: AbortSignal) => this.executeSingleTaskWithSignal(task, projectContext, plan, signal)),
                     this.config.concurrencyLimit
                 );
 
@@ -349,6 +349,105 @@ export class Orchestrator {
             throw error;
         } finally {
             this.abortControllers.delete(task.id);
+        }
+    }
+
+    private async executeSingleTaskWithSignal(
+        task: Task,
+        projectContext: ProjectContext,
+        plan: ExecutionPlan,
+        signal: AbortSignal
+    ): Promise<string | null> {
+        // Check if already aborted before starting
+        if (signal.aborted) {
+            throw new Error('Task aborted before execution');
+        }
+
+        const worker = this.workers.get(task.agent);
+        if (!worker) {
+            const error = new Error(`Unknown agent: ${task.agent}`);
+            this.taskResults.set(task.id, this.createFailedTaskResult(task, error, Date.now()));
+            this.bus.emit({
+                type: 'error',
+                message: `Unknown agent ${task.agent} for task ${task.id}`
+            });
+            throw error;
+        }
+
+        const failedDependencies = this.getFailedDependencies(task);
+        if (failedDependencies.length > 0) {
+            if (this.config.dependencyFailurePolicy === 'skip') {
+                const summary = `Skipped due to failed dependencies: ${failedDependencies.join(', ')}`;
+                this.taskResults.set(task.id, this.createSkippedTaskResult(task, summary));
+                this.bus.emit({
+                    type: 'status',
+                    phase: 'thinking',
+                    label: `Skipping task ${task.id} due to failed dependencies`
+                });
+                return null;
+            }
+
+            if (this.config.dependencyFailurePolicy === 'abort') {
+                const summary = `Dependencies failed: ${failedDependencies.join(', ')}`;
+                this.taskResults.set(task.id, this.createSkippedTaskResult(task, summary));
+                throw new OrchestratorAbortError(summary);
+            }
+        }
+
+        const taskContext = this.buildTaskContext(task, projectContext, plan);
+        const startTime = Date.now();
+
+        this.emitDelegation(task);
+        this.emitAgentStart(task);
+
+        // Link to external signal instead of creating new controller
+        const abortHandler = () => {
+            this.bus.emit({
+                type: 'status',
+                phase: 'thinking',
+                label: `Task ${task.id} aborted by timeout`
+            });
+        };
+        signal.addEventListener('abort', abortHandler, { once: true });
+
+        try {
+            const modelId = worker.modelName ?? this.modelName;
+
+            const execution = await this.resilienceLayer.executeWithResilience(
+                task.agent,
+                task.id,
+                (innerSignal) => this.runTaskStream(worker, task, taskContext, innerSignal),
+                signal, // Pass the timeout signal through
+                modelId
+            );
+
+            const taskResult = this.createTaskResult(task, execution.output, startTime, execution.usage);
+            this.taskResults.set(task.id, taskResult);
+
+            this.emitAgentComplete(task, true, execution.output, startTime, execution.usage);
+            return execution.output;
+        } catch (error) {
+            const taskResult = this.createFailedTaskResult(task, error, startTime);
+            this.taskResults.set(task.id, taskResult);
+
+            const errorMsg = error instanceof Error ? error.message : String(error);
+            const durationMs = Date.now() - startTime;
+            this.bus.emit({
+                type: 'error',
+                message: `Task ${task.id} (${task.agent}) failed after ${durationMs}ms: ${errorMsg}`
+            });
+
+            this.emitAgentComplete(task, false, undefined, startTime);
+
+            this.thinkingChain.addFixingStep(
+                `Task ${task.id} failed: ${errorMsg}`,
+                { task, error: errorMsg },
+                0.3
+            );
+
+            throw error;
+        } finally {
+            signal.removeEventListener('abort', abortHandler);
         }
     }
 
@@ -815,7 +914,7 @@ export class Orchestrator {
      * Issue #13 fix: Added defensive per-task timeout to prevent hanging
      */
     private async executeParallelWithLimit<T>(
-        tasks: Array<() => Promise<T>>,
+        tasks: Array<(signal: AbortSignal) => Promise<T>>,
         concurrencyLimit: number,
         taskTimeoutMs?: number
     ): Promise<PromiseSettledResult<T>[]> {
@@ -830,9 +929,10 @@ export class Orchestrator {
                 try {
                     // Wrap task with defensive timeout to prevent indefinite hanging
                     const value = await withAbortableTimeout(
-                        () => task(),
+                        (signal) => task(signal),
                         timeout,
-                        `parallel_task_${i}`
+                        `parallel_task_${i}`,
+                        undefined // externalSignal - none in this context
                     );
                     results[i] = { status: 'fulfilled', value };
                 } catch (reason) {
