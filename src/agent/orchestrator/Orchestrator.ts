@@ -236,7 +236,7 @@ export class Orchestrator {
                     level.map(task => ({
                         id: task.id,
                         agent: task.agent,
-                        fn: (signal: AbortSignal) => this.executeSingleTaskWithSignal(task, projectContext, plan, signal)
+                        fn: (signal: AbortSignal) => this.executeSingleTask(task, projectContext, plan, signal)
                     })),
                     this.config.concurrencyLimit
                 );
@@ -277,11 +277,24 @@ export class Orchestrator {
         return results.join('\n\n');
     }
 
+    /**
+     * Execute a single task with optional external abort signal.
+     * @param task - The task to execute
+     * @param projectContext - Project context for the task
+     * @param plan - The execution plan
+     * @param signal - Optional external AbortSignal for timeout cancellation
+     */
     private async executeSingleTask(
         task: Task,
         projectContext: ProjectContext,
-        plan: ExecutionPlan
+        plan: ExecutionPlan,
+        signal?: AbortSignal
     ): Promise<string | null> {
+        // Check if already aborted before starting (when signal provided)
+        if (signal?.aborted) {
+            throw new Error('Task aborted before execution');
+        }
+
         const worker = this.workers.get(task.agent);
         if (!worker) {
             const error = new Error(`Unknown agent: ${task.agent}`);
@@ -322,6 +335,24 @@ export class Orchestrator {
         const controller = new AbortController();
         this.abortControllers.set(task.id, controller);
 
+        // Chain external signal to our controller (when provided)
+        let abortHandler: (() => void) | null = null;
+        if (signal) {
+            if (signal.aborted) {
+                controller.abort();
+            } else {
+                abortHandler = () => {
+                    controller.abort();
+                    this.bus.emit({
+                        type: 'status',
+                        phase: 'thinking',
+                        label: `Task ${task.id} aborted by timeout`
+                    });
+                };
+                signal.addEventListener('abort', abortHandler, { once: true });
+            }
+        }
+
         try {
             // Get the model ID for rate limit tracking (worker-specific or default)
             const modelId = worker.modelName ?? this.modelName;
@@ -329,7 +360,7 @@ export class Orchestrator {
             const execution = await this.resilienceLayer.executeWithResilience(
                 task.agent,
                 task.id,
-                (signal) => this.runTaskStream(worker, task, taskContext, signal),
+                (innerSignal) => this.runTaskStream(worker, task, taskContext, innerSignal),
                 controller.signal,
                 modelId
             );
@@ -381,137 +412,8 @@ export class Orchestrator {
             throw error;
         } finally {
             this.abortControllers.delete(task.id);
-        }
-    }
-
-    private async executeSingleTaskWithSignal(
-        task: Task,
-        projectContext: ProjectContext,
-        plan: ExecutionPlan,
-        signal: AbortSignal
-    ): Promise<string | null> {
-        // Check if already aborted before starting
-        if (signal.aborted) {
-            throw new Error('Task aborted before execution');
-        }
-
-        const worker = this.workers.get(task.agent);
-        if (!worker) {
-            const error = new Error(`Unknown agent: ${task.agent}`);
-            this.taskResults.set(task.id, this.createFailedTaskResult(task, error, Date.now()));
-            this.bus.emit({
-                type: 'error',
-                message: `Unknown agent ${task.agent} for task ${task.id}`
-            });
-            throw error;
-        }
-
-        const failedDependencies = this.getFailedDependencies(task);
-        if (failedDependencies.length > 0) {
-            if (this.config.dependencyFailurePolicy === 'skip') {
-                const summary = `Skipped due to failed dependencies: ${failedDependencies.join(', ')}`;
-                this.taskResults.set(task.id, this.createSkippedTaskResult(task, summary));
-                this.bus.emit({
-                    type: 'status',
-                    phase: 'thinking',
-                    label: `Skipping task ${task.id} due to failed dependencies`
-                });
-                return null;
-            }
-
-            if (this.config.dependencyFailurePolicy === 'abort') {
-                const summary = `Dependencies failed: ${failedDependencies.join(', ')}`;
-                this.taskResults.set(task.id, this.createSkippedTaskResult(task, summary));
-                throw new OrchestratorAbortError(summary);
-            }
-        }
-
-        const taskContext = this.buildTaskContext(task, projectContext, plan);
-        const startTime = Date.now();
-
-        this.emitDelegation(task);
-        this.emitAgentStart(task);
-
-        const controller = new AbortController();
-        this.abortControllers.set(task.id, controller);
-
-        // Chain external signal to our controller
-        // Hoist abortHandler so it can be cleaned up in finally
-        let abortHandler: (() => void) | null = null;
-        if (signal.aborted) {
-            controller.abort();
-        } else {
-            abortHandler = () => {
-                controller.abort();
-                this.bus.emit({
-                    type: 'status',
-                    phase: 'thinking',
-                    label: `Task ${task.id} aborted by timeout`
-                });
-            };
-            signal.addEventListener('abort', abortHandler, { once: true });
-        }
-
-        try {
-            const modelId = worker.modelName ?? this.modelName;
-
-            const execution = await this.resilienceLayer.executeWithResilience(
-                task.agent,
-                task.id,
-                (innerSignal) => this.runTaskStream(worker, task, taskContext, innerSignal),
-                controller.signal, // Use controller.signal instead of signal
-                modelId
-            );
-
-            const taskResult = this.createTaskResult(task, execution.output, startTime, execution.usage);
-            this.taskResults.set(task.id, taskResult);
-
-            this.emitAgentComplete(task, true, execution.output, startTime, execution.usage);
-            return execution.output;
-        } catch (error) {
-            const taskResult = this.createFailedTaskResult(task, error, startTime);
-            this.taskResults.set(task.id, taskResult);
-
-            const durationMs = Date.now() - startTime;
-            const isTimeout = error instanceof ToolTimeoutError;
-
-            if (isTimeout) {
-                // Emit dedicated timeout event for clearer UI feedback
-                this.bus.emit({
-                    type: 'timeout',
-                    taskId: task.id,
-                    agentName: task.agent,
-                    timeoutMs: error.timeoutMs,
-                    durationMs,
-                    message: `Task ${task.id} (${task.agent}) timed out after ${durationMs}ms (limit: ${error.timeoutMs}ms)`
-                });
-
-                // Track timeout metrics
-                metrics.taskTimeouts.inc({ agent: task.agent });
-                metrics.timeoutDuration.observe(durationMs / 1000, { agent: task.agent });
-            } else {
-                // Regular error event
-                const errorMsg = error instanceof Error ? error.message : String(error);
-                this.bus.emit({
-                    type: 'error',
-                    message: `Task ${task.id} (${task.agent}) failed after ${durationMs}ms: ${errorMsg}`
-                });
-            }
-
-            this.emitAgentComplete(task, false, undefined, startTime);
-
-            const errorMsg = error instanceof Error ? error.message : String(error);
-            this.thinkingChain.addFixingStep(
-                `Task ${task.id} ${isTimeout ? 'timed out' : 'failed'}: ${errorMsg}`,
-                { task, error: errorMsg, isTimeout },
-                0.3
-            );
-
-            throw error;
-        } finally {
-            this.abortControllers.delete(task.id);
-            // Always remove listener - { once: true } only auto-removes if it fires
-            if (abortHandler) {
+            // Clean up signal listener if we set one
+            if (signal && abortHandler) {
                 signal.removeEventListener('abort', abortHandler);
             }
         }
