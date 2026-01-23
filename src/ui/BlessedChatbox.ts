@@ -248,9 +248,8 @@ export class InlineChatbox {
      */
     private drawFrame(inputText: string = ''): string[] {
         const lines: string[] = [];
-        // Use the configured width (affected by Ctrl+Left/Right resize handlers)
-        // Math.max guard prevents negative width edge cases
-        const w = Math.max(10, this.currentWidth);
+        // Use terminal width with Math.max guard to prevent negative width edge cases
+        const w = Math.max(10, this.getTerminalWidth());
         const h = this.currentHeight;
 
         // Top border with label (no size hint)

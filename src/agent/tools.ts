@@ -324,26 +324,6 @@ export const helpSetupToolsSchema = z.object({
 });
 
 // ============================================================================
-// Continuation System
-// ============================================================================
-
-/**
- * Request Continuation Tool
- * Called by the agent when approaching step limit but more work remains.
- * Triggers checkpoint and continuation in a new segment.
- */
-export const requestContinuationSchema = z.object({
-    completedTasks: z.array(z.string())
-        .describe('List of tasks completed in this segment'),
-    remainingTasks: z.array(z.string())
-        .describe('List of tasks still to be done'),
-    partialResults: z.string().optional()
-        .describe('Any partial output to preserve for the next segment'),
-    notes: z.string().optional()
-        .describe('Context notes for the next segment (key decisions, state, etc.)')
-});
-
-// ============================================================================
 // Tool Approval Configuration (AI SDK 6)
 // ============================================================================
 
@@ -375,7 +355,6 @@ export const TOOL_APPROVAL_CONFIG: Record<string, boolean> = {
     search_terminal: false,
     get_terminal_file_path: false,
 
-    // Phase 2: Context Window Management - no approval (read-only)
     // Phase 2: Context Window Management - no approval (read-only)
     grep_context: false,
     jq_context: false,
@@ -414,9 +393,6 @@ export const TOOL_APPROVAL_CONFIG: Record<string, boolean> = {
     // Interactive tools - no approval (they prompt user directly)
     ask_user: false,
     open_waveform: false,
-
-    // Continuation system - no approval (internal control flow)
-    request_continuation: false,
 };
 
 // ============================================================================
