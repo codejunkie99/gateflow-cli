@@ -109,6 +109,27 @@ export interface CommandContext {
 }
 
 // ============================================================================
+// Global Context for Shutdown Handler
+// ============================================================================
+
+/** Track current context for cleanup on shutdown */
+let currentContext: CommandContext | null = null;
+
+/**
+ * Set the current context for shutdown handling
+ */
+export function setCurrentContext(ctx: CommandContext): void {
+    currentContext = ctx;
+}
+
+/**
+ * Get the current context for shutdown handling
+ */
+export function getCurrentContext(): CommandContext | null {
+    return currentContext;
+}
+
+// ============================================================================
 // Context Setup
 // ============================================================================
 
@@ -238,7 +259,7 @@ export async function setupContext(options: GlobalOptions): Promise<CommandConte
         inputManager.setApproveAll(true);
     }
 
-    return {
+    const context: CommandContext = {
         bus,
         policy,
         tools,
@@ -260,6 +281,12 @@ export async function setupContext(options: GlobalOptions): Promise<CommandConte
         tokenBudgetManager,
         fileChunker
     };
+
+    // Set global context early so cleanup handlers can access resources
+    // even if initialization is interrupted
+    setCurrentContext(context);
+
+    return context;
 }
 
 /**
