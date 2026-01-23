@@ -226,7 +226,11 @@ export class Orchestrator {
                 }
             } else {
                 const levelResults = await this.executeParallelWithLimit(
-                    level.map(task => (signal: AbortSignal) => this.executeSingleTaskWithSignal(task, projectContext, plan, signal)),
+                    level.map(task => ({
+                        id: task.id,
+                        agent: task.agent,
+                        fn: (signal: AbortSignal) => this.executeSingleTaskWithSignal(task, projectContext, plan, signal)
+                    })),
                     this.config.concurrencyLimit
                 );
 
@@ -964,7 +968,7 @@ export class Orchestrator {
      * Issue #13 fix: Added defensive per-task timeout to prevent hanging
      */
     private async executeParallelWithLimit<T>(
-        tasks: Array<(signal: AbortSignal) => Promise<T>>,
+        tasks: Array<{ id: string; agent: string; fn: (signal: AbortSignal) => Promise<T> }>,
         concurrencyLimit: number,
         taskTimeoutMs?: number
     ): Promise<PromiseSettledResult<T>[]> {
@@ -973,7 +977,7 @@ export class Orchestrator {
         const timeout = taskTimeoutMs ?? this.config.parallelTaskTimeoutMs;
 
         for (let i = 0; i < tasks.length; i++) {
-            const task = tasks[i];
+            const { id: taskId, agent, fn } = tasks[i];
 
             const p = (async () => {
                 // Set warning timer at 80% of timeout
@@ -982,16 +986,16 @@ export class Orchestrator {
                     this.bus.emit({
                         type: 'status',
                         phase: 'thinking',
-                        label: `Task ${i} running long (${Math.round(warningMs / 1000)}s elapsed, ${Math.round(timeout / 1000)}s limit)...`
+                        label: `Task ${taskId} (${agent}) running long (${Math.round(warningMs / 1000)}s elapsed, ${Math.round(timeout / 1000)}s limit)...`
                     });
                 }, warningMs);
 
                 try {
                     // Wrap task with defensive timeout to prevent indefinite hanging
                     const value = await withAbortableTimeout(
-                        (signal) => task(signal),
+                        (signal) => fn(signal),
                         timeout,
-                        `parallel_task_${i}`,
+                        `task_${taskId}_${agent}`,
                         undefined // externalSignal - none in this context
                     );
                     results[i] = { status: 'fulfilled', value };
