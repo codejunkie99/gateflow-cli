@@ -311,15 +311,21 @@ export class InlineChatbox {
      * Render the box and position cursor inside
      */
     private render(inputText: string = ''): number {
-        const lines = this.drawFrame(inputText);
+        // Truncate input text to prevent wrapping past terminal width
+        const w = process.stdout.columns || 80;
+        const innerWidth = w - 4; // Account for "│ " and " │"
+        const prompt = this.options.prompt || '> ';
+        const maxInputLength = innerWidth - prompt.length;
+        const truncatedInput = inputText.slice(0, Math.max(0, maxInputLength));
+
+        const lines = this.drawFrame(truncatedInput);
         console.log(lines.join('\n'));
 
         // Position cursor inside the box (on the input line)
-        const prompt = this.options.prompt || '> ';
         const h = this.currentHeight;
         // Move cursor up to the first content line (h-1 lines up from bottom)
         // Then move right to after "│ " + prompt + inputText
-        const cursorX = 2 + prompt.length + inputText.length + 1; // +1 for the space after "│"
+        const cursorX = 2 + prompt.length + truncatedInput.length + 1; // +1 for the space after "│"
         const cursorY = h - 1; // lines to move up from current position
         process.stdout.write(`\x1B[${cursorY}A`); // Move up
         process.stdout.write(`\x1B[${cursorX}G`); // Move to column
