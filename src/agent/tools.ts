@@ -293,6 +293,14 @@ export const searchKnowledgeSchema = z.object({
 // Get Token Budget - Get current token budget status
 export const getTokenBudgetSchema = z.object({});
 
+// Request Continuation - Signal that task requires continuation
+export const requestContinuationSchema = z.object({
+    completedTasks: z.array(z.string()).describe('List of tasks completed so far in this turn'),
+    remainingTasks: z.array(z.string()).describe('List of tasks that still need to be done'),
+    partialResults: z.string().optional().describe('Summary of partial results or progress made'),
+    notes: z.string().optional().describe('Any notes for the next continuation turn')
+});
+
 // ============================================================================
 // Tool Setup Schemas
 // ============================================================================
@@ -378,6 +386,9 @@ export const TOOL_APPROVAL_CONFIG: Record<string, boolean> = {
     select_chunks: false,
     search_knowledge: false,
     get_token_budget: false,
+
+    // Continuation coordination - no approval (doesn't modify files)
+    request_continuation: false,
 
     // Skills and MCP - read operations (no approval)
     search_skills: false,
