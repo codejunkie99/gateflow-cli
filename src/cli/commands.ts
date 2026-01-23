@@ -1242,6 +1242,12 @@ async function showInteractiveModelSelector(
         items: []
     };
 
+    // Track recommended model IDs to avoid duplicates in other sections
+    const recommendedModelIds = new Set<string>();
+    for (const rec of RECOMMENDED_MODELS) {
+        recommendedModelIds.add(rec.id);
+    }
+
     // Populate recommended section with available models
     for (const rec of RECOMMENDED_MODELS) {
         const [provider, ...modelParts] = rec.id.split('/');
@@ -1297,6 +1303,11 @@ async function showInteractiveModelSelector(
         const openRouterInfo = PROVIDERS.openrouter;
 
         for (const modelId of compatibleIds) {
+            // Skip if already in recommended section
+            if (recommendedModelIds.has(`openrouter/${modelId}`)) {
+                continue;
+            }
+
             const isCurrentModel = isCurrent && currentConfig?.model === modelId;
             const modelData = openRouterModels.get(modelId);
             
@@ -1345,8 +1356,13 @@ async function showInteractiveModelSelector(
 
         // Add each model as a menu item
         for (const modelName of modelsForProvider) {
+            // Skip if already in recommended section
+            if (recommendedModelIds.has(`${provider}/${modelName}`)) {
+                continue;
+            }
+
             const isCurrentModel = isCurrent && currentConfig?.model === modelName;
-            
+
             const item: MenuItem<ModelMenuItem> = {
                 label: `${info.name} - ${modelName}`,
                 value: { provider, model: modelName, needsApiKey: !isConfigured },
