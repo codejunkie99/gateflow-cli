@@ -69,6 +69,7 @@ import {
 import { prefetchOpenRouterModels } from './model-provider-openrouter.js';
 import { modelCapabilities } from './model-capabilities/index.js';
 import { truncateToFit } from '../memory/token-estimator.js';
+import { AsyncMutex } from '../concurrency/index.js';
 
 // ============================================================================
 // Types
@@ -1579,8 +1580,10 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
         let cumulativeCompletedCount = 0;       // Track total completed across segments
         let lockedMode: PromptMode | undefined; // Preserve mode across continuation segments
 
-        // Reset continuation tracking
+        // Reset continuation tracking for this run
         this.lastContinuationCheckpoint = null;
+        // Clear checkpoints file to prevent stale data from previous runs affecting this run
+        await this.clearCheckpointsFile();
 
         while (segmentNumber < segmentLimit) {
             segmentNumber++;
@@ -1810,23 +1813,29 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
     /** Max checkpoints to keep in file (prevents unbounded growth) */
     private static readonly MAX_CHECKPOINTS = 100;
 
+    /** Mutex to serialize checkpoint file operations (prevents write interleaving) */
+    private checkpointMutex = new AsyncMutex();
+
     /**
      * Save a checkpoint to the JSONL file.
      * Appends to existing file and rotates if exceeding MAX_CHECKPOINTS.
+     * Uses mutex to prevent concurrent writes from corrupting the file.
      */
     private async saveCheckpointToFile(checkpoint: ContinuationCheckpoint): Promise<void> {
         const filePath = this.getCheckpointsFilePath();
         const dir = path.dirname(filePath);
 
-        try {
-            await fs.mkdir(dir, { recursive: true });
-            await fs.appendFile(filePath, JSON.stringify(checkpoint) + '\n', 'utf-8');
+        await this.checkpointMutex.withLock(async () => {
+            try {
+                await fs.mkdir(dir, { recursive: true });
+                await fs.appendFile(filePath, JSON.stringify(checkpoint) + '\n', 'utf-8');
 
-            // Rotate file if it exceeds max checkpoints (prevents unbounded disk growth)
-            await this.rotateCheckpointsFileIfNeeded(filePath);
-        } catch {
-            // Non-critical - pruning will fall back to regex if file unavailable
-        }
+                // Rotate file if it exceeds max checkpoints (prevents unbounded disk growth)
+                await this.rotateCheckpointsFileIfNeeded(filePath);
+            } catch {
+                // Non-critical - pruning will fall back to regex if file unavailable
+            }
+        });
     }
 
     /**
@@ -1851,30 +1860,36 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
      * Load checkpoints from the JSONL file.
      * Returns empty array if file doesn't exist or is corrupted.
      * File is bounded by rotation, but slice is kept as safety measure.
+     * Uses mutex to prevent reading during concurrent writes.
      */
     private async loadCheckpointsFromFile(): Promise<ContinuationCheckpoint[]> {
         const filePath = this.getCheckpointsFilePath();
 
-        try {
-            const content = await fs.readFile(filePath, 'utf-8');
-            const lines = content.trim().split('\n').filter(Boolean);
-            // Safety limit in case rotation was skipped
-            const recentLines = lines.slice(-GateFlowAgent.MAX_CHECKPOINTS);
-            return recentLines.map(line => JSON.parse(line) as ContinuationCheckpoint);
-        } catch {
-            return [];
-        }
+        return this.checkpointMutex.withLock(async () => {
+            try {
+                const content = await fs.readFile(filePath, 'utf-8');
+                const lines = content.trim().split('\n').filter(Boolean);
+                // Safety limit in case rotation was skipped
+                const recentLines = lines.slice(-GateFlowAgent.MAX_CHECKPOINTS);
+                return recentLines.map(line => JSON.parse(line) as ContinuationCheckpoint);
+            } catch {
+                return [];
+            }
+        });
     }
 
     /**
-     * Clear checkpoints file (called when starting new conversation).
+     * Clear checkpoints file (called when starting new conversation or run).
+     * Uses mutex to prevent clearing during concurrent operations.
      */
     private async clearCheckpointsFile(): Promise<void> {
-        try {
-            await fs.unlink(this.getCheckpointsFilePath());
-        } catch {
-            // File may not exist
-        }
+        await this.checkpointMutex.withLock(async () => {
+            try {
+                await fs.unlink(this.getCheckpointsFilePath());
+            } catch {
+                // File may not exist
+            }
+        });
     }
 
     /**
