@@ -16,11 +16,26 @@ const GRAPHEME_SEGMENTER =
         ? new Intl.Segmenter(undefined, { granularity: 'grapheme' })
         : null;
 
-const splitGraphemes = (value: string): string[] => {
+/**
+ * Iterate over graphemes lazily to avoid allocating large arrays.
+ * Use this in loops that may break early (e.g., truncation).
+ */
+function* iterateGraphemes(value: string): Generator<string> {
     if (!GRAPHEME_SEGMENTER) {
-        return Array.from(value);
+        yield* value;
+        return;
     }
-    return Array.from(GRAPHEME_SEGMENTER.segment(value), (segment) => segment.segment);
+    for (const segment of GRAPHEME_SEGMENTER.segment(value)) {
+        yield segment.segment;
+    }
+}
+
+/**
+ * Split string into graphemes array.
+ * For large strings with early termination, prefer iterateGraphemes().
+ */
+const splitGraphemes = (value: string): string[] => {
+    return Array.from(iterateGraphemes(value));
 };
 
 export interface ChatboxOptions {
@@ -375,7 +390,8 @@ export class InlineChatbox {
             return '';
         }
 
-        const segments = splitGraphemes(inputText);
+        // Use lazy iterator to avoid allocating full array (perf for large pastes)
+        const segments = iterateGraphemes(inputText);
         const kept: string[] = [];
         const keptWidths: number[] = [];
         let width = 0;
