@@ -25,18 +25,12 @@ import {
     createDynamicContextManager,
     createTokenBudgetManager,
     createFileChunker,
-    createSkillManager,
-    createToolDescriptionManager,
-    createSemanticSummarizer,
     type ToolRegistry,
     type ContextFileManager,
     type TerminalSessionManager,
     type DynamicContextManager,
     type TokenBudgetManager,
-    type FileChunker,
-    type SkillManager,
-    type ToolDescriptionManager,
-    type SemanticSummarizer
+    type FileChunker
 } from '../context/index.js';
 import { createMemoryService, setGlobalMemoryService, type MemoryService } from '../memory/index.js';
 import {
@@ -70,6 +64,12 @@ import {
     type MenuSection,
     type MenuItem
 } from '../ui/InteractiveMenu.js';
+import {
+    RECOMMENDED_MODELS,
+    getBadgeDisplay,
+    getRecommendedModel,
+    isRecommendedModel
+} from '../agent/recommended-models.js';
 
 // ============================================================================
 // Types
@@ -106,9 +106,27 @@ export interface CommandContext {
     dynamicContextManager: DynamicContextManager;
     tokenBudgetManager: TokenBudgetManager;
     fileChunker: FileChunker;
-    skillManager: SkillManager;
-    toolDescriptionManager: ToolDescriptionManager;
-    semanticSummarizer: SemanticSummarizer;
+}
+
+// ============================================================================
+// Global Context for Shutdown Handler
+// ============================================================================
+
+/** Track current context for cleanup on shutdown */
+let currentContext: CommandContext | null = null;
+
+/**
+ * Set the current context for shutdown handling
+ */
+export function setCurrentContext(ctx: CommandContext): void {
+    currentContext = ctx;
+}
+
+/**
+ * Get the current context for shutdown handling
+ */
+export function getCurrentContext(): CommandContext | null {
+    return currentContext;
 }
 
 // ============================================================================
@@ -219,21 +237,13 @@ export async function setupContext(options: GlobalOptions): Promise<CommandConte
     // FileChunker always uses indexer for accurate AST-based boundaries
     const fileChunker = createFileChunker({}, indexer);
 
-    const skillManager = createSkillManager();
-    await skillManager.initialize();
-
-    const toolDescriptionManager = createToolDescriptionManager();
-    await toolDescriptionManager.initialize();
-
-    const semanticSummarizer = createSemanticSummarizer();
-
     // Initialize centralized input manager with chatbox UI
     const inputManager = initInputManager(bus, {
         useChatbox: true,
         chatboxOptions: {
-            width: '80%',
+            width: '100%',
             height: 3,
-            label: ' Input ',
+            label: '',  // No label for cleaner look
             prompt: '> '
         }
     });
@@ -249,7 +259,7 @@ export async function setupContext(options: GlobalOptions): Promise<CommandConte
         inputManager.setApproveAll(true);
     }
 
-    return {
+    const context: CommandContext = {
         bus,
         policy,
         tools,
@@ -269,11 +279,14 @@ export async function setupContext(options: GlobalOptions): Promise<CommandConte
         // Phase 2: Context Window Management
         dynamicContextManager,
         tokenBudgetManager,
-        fileChunker,
-        skillManager,
-        toolDescriptionManager,
-        semanticSummarizer
+        fileChunker
     };
+
+    // Set global context early so cleanup handlers can access resources
+    // even if initialization is interrupted
+    setCurrentContext(context);
+
+    return context;
 }
 
 /**
@@ -305,10 +318,7 @@ function buildToolContext(ctx: CommandContext): ToolContext {
         // Phase 2: Context Window Management (Cursor's Dynamic Context Discovery)
         dynamicContextManager: ctx.dynamicContextManager,
         tokenBudgetManager: ctx.tokenBudgetManager,
-        fileChunker: ctx.fileChunker,
-        skillManager: ctx.skillManager,
-        toolDescriptionManager: ctx.toolDescriptionManager,
-        semanticSummarizer: ctx.semanticSummarizer
+        fileChunker: ctx.fileChunker
     };
 }
 
@@ -393,7 +403,8 @@ export async function chatCommand(
     if (initialQuery) {
         console.log(chalk.dim(`\n> ${initialQuery}\n`));
         try {
-            await agent.run(initialQuery);
+            // Use runWithContinuation with dynamic segments (progress-based)
+            await agent.runWithContinuation(initialQuery, { dynamicSegments: true });
         } catch (error) {
             ctx.bus.emit({
                 type: 'error',
@@ -409,13 +420,9 @@ export async function chatCommand(
     let running = true;
 
     while (running) {
-        const border = chalk.blue('─'.repeat(60));
-        console.log(border);
-
         try {
             const input = await inputManager.getLine(chalk.blue('> '));
-            console.log(border);
-            console.log('');
+            console.log('');  // Space after input
             
             const trimmed = input.trim();
 
@@ -510,7 +517,8 @@ export async function chatCommand(
                 continue;
             }
 
-            await agent.run(trimmed);
+            // Use runWithContinuation with dynamic segments (progress-based)
+            await agent.runWithContinuation(trimmed, { dynamicSegments: true });
             console.log('');
         } catch (error) {
             ctx.bus.emit({
@@ -808,7 +816,8 @@ Requirements:
     }
 
     try {
-        await agent.run(prompt, { mode });
+        // Use runWithContinuation with dynamic segments (progress-based)
+        await agent.runWithContinuation(prompt, { mode, dynamicSegments: true });
         return ExitCodes.SUCCESS;
     } catch (error) {
         ctx.bus.emit({
@@ -1226,6 +1235,46 @@ async function showInteractiveModelSelector(
         items: []
     };
 
+    // Recommended models section - curated picks for GateFlow
+    const recommendedSection: MenuSection<ModelMenuItem> = {
+        title: '── ⭐ Recommended for GateFlow ──',
+        headerColor: chalk.green,
+        items: []
+    };
+
+    // Track recommended model IDs to avoid duplicates in other sections
+    const recommendedModelIds = new Set<string>();
+    for (const rec of RECOMMENDED_MODELS) {
+        recommendedModelIds.add(rec.id);
+    }
+
+    // Populate recommended section with available models
+    for (const rec of RECOMMENDED_MODELS) {
+        const [provider, ...modelParts] = rec.id.split('/');
+        const model = modelParts.join('/');
+        const providerName = provider as ProviderName;
+
+        // Check if this provider has an API key configured
+        const isConfigured = availableProviders.includes(providerName);
+        const isCurrent = currentConfig?.provider === providerName && currentConfig?.model === model;
+
+        // Get provider info for hints
+        const providerInfo = PROVIDERS[providerName];
+        if (!providerInfo) continue; // Skip unknown providers
+
+        const badge = getBadgeDisplay(rec.badge, true);
+
+        const item: MenuItem<ModelMenuItem> = {
+            label: `${rec.id} ${badge}`,
+            value: { provider: providerName, model, needsApiKey: !isConfigured },
+            description: isCurrent ? chalk.green('(current)') : chalk.dim(rec.useCase),
+            disabled: isCurrent,
+            hint: isConfigured ? rec.reason : `Requires ${providerInfo.envVar}`
+        };
+
+        recommendedSection.items.push(item);
+    }
+
     // Fetch OpenRouter models (always fetch - uses fallback if no API key)
     let openRouterModels: Map<string, any> | null = null;
     
@@ -1254,6 +1303,11 @@ async function showInteractiveModelSelector(
         const openRouterInfo = PROVIDERS.openrouter;
 
         for (const modelId of compatibleIds) {
+            // Skip if already in recommended section
+            if (recommendedModelIds.has(`openrouter/${modelId}`)) {
+                continue;
+            }
+
             const isCurrentModel = isCurrent && currentConfig?.model === modelId;
             const modelData = openRouterModels.get(modelId);
             
@@ -1302,8 +1356,13 @@ async function showInteractiveModelSelector(
 
         // Add each model as a menu item
         for (const modelName of modelsForProvider) {
+            // Skip if already in recommended section
+            if (recommendedModelIds.has(`${provider}/${modelName}`)) {
+                continue;
+            }
+
             const isCurrentModel = isCurrent && currentConfig?.model === modelName;
-            
+
             const item: MenuItem<ModelMenuItem> = {
                 label: `${info.name} - ${modelName}`,
                 value: { provider, model: modelName, needsApiKey: !isConfigured },
@@ -1322,10 +1381,15 @@ async function showInteractiveModelSelector(
         }
     }
 
-    // Build sections: Direct Providers first, then OpenRouter
+    // Build sections: Recommended first, then Direct Providers, then OpenRouter
     const sections: MenuSection<ModelMenuItem>[] = [];
 
-    // Add configured direct providers first (verified compatible - no capability check needed)
+    // Add recommended section first (curated picks for GateFlow)
+    if (recommendedSection.items.length > 0) {
+        sections.push(recommendedSection);
+    }
+
+    // Add configured direct providers (verified compatible - no capability check needed)
     if (directProvidersSection.items.length > 0) {
         sections.push(directProvidersSection);
     }

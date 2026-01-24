@@ -95,6 +95,8 @@ export const RECOMMENDED_MODELS: RecommendedModel[] = [
         useCase: 'Budget-conscious'
     },
     {
+        // OpenRouter model IDs use format: openrouter/<provider>/<model>
+        // The 'openrouter/' prefix routes through OpenRouter's API gateway
         id: 'openrouter/anthropic/claude-sonnet-4',
         reason: 'Access 300+ models with single API key',
         badge: 'Recommended',

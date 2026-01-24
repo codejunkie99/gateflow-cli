@@ -139,10 +139,12 @@ interface ToolCall {
 function getAllToolResults(context: any): ToolResult[] {
     const steps = context.steps ?? [];
     return steps.flatMap((step: any) =>
-        (step.toolResults ?? []).map((r: any) => ({
-            toolName: r.toolName as string,
-            value: 'output' in r ? r.output : r.result
-        }))
+        (step.toolResults ?? [])
+            .filter((r: any) => typeof r === 'object' && r !== null)
+            .map((r: any) => ({
+                toolName: r.toolName as string,
+                value: 'output' in r ? r.output : r.result
+            }))
     );
 }
 
@@ -582,6 +584,31 @@ const MODE_BEHAVIORS: Partial<Record<PromptMode, ModeStopBehavior>> = {
 };
 
 /**
+ * Get the step multiplier for a specific mode.
+ * Exported for use by continuation warning logic.
+ */
+export function getModeStepMultiplier(mode: PromptMode): number {
+    return MODE_BEHAVIORS[mode]?.stepMultiplier ?? 1;
+}
+
+/**
+ * Compute the effective step limit for a mode.
+ * Applies the mode-specific multiplier to the base step limit.
+ *
+ * @param mode - The prompt mode
+ * @param baseLimit - Base step limit (e.g., maxToolCalls config)
+ * @returns Effective step limit after applying mode multiplier
+ *
+ * @example
+ * // debug mode with 1.5x multiplier
+ * getEffectiveStepLimit('debug', 25) // Returns 38
+ */
+export function getEffectiveStepLimit(mode: PromptMode, baseLimit: number): number {
+    const multiplier = getModeStepMultiplier(mode);
+    return Math.ceil(baseLimit * multiplier);
+}
+
+/**
  * Create a stop condition for a specific mode.
  * Combines step limit with mode-specific success conditions.
  *
@@ -612,14 +639,12 @@ export function createModeStopCondition(
 
     const { mode, stepLimit: baseLimit = 25 } = config;
 
-    // Get mode-specific behavior (if any)
-    const behavior = MODE_BEHAVIORS[mode];
-
-    // Apply mode-specific step multiplier
-    const multiplier = behavior?.stepMultiplier ?? 1;
-    const effectiveLimit = Math.ceil(baseLimit * multiplier);
-
+    // Use shared helper for consistent step limit calculation
+    const effectiveLimit = getEffectiveStepLimit(mode, baseLimit);
     const stepCondition = maxSteps(effectiveLimit);
+
+    // Get mode-specific behavior for success condition
+    const behavior = MODE_BEHAVIORS[mode];
 
     // Combine with success condition if defined
     if (behavior?.successCondition) {

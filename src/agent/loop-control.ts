@@ -162,10 +162,13 @@ export function dynamicModelSelector(config: DynamicModelSelectorConfig): Prepar
         const isComplex = stepNumber > complexityThreshold || messages.length > messageThreshold;
 
         // Check if previous steps had errors
+        // Normalize tool result access: AI SDK v6 uses 'output', older versions use 'result'
         const hadErrors = steps.some((step: any) =>
-            step.toolResults?.some((r: any) =>
-                typeof r.result === 'object' && r.result !== null && 'error' in r.result
-            )
+            step.toolResults?.some((r: any) => {
+                if (typeof r !== 'object' || r === null) return false;
+                const result = 'output' in r ? r.output : r.result;
+                return typeof result === 'object' && result !== null && 'error' in result;
+            })
         );
 
         if (isComplex || hadErrors) {
@@ -364,7 +367,8 @@ export function createBudgetController(config: BudgetControllerConfig): BudgetCo
 
 /**
  * Combine multiple prepareStep functions.
- * Later functions override earlier ones for conflicting keys.
+ * Later functions override earlier ones for conflicting keys,
+ * EXCEPT for 'system' which is concatenated to preserve all injected prompts.
  *
  * @example
  * const agent = new ToolLoopAgent({
@@ -378,10 +382,25 @@ export function createBudgetController(config: BudgetControllerConfig): BudgetCo
 export function combinePrepareSteps(...fns: PrepareStepFn[]): PrepareStepFn {
     return async (context) => {
         let settings: StepSettings = {};
+        const systemParts: string[] = [];
 
         for (const fn of fns) {
             const result = await fn(context);
-            settings = { ...settings, ...result };
+            // Collect system prompts separately for concatenation
+            if (result.system) {
+                systemParts.push(result.system);
+            }
+            // Spread other properties (override behavior)
+            const { system: _system, ...rest } = result;
+            settings = { ...settings, ...rest };
+        }
+
+        // Concatenate all system prompts with proper separation
+        if (systemParts.length > 0) {
+            settings.system = systemParts
+                .map(s => s.trim())
+                .filter(Boolean)
+                .join('\n\n');
         }
 
         return settings;
@@ -394,13 +413,14 @@ export function combinePrepareSteps(...fns: PrepareStepFn[]): PrepareStepFn {
 
 /**
  * Configuration for continuation warning injection.
+ * All step values are 1-indexed (human-readable step counts).
  */
 export interface ContinuationWarningConfig {
-    /** Step number to start showing warning (default: 20) */
+    /** Step number to start showing warning, 1-indexed (default: 20) */
     warningStep?: number;
-    /** Step number to show critical warning (default: 23) */
+    /** Step number to show critical warning, 1-indexed (default: 23) */
     criticalStep?: number;
-    /** Total step limit for reference in messages (default: 25) */
+    /** Total step limit for reference in messages, 1-indexed (default: 25) */
     stepLimit?: number;
 }
 
@@ -426,8 +446,20 @@ export function continuationWarning(config: ContinuationWarningConfig = {}): Pre
     const criticalStep = config.criticalStep ?? stepLimit - 2;
 
     return ({ stepNumber }) => {
-        if (stepNumber >= criticalStep) {
-            const remaining = stepLimit - stepNumber;
+        // stepNumber is 0-indexed (AI SDK convention), but warningStep/criticalStep/stepLimit
+        // are 1-indexed (human-readable step counts). Convert for correct comparison and display.
+        const currentStep = stepNumber + 1;  // 1-indexed for display and threshold comparison
+        const remaining = Math.max(0, stepLimit - currentStep);  // Steps remaining after this one
+
+        if (currentStep >= criticalStep) {
+            // Special message when at or past the limit
+            if (remaining === 0) {
+                return {
+                    system: `\n\n**CRITICAL**: Step limit reached (${currentStep}/${stepLimit}). ` +
+                        `You MUST use the request_continuation tool IMMEDIATELY to checkpoint your progress. ` +
+                        `Include completedTasks (what you've done), remainingTasks (what's left), and notes (key context).`
+                };
+            }
             return {
                 system: `\n\n**CRITICAL**: You have ${remaining} step${remaining !== 1 ? 's' : ''} remaining. ` +
                     `You MUST use the request_continuation tool NOW to checkpoint your progress. ` +
@@ -435,10 +467,9 @@ export function continuationWarning(config: ContinuationWarningConfig = {}): Pre
             };
         }
 
-        if (stepNumber >= warningStep) {
-            const remaining = stepLimit - stepNumber;
+        if (currentStep >= warningStep) {
             return {
-                system: `\n\n**WARNING**: Approaching step limit (${stepNumber}/${stepLimit}, ${remaining} remaining). ` +
+                system: `\n\n**WARNING**: Approaching step limit (${currentStep}/${stepLimit}, ${remaining} remaining). ` +
                     `If you have more work to do, use the request_continuation tool to checkpoint progress before reaching the limit.`
             };
         }

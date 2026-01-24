@@ -610,7 +610,7 @@ export class DynamicContextManager {
                 // Remove empty session directories
                 const remaining = await fs.readdir(sessionDir);
                 if (remaining.length === 0) {
-                    await fs.rmdir(sessionDir);
+                    await fs.rm(sessionDir, { recursive: true });
                 }
             }
         } catch {
@@ -631,7 +631,7 @@ export class DynamicContextManager {
             for (const file of files) {
                 await fs.unlink(path.join(sessionDir, file));
             }
-            await fs.rmdir(sessionDir);
+            await fs.rm(sessionDir, { recursive: true });
         } catch {
             // Session might not exist
         }
