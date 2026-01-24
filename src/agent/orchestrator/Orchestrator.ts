@@ -36,6 +36,7 @@ import { withAbortableTimeout } from '../../resilience/timeout.js';
 import { ToolTimeoutError } from '../../error/classes.js';
 import { PromptBuilder } from '../prompts/PromptBuilder.js';
 import { metrics } from '../../observability/index.js';
+import { AsyncMutex } from '../../concurrency/index.js';
 
 /** Max safe value for setTimeout (~24.8 days) - larger values cause platform-dependent overflow */
 const MAX_SAFE_TIMEOUT_MS = 2_147_483_647;
@@ -104,6 +105,7 @@ export class Orchestrator {
     private memoryService?: MemoryService;
     /** Model bundle with variant options for API calls */
     private modelBundle: ModelWithVariant;
+    private executionMutex = new AsyncMutex();
     private config: {
         dependencyFailurePolicy: DependencyFailurePolicy;
         concurrencyLimit: number;
@@ -190,154 +192,158 @@ export class Orchestrator {
      * @returns OrchestratorResult with result text and aggregated token usage
      */
     async executeWithPlan(userRequest: string, signal?: AbortSignal): Promise<OrchestratorResult> {
-        this.taskResults.clear();
-        this.abortControllers.clear();
+        return this.executionMutex.withLock(async () => {
+            this.taskResults.clear();
+            this.abortControllers.clear();
 
-        // Check if already aborted before starting
-        if (signal?.aborted) {
-            throw new OrchestratorAbortError('Orchestration aborted before execution');
-        }
+            // Check if already aborted before starting
+            if (signal?.aborted) {
+                throw new OrchestratorAbortError('Orchestration aborted before execution');
+            }
 
-        // Set up abort listener to cancel all tasks when signal fires
-        let abortHandler: (() => void) | null = null;
-        if (signal) {
-            abortHandler = () => {
-                this.bus.emit({
-                    type: 'status',
-                    phase: 'thinking',
-                    label: 'Orchestration aborted by user'
-                });
-                this.cancelAll();
-            };
-            signal.addEventListener('abort', abortHandler, { once: true });
-        }
-
-        this.thinkingChain.addPlanningStep(
-            'Creating execution plan for complex request',
-            { request: userRequest },
-            0.9
-        );
-
-        const projectContext = await this.buildProjectContext();
-        const plan = await createPlan(
-            userRequest,
-            this.formatContextForPlanning(projectContext),
-            this.modelName
-        );
-
-        const validation = this.validatePlan(plan);
-        if (!validation.valid) {
-            this.bus.emit({
-                type: 'error',
-                message: `Plan validation failed: ${validation.error}`
-            });
-            throw new Error(`Plan validation failed: ${validation.error}`);
-        }
-
-        await this.requestPlanApprovalIfNeeded(plan);
-
-        const taskLevels = this.groupTasksByLevel(plan.tasks);
-
-        this.thinkingChain.addDecompositionStep(
-            `Created plan with ${plan.tasks.length} tasks in ${taskLevels.length} levels`,
-            {
-                levels: taskLevels.map((level, index) => ({
-                    level: index,
-                    tasks: level.map(task => ({ id: task.id, agent: task.agent }))
-                }))
-            },
-            0.9
-        );
-
-        const results: string[] = [];
-
-        try {
-            for (let levelIndex = 0; levelIndex < taskLevels.length; levelIndex++) {
-                // Check for abort before each level
-                if (signal?.aborted) {
-                    throw new OrchestratorAbortError('Orchestration aborted during execution');
-                }
-
-                const level = taskLevels[levelIndex];
-
-                if (level.length > 1) {
+            // Set up abort listener to cancel all tasks when signal fires
+            let abortHandler: (() => void) | null = null;
+            if (signal) {
+                abortHandler = () => {
                     this.bus.emit({
                         type: 'status',
                         phase: 'thinking',
-                        label: `Executing ${level.length} tasks in parallel (level ${levelIndex + 1}/${taskLevels.length})`
+                        label: 'Orchestration aborted by user'
                     });
-                }
+                    this.cancelAll();
+                };
+                signal.addEventListener('abort', abortHandler, { once: true });
+            }
 
-                if (level.length === 1) {
-                    try {
-                        // Pass signal to single-task execution
-                        const result = await this.executeSingleTask(level[0], projectContext, plan, signal);
-                        if (result) results.push(result);
-                    } catch (error) {
-                        if (error instanceof OrchestratorAbortError) {
-                            throw error;
-                        }
+            this.thinkingChain.addPlanningStep(
+                'Creating execution plan for complex request',
+                { request: userRequest },
+                0.9
+            );
+
+            const projectContext = await this.buildProjectContext();
+            const plan = await createPlan(
+                userRequest,
+                this.formatContextForPlanning(projectContext),
+                this.modelName
+            );
+
+            const validation = this.validatePlan(plan);
+            if (!validation.valid) {
+                this.bus.emit({
+                    type: 'error',
+                    message: `Plan validation failed: ${validation.error}`
+                });
+                throw new Error(`Plan validation failed: ${validation.error}`);
+            }
+
+            await this.requestPlanApprovalIfNeeded(plan);
+
+            const taskLevels = this.groupTasksByLevel(plan.tasks);
+
+            this.thinkingChain.addDecompositionStep(
+                `Created plan with ${plan.tasks.length} tasks in ${taskLevels.length} levels`,
+                {
+                    levels: taskLevels.map((level, index) => ({
+                        level: index,
+                        tasks: level.map(task => ({ id: task.id, agent: task.agent }))
+                    }))
+                },
+                0.9
+            );
+
+            const results: string[] = [];
+
+            try {
+                for (let levelIndex = 0; levelIndex < taskLevels.length; levelIndex++) {
+                    // Check for abort before each level
+                    if (signal?.aborted) {
+                        throw new OrchestratorAbortError('Orchestration aborted during execution');
                     }
-                } else {
-                    const levelResults = await this.executeParallelWithLimit(
-                        level.map(task => ({
-                            id: task.id,
-                            agent: task.agent,
-                            fn: (taskSignal: AbortSignal) => this.executeSingleTask(task, projectContext, plan, taskSignal)
-                        })),
-                        this.config.concurrencyLimit
-                    );
 
-                    for (let i = 0; i < levelResults.length; i++) {
-                        const result = levelResults[i];
-                        const task = level[i];
+                    const level = taskLevels[levelIndex];
 
-                        if (result.status === 'fulfilled') {
-                            if (result.value) results.push(result.value);
-                        } else {
-                            const reason = result.reason;
-                            if (reason instanceof OrchestratorAbortError) {
-                                this.cancelAll();
-                                throw reason;
+                    if (level.length > 1) {
+                        this.bus.emit({
+                            type: 'status',
+                            phase: 'thinking',
+                            label: `Executing ${level.length} tasks in parallel (level ${levelIndex + 1}/${taskLevels.length})`
+                        });
+                    }
+
+                    if (level.length === 1) {
+                        try {
+                            // Pass signal to single-task execution
+                            const result = await this.executeSingleTask(level[0], projectContext, plan, signal);
+                            if (result) results.push(result);
+                        } catch (error) {
+                            if (error instanceof OrchestratorAbortError) {
+                                throw error;
+                            }
+                        }
+                    } else {
+                        const levelResults = await this.executeParallelWithLimit(
+                            level.map(task => ({
+                                id: task.id,
+                                agent: task.agent,
+                                fn: (taskSignal: AbortSignal) => signal?.aborted
+                                    ? Promise.reject(new OrchestratorAbortError(`Task ${task.id} aborted before start`))
+                                    : this.executeSingleTask(task, projectContext, plan, signal ?? taskSignal)
+                            })),
+                            this.config.concurrencyLimit
+                        );
+
+                        for (let i = 0; i < levelResults.length; i++) {
+                            const result = levelResults[i];
+                            const task = level[i];
+
+                            if (result.status === 'fulfilled') {
+                                if (result.value) results.push(result.value);
+                            } else {
+                                const reason = result.reason;
+                                if (reason instanceof OrchestratorAbortError) {
+                                    this.cancelAll();
+                                    throw reason;
+                                }
                             }
                         }
                     }
-                }
 
-                const levelOutcomes = level
-                    .map(task => this.taskResults.get(task.id))
-                    .filter((result): result is TaskResult => Boolean(result));
-                const succeeded = levelOutcomes.filter(result => result.success).length;
+                    const levelOutcomes = level
+                        .map(task => this.taskResults.get(task.id))
+                        .filter((result): result is TaskResult => Boolean(result));
+                    const succeeded = levelOutcomes.filter(result => result.success).length;
 
-                if (levelOutcomes.length > 0 && succeeded === 0) {
-                    this.bus.emit({
-                        type: 'error',
-                        message: `All ${level.length} tasks at level ${levelIndex + 1} failed`
-                    });
+                    if (levelOutcomes.length > 0 && succeeded === 0) {
+                        this.bus.emit({
+                            type: 'error',
+                            message: `All ${level.length} tasks at level ${levelIndex + 1} failed`
+                        });
 
-                    if (this.config.dependencyFailurePolicy === 'abort') {
-                        throw new OrchestratorAbortError('All tasks in level failed');
+                        if (this.config.dependencyFailurePolicy === 'abort') {
+                            throw new OrchestratorAbortError('All tasks in level failed');
+                        }
                     }
                 }
-            }
 
-            // Aggregate token usage from all executed tasks
-            const aggregatedUsage = this.aggregateTaskUsage();
-            const allResults = Array.from(this.taskResults.values());
-            const succeededCount = allResults.filter(r => r.success).length;
+                // Aggregate token usage from all executed tasks
+                const aggregatedUsage = this.aggregateTaskUsage();
+                const allResults = Array.from(this.taskResults.values());
+                const succeededCount = allResults.filter(r => r.success).length;
 
-            return {
-                result: results.join('\n\n'),
-                usage: aggregatedUsage,
-                tasksExecuted: allResults.length,
-                tasksSucceeded: succeededCount
-            };
-        } finally {
-            // Clean up abort listener
-            if (signal && abortHandler) {
-                signal.removeEventListener('abort', abortHandler);
+                return {
+                    result: results.join('\n\n'),
+                    usage: aggregatedUsage,
+                    tasksExecuted: allResults.length,
+                    tasksSucceeded: succeededCount
+                };
+            } finally {
+                // Clean up abort listener
+                if (signal && abortHandler) {
+                    signal.removeEventListener('abort', abortHandler);
+                }
             }
-        }
+        });
     }
 
     /**
