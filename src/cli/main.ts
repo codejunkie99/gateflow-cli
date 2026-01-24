@@ -21,36 +21,48 @@ import {
     versionCommand,
     waveCommand,
     waveWebCommand,
+    getCurrentContext,
     type GlobalOptions
 } from './commands.js';
 import { startMCPServer } from '../waveform/mcp-server.js';
 
 import { hasAnyProvider, PROVIDERS } from '../agent/model-provider.js';
-import type { CommandContext } from './commands.js';
 
 // ============================================================================
 // Global Shutdown Handler (Issue #15 fix)
 // ============================================================================
 
-/** Track current context for cleanup on shutdown */
-let currentContext: CommandContext | null = null;
 let isShuttingDown = false;
+const SHUTDOWN_TIMEOUT_MS = 5000;
+
+interface ShutdownOptions {
+    /** Exit code (default: 0) */
+    exitCode?: number;
+    /** Whether to call process.exit after cleanup (default: true) */
+    shouldExit?: boolean;
+}
 
 /**
- * Clean up all resources gracefully
+ * Clean up all resources gracefully with timeout protection.
+ * @param options - Shutdown configuration
+ * @returns true if cleanup completed, false if timed out
  */
-async function gracefulShutdown(exitCode: number = 0, force: boolean = false): Promise<void> {
-    if (isShuttingDown) {
-        if (force) process.exit(exitCode);
-        return;
-    }
+async function gracefulShutdown(options: ShutdownOptions | number = {}): Promise<boolean> {
+    // Support legacy signature: gracefulShutdown(exitCode)
+    const opts: ShutdownOptions = typeof options === 'number'
+        ? { exitCode: options }
+        : options;
+    const { exitCode = 0, shouldExit = true } = opts;
+
+    if (isShuttingDown) return true;
     isShuttingDown = true;
 
     // Give a brief moment for any pending I/O
     await new Promise(resolve => setTimeout(resolve, 50));
 
-    if (currentContext) {
-        try {
+    const cleanup = async (): Promise<void> => {
+        const currentContext = getCurrentContext();
+        if (currentContext) {
             // Stop renderer (unsubscribes from bus, clears timers)
             currentContext.renderer?.stop();
 
@@ -62,35 +74,60 @@ async function gracefulShutdown(exitCode: number = 0, force: boolean = false): P
 
             // Clear event bus (removes all listeners, clears pending approvals)
             currentContext.bus?.clear();
-        } catch {
-            // Ignore errors during shutdown
         }
+    };
+
+    const timeout = new Promise<'timeout'>(resolve =>
+        setTimeout(() => resolve('timeout'), SHUTDOWN_TIMEOUT_MS)
+    );
+
+    let cleanupSucceeded = true;
+    try {
+        const result = await Promise.race([cleanup(), timeout]);
+        if (result === 'timeout') {
+            console.error('\nShutdown timed out, forcing exit...');
+            cleanupSucceeded = false;
+        }
+    } catch {
+        // Ignore errors during shutdown
+        cleanupSucceeded = false;
     }
 
-    process.exit(exitCode);
+    if (shouldExit) {
+        process.exit(exitCode);
+    }
+
+    return cleanupSucceeded;
 }
 
-/**
- * Set the current context for shutdown handling
- */
-function setCurrentContext(ctx: CommandContext): void {
-    currentContext = ctx;
+// Register global signal handlers (skip for MCP mode - it has its own shutdown path)
+const isMcpMode = process.argv.includes('mcp');
+
+if (!isMcpMode) {
+    process.on('SIGINT', () => {
+        if (isShuttingDown) {
+            process.exit(0);
+        }
+        gracefulShutdown(0);
+    });
+    process.on('SIGTERM', () => {
+        if (isShuttingDown) {
+            process.exit(0);
+        }
+        gracefulShutdown(0);
+    });
+
+    // Handle uncaught errors gracefully
+    process.on('uncaughtException', (error) => {
+        console.error('\nUncaught exception:', error instanceof Error ? error.message : String(error));
+        gracefulShutdown(1);
+    });
+
+    process.on('unhandledRejection', (reason) => {
+        console.error('\nUnhandled rejection:', reason);
+        gracefulShutdown(1);
+    });
 }
-
-// Register global signal handlers
-process.on('SIGINT', () => gracefulShutdown(0));
-process.on('SIGTERM', () => gracefulShutdown(0));
-
-// Handle uncaught errors gracefully
-process.on('uncaughtException', (error) => {
-    console.error('\nUncaught exception:', String(error));
-    gracefulShutdown(1);
-});
-
-process.on('unhandledRejection', (reason) => {
-    console.error('\nUnhandled rejection:', reason);
-    gracefulShutdown(1);
-});
 
 /**
  * Validate required environment variables
@@ -159,7 +196,7 @@ program
         // MCP command needs clean stdin/stdout for JSON-RPC protocol
         // Check both the command name and raw args (for when preAction fires with program)
         const commandName = thisCommand.name();
-        const isMcpCommand = commandName === 'mcp' || process.argv.includes('mcp');
+        const isMcpCommand = commandName === 'mcp' || process.argv[2] === 'mcp';
 
         // Show banner unless JSON mode or MCP mode
         if (!opts.json && !isMcpCommand) {
@@ -205,7 +242,6 @@ program
     .action(async (queryParts: string[], cmdOpts: { model?: string }) => {
         const opts = program.opts() as GlobalOptions & { model?: string };
         const ctx = await setupContext(opts);
-        setCurrentContext(ctx);
 
         const query = queryParts.length > 0 ? queryParts.join(' ') : undefined;
         const modelSpec = cmdOpts.model || opts.model; // Command option takes precedence
@@ -220,7 +256,6 @@ program
     .action(async (queryParts: string[]) => {
         const opts = program.opts() as GlobalOptions & { model?: string };
         const ctx = await setupContext(opts);
-        setCurrentContext(ctx);
 
         const query = queryParts.length > 0 ? queryParts.join(' ') : undefined;
         const exitCode = await chatCommand(ctx, query, opts.model);
@@ -238,7 +273,6 @@ program
     .action(async () => {
         const opts = program.opts() as GlobalOptions;
         const ctx = await setupContext(opts);
-        setCurrentContext(ctx);
         const exitCode = await scanCommand(ctx);
         await gracefulShutdown(exitCode);
     });
@@ -253,7 +287,6 @@ program
     .action(async (files: string[]) => {
         const opts = program.opts() as GlobalOptions;
         const ctx = await setupContext(opts);
-        setCurrentContext(ctx);
         const exitCode = await lintCommand(ctx, files);
         await gracefulShutdown(exitCode);
     });
@@ -269,7 +302,6 @@ program
     .action(async (file: string, cmdOpts: { model?: string }) => {
         const opts = program.opts() as GlobalOptions;
         const ctx = await setupContext(opts);
-        setCurrentContext(ctx);
         const modelSpec = cmdOpts.model || opts.model;
         const exitCode = await fixCommand(ctx, file, modelSpec);
         await gracefulShutdown(exitCode);
@@ -285,7 +317,6 @@ program
     .action(async (patterns: string[]) => {
         const opts = program.opts() as GlobalOptions;
         const ctx = await setupContext(opts);
-        setCurrentContext(ctx);
         const exitCode = await watchCommand(ctx, patterns);
         await gracefulShutdown(exitCode);
     });
@@ -307,7 +338,6 @@ program
 
         const opts = program.opts() as GlobalOptions;
         const ctx = await setupContext(opts);
-        setCurrentContext(ctx);
         const modelSpec = cmdOpts.model || opts.model;
         const exitCode = await generateCommand(
             ctx,
@@ -329,7 +359,6 @@ program
     .action(async () => {
         const opts = program.opts() as GlobalOptions;
         const ctx = await setupContext(opts);
-        setCurrentContext(ctx);
         const exitCode = await doctorCommand(ctx);
         await gracefulShutdown(exitCode);
     });
@@ -344,7 +373,6 @@ program
     .action(async (tools: string[]) => {
         const opts = program.opts() as GlobalOptions;
         const ctx = await setupContext(opts);
-        setCurrentContext(ctx);
         const exitCode = await setupCommand(ctx, tools);
         await gracefulShutdown(exitCode);
     });
@@ -359,7 +387,6 @@ program
     .action(async (vcdFile: string) => {
         const opts = program.opts() as GlobalOptions;
         const ctx = await setupContext(opts);
-        setCurrentContext(ctx);
         const exitCode = await waveCommand(ctx, vcdFile);
         await gracefulShutdown(exitCode);
     });
@@ -371,7 +398,6 @@ program
     .action(async (vcdFile: string, options: { port: string }) => {
         const opts = program.opts() as GlobalOptions;
         const ctx = await setupContext(opts);
-        setCurrentContext(ctx);
         const exitCode = await waveWebCommand(ctx, vcdFile, parseInt(options.port, 10));
         await gracefulShutdown(exitCode);
     });

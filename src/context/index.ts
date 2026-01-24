@@ -1,12 +1,15 @@
 /**
- * Dynamic Context Discovery Module
+ * Context Management Module
  *
- * Implements Cursor's context optimization strategies:
- * 1. Tool Description Optimization - ~46% token reduction
- * 2. Long Tool Responses as Files - 30-40% for verification sessions
- * 3. Terminal Sessions as Files - 10-20% reduction
+ * Context optimization strategies:
+ * 1. Long Tool Responses as Files - 30-40% for verification sessions
+ * 2. Terminal Sessions as Files - 10-20% reduction
+ * 3. Token Budget Management - Pre-flight context estimation
+ * 4. File Chunking - AST-based large file handling
  *
- * Core principle: Files as the universal context primitive
+ * Note: SkillManager, ToolDescriptionManager, and SemanticSummarizer
+ * were removed in favor of AI SDK 6 native features (pruneMessages,
+ * prepareStep, contextWindowManager).
  */
 
 // Types
@@ -65,47 +68,6 @@ export {
     type ContextIndexEntry,
     type DynamicContextConfig
 } from './DynamicContextManager.js';
-
-// Tool Description Manager (Phase 2 - Pattern 4: 46.9% token reduction)
-export {
-    ToolDescriptionManager,
-    getToolDescriptionManager,
-    createToolDescriptionManager,
-    setGlobalToolDescriptionManager,
-    type ToolIndex,
-    type ToolFileMeta,
-    type ToolDescriptionManagerConfig
-} from './ToolDescriptionManager.js';
-
-// Skill Manager (Phase 2 - Pattern 3: Agent Skills)
-export {
-    SkillManager,
-    getSkillManager,
-    createSkillManager,
-    setGlobalSkillManager,
-    type Skill,
-    type SkillIndexEntry,
-    type SkillIndex,
-    type SkillSearchResult,
-    type SkillManagerConfig
-} from './SkillManager.js';
-
-// Semantic Summarizer (Phase 2 - Context Compaction)
-export {
-    SemanticSummarizer,
-    getSemanticSummarizer,
-    createSemanticSummarizer,
-    setGlobalSemanticSummarizer,
-    DEFAULT_IMPORTANCE_WEIGHTS,
-    DEFAULT_TOOL_CLEARING,
-    type Message,
-    type MessageImportance,
-    type ImportanceFactor,
-    type ImportanceWeights,
-    type ToolClearingOptions,
-    type CompactionResult,
-    type SemanticSummarizerConfig
-} from './SemanticSummarizer.js';
 
 // File Chunker (Phase 2 - Large File Handling)
 export {

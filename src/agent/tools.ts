@@ -17,10 +17,7 @@ import type {
     TerminalSessionManager,
     DynamicContextManager,
     FileChunker,
-    TokenBudgetManager,
-    SkillManager,
-    ToolDescriptionManager,
-    SemanticSummarizer
+    TokenBudgetManager
 } from '../context/index.js';
 import type { MemoryManager, KnowledgeStore, MemoryService } from '../memory/index.js';
 import { LEARNED_TYPES, type LearnedKnowledgeType } from '../memory/knowledge-service/index.js';
@@ -62,9 +59,6 @@ export interface ToolContext {
     dynamicContextManager?: DynamicContextManager;
     fileChunker?: FileChunker;
     tokenBudgetManager?: TokenBudgetManager;
-    skillManager?: SkillManager;
-    toolDescriptionManager?: ToolDescriptionManager;
-    semanticSummarizer?: SemanticSummarizer;
 }
 
 // ============================================================================
@@ -361,7 +355,6 @@ export const TOOL_APPROVAL_CONFIG: Record<string, boolean> = {
     search_terminal: false,
     get_terminal_file_path: false,
 
-    // Phase 2: Context Window Management - no approval (read-only)
     // Phase 2: Context Window Management - no approval (read-only)
     grep_context: false,
     jq_context: false,
@@ -2396,8 +2389,16 @@ export function createToolExecutors(ctx: ToolContext): Record<string, (args: any
             };
         },
 
-        // Request continuation - signal that task needs more turns to complete
+        // Continuation system - checkpoint for multi-segment execution
         request_continuation: async (args: z.infer<typeof requestContinuationSchema>) => {
+            // This tool returns a special marker that signals the continuation system
+            // The agent loop detects this and triggers a new segment
+            ctx.bus.emit({
+                type: 'status',
+                phase: 'tool',
+                label: `Checkpointing: ${args.completedTasks.length} done, ${args.remainingTasks.length} remaining`
+            });
+
             return {
                 _continuation: true,
                 completedTasks: args.completedTasks,
@@ -2662,9 +2663,9 @@ export function getToolSpecs(): Record<string, ToolSpec> {
             needsApproval: TOOL_APPROVAL_CONFIG.help_setup_tools
         },
 
-        // Continuation coordination - for multi-turn task management
+        // Continuation system
         request_continuation: {
-            description: 'Signal that the current task requires additional turns to complete. Call this when you have made progress but cannot finish in the current turn due to context limits or task complexity. Provides structured handoff to the next turn.',
+            description: 'Request continuation to a new segment when approaching the step limit but more work remains. Call this when you have completed some tasks but need more steps to finish. Provide a checkpoint of completed tasks, remaining tasks, and any context notes. The system will continue execution in a new segment with fresh step budget.',
             parameters: requestContinuationSchema,
             needsApproval: TOOL_APPROVAL_CONFIG.request_continuation
         }

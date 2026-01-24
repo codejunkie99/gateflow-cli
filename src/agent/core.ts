@@ -8,6 +8,8 @@
  * - Integrates with PolicyEngine for path safety
  */
 
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
 import { streamText, stepCountIs, type StepResult, type Tool, type ModelMessage } from 'ai';
 import { z } from 'zod';
 import {
@@ -45,6 +47,7 @@ import {
 import {
     stopWhenAny,
     continuationRequested,
+    getEffectiveStepLimit,
     type StopCondition
 } from './stop-conditions.js';
 import type { RuntimeCallOptions } from '../types/agent-types.js';
@@ -66,6 +69,7 @@ import {
 import { prefetchOpenRouterModels } from './model-provider-openrouter.js';
 import { modelCapabilities } from './model-capabilities/index.js';
 import { truncateToFit } from '../memory/token-estimator.js';
+import { AsyncMutex } from '../concurrency/index.js';
 
 // ============================================================================
 // Types
@@ -86,6 +90,11 @@ export interface AgentConfig {
     temperature: number;
     maxToolCalls: number;
     systemPrompt: string;
+    /**
+     * Max characters to keep from partial continuation results.
+     * Set to 0 to omit partial results from continuation context.
+     */
+    continuationPartialResultsMaxChars?: number;
 }
 
 export interface AgentSession {
@@ -181,8 +190,10 @@ export interface ContinuationCheckpoint {
     notes?: string;
     /** Current segment number */
     segmentNumber: number;
-    /** Cumulative steps across all segments */
-    cumulativeSteps: number;
+    /** Cumulative tool calls across all segments */
+    cumulativeToolCalls: number;
+    /** Cumulative completed tasks across all segments */
+    cumulativeCompletedTasks: number;
 }
 
 /**
@@ -210,6 +221,64 @@ export interface ContinuationOptions extends RunOptions {
 
 const DEFAULT_SYSTEM_PROMPT = getSystemPrompt('general');
 const ARCHIVE_INSTRUCTIONS_TOKEN_BUDGET = 200;
+const DEFAULT_CONTINUATION_PARTIAL_MAX_CHARS = 2000;
+const CONTINUATION_PARTIAL_MAX_CHARS_ENV = 'GATEFLOW_CONTINUATION_PARTIAL_MAX_CHARS';
+
+function parseNonNegativeInt(value: string | undefined): number | undefined {
+    if (!value) {
+        return undefined;
+    }
+
+    const parsed = Number.parseInt(value, 10);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+        return undefined;
+    }
+
+    return parsed;
+}
+
+function resolveContinuationPartialResultsMaxChars(): number {
+    return (
+        parseNonNegativeInt(process.env[CONTINUATION_PARTIAL_MAX_CHARS_ENV])
+        ?? DEFAULT_CONTINUATION_PARTIAL_MAX_CHARS
+    );
+}
+
+function truncatePartialResults(partialResults: string, maxLength: number): string {
+    if (maxLength <= 0) {
+        return '';
+    }
+
+    if (partialResults.length <= maxLength) {
+        return partialResults;
+    }
+
+    const marker = '\n...\n';
+    if (maxLength <= marker.length + 1) {
+        if (maxLength <= 3) {
+            return partialResults.slice(-maxLength);
+        }
+        return '...' + partialResults.slice(-Math.max(0, maxLength - 3));
+    }
+
+    const available = maxLength - marker.length;
+    let headLength = Math.min(500, Math.floor(available * 0.25));
+    let tailLength = available - headLength;
+
+    if (headLength <= 0) {
+        headLength = 1;
+        tailLength = available - headLength;
+    }
+
+    if (tailLength <= 0) {
+        tailLength = 1;
+        headLength = available - tailLength;
+    }
+
+    const head = partialResults.slice(0, headLength);
+    const tail = partialResults.slice(-tailLength);
+    return `${head}${marker}${tail}`;
+}
 
 // ============================================================================
 // Agent Class
@@ -249,6 +318,10 @@ export class GateFlowAgent {
             resolvedModelString = `${resolvedModelConfig.provider}/${resolvedModelConfig.model}`;
         }
 
+        const continuationPartialResultsMaxChars =
+            config?.continuationPartialResultsMaxChars
+            ?? resolveContinuationPartialResultsMaxChars();
+
         this.config = {
             model: resolvedModelString,
             modelConfig: resolvedModelConfig,
@@ -257,13 +330,29 @@ export class GateFlowAgent {
             maxTokens: config?.maxTokens ?? 8192,
             temperature: config?.temperature ?? 0.7,
             maxToolCalls: config?.maxToolCalls ?? 25,
-            systemPrompt: config?.systemPrompt ?? DEFAULT_SYSTEM_PROMPT
+            systemPrompt: config?.systemPrompt ?? DEFAULT_SYSTEM_PROMPT,
+            continuationPartialResultsMaxChars
         };
 
-        this.toolContext = toolContext;
+        const existingContinuationHandler = toolContext.onContinuationCheckpoint;
+        this.toolContext = {
+            ...toolContext,
+            onContinuationCheckpoint: (checkpoint) => {
+                this.lastContinuationCheckpoint = {
+                    completedTasks: checkpoint.completedTasks,
+                    remainingTasks: checkpoint.remainingTasks,
+                    partialResults: checkpoint.partialResults,
+                    notes: checkpoint.notes,
+                    segmentNumber: 0,
+                    cumulativeToolCalls: 0,
+                    cumulativeCompletedTasks: 0
+                };
+                existingContinuationHandler?.(checkpoint);
+            }
+        };
         this.memoryService = toolContext.memoryService;
         this.memoryManager = toolContext.memoryManager ?? toolContext.memoryService?.memory;
-        this.executors = createToolExecutors(toolContext);
+        this.executors = createToolExecutors(this.toolContext);
         this.tools = this.buildTools();
         this.session = this.createSession();
 
@@ -319,6 +408,7 @@ export class GateFlowAgent {
     /**
      * Build tools using the agent factory.
      * Tools are configured with needsApproval metadata from TOOL_APPROVAL_CONFIG.
+     * Wraps executors to emit tool_progress events for granular UI feedback.
      */
     private buildTools(): Record<string, Tool> {
         const specs = getToolDefinitions();
@@ -333,7 +423,56 @@ export class GateFlowAgent {
                     if (!executor) {
                         throw new Error(`Unknown tool: ${name}`);
                     }
-                    return executor(args);
+
+                    // Extract file path for metadata (used by read_file, write_file, etc.)
+                    const argsObj = args as Record<string, unknown> | null;
+                    const filePath = argsObj?.path as string | undefined;
+
+                    // Emit 'executing' state - tool execution is starting
+                    // Note: 'started' is emitted from stream processing when tool-call is received
+                    this.bus.emit({
+                        type: 'tool_progress',
+                        tool: name,
+                        state: 'executing',
+                        metadata: filePath ? { file: filePath } : undefined
+                    });
+
+                    try {
+                        const result = await executor(args);
+
+                        // Build metadata for completed state
+                        const metadata: { file?: string; lineCount?: number } = {};
+                        if (filePath) {
+                            metadata.file = filePath;
+                        }
+
+                        // For read_file, extract line count from result
+                        if (name === 'read_file' && result && typeof result === 'object') {
+                            const readResult = result as { lines?: number };
+                            if (typeof readResult.lines === 'number') {
+                                metadata.lineCount = readResult.lines;
+                            }
+                        }
+
+                        // Emit 'completed' state with metadata
+                        this.bus.emit({
+                            type: 'tool_progress',
+                            tool: name,
+                            state: 'completed',
+                            metadata: Object.keys(metadata).length > 0 ? metadata : undefined
+                        });
+
+                        return result;
+                    } catch (error) {
+                        // Emit 'failed' state on error
+                        this.bus.emit({
+                            type: 'tool_progress',
+                            tool: name,
+                            state: 'failed',
+                            metadata: filePath ? { file: filePath } : undefined
+                        });
+                        throw error;
+                    }
                 }
             };
         }
@@ -526,6 +665,11 @@ export class GateFlowAgent {
         // Track token usage for agent_complete
         let lastUsage: UsageWithExtensions | undefined;
 
+        // Track completion state for finally block
+        let fullResponse = '';
+        let runSucceeded = false;
+        let runError: unknown = null;
+
         try {
             // Emit status immediately so spinner shows during processing
             this.bus.emit({
@@ -577,9 +721,20 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
                 ...complexityVariantOptions,
             });
 
+            const resolveMode = (): PromptMode => {
+                const modeContext: DetectModeContext = {
+                    hasErrors: this.session.hasErrors,
+                    ...options?.modeContext
+                };
+                return callOptions?.mode ?? options?.mode ?? detectMode(userMessage, modeContext);
+            };
+
             // Route to orchestrator immediately if multi-agent is needed
             // This happens BEFORE mode detection to prevent mode from blocking orchestration
             if (complexity.needsMultiAgent && this.orchestrator) {
+                // Keep session mode up to date even for orchestrated requests.
+                this.session.currentMode = resolveMode();
+
                 this.session.thinkingChain.addCoordinationStep(
                     'Using multi-agent orchestrator',
                     { reasoning: complexity.reasoning },
@@ -594,19 +749,47 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
                 });
 
                 // Use orchestrator for complex requests
-                return this.orchestrator.executeWithPlan(userMessage);
+                // LIMITATION: Orchestrator only returns final text, not intermediate tool calls.
+                // This means continuation (via request_continuation tool) is not supported for
+                // multi-agent tasks - extractContinuationCheckpoint() won't find tool results.
+                // TODO: To support continuation for orchestrated tasks, either:
+                //   1. Have orchestrator populate session.messages with tool results, or
+                //   2. Implement a separate continuation mechanism for orchestrated tasks
+                const orchestratorResult = await this.orchestrator.executeWithPlan(userMessage);
+                const trimmedResult = orchestratorResult.trim();
+                // Guard against empty content which violates LLM API contracts
+                if (trimmedResult) {
+                    this.session.messages.push({
+                        role: 'assistant',
+                        content: orchestratorResult
+                    });
+                    fullResponse = orchestratorResult;
+                } else {
+                    const emptyResultMessage =
+                        'Multi-agent run completed with no text output. Check file changes or logs for results.';
+                    this.bus.emit({
+                        type: 'status',
+                        phase: 'thinking',
+                        label: emptyResultMessage
+                    });
+                    this.session.messages.push({
+                        role: 'assistant',
+                        content: emptyResultMessage
+                    });
+                    fullResponse = emptyResultMessage;
+                }
+                // Set response and success flag - completion events emitted in finally
+                runSucceeded = true;
             }
 
             // ========================================================================
             // Single-agent flow: Mode detection happens AFTER complexity check
+            // Skip if orchestrator already handled the request
             // ========================================================================
+            if (!runSucceeded) {
 
             // Detect mode for this query (can be overridden by call options)
-            const modeContext: DetectModeContext = {
-                hasErrors: this.session.hasErrors,
-                ...options?.modeContext
-            };
-            const mode = callOptions?.mode ?? options?.mode ?? detectMode(userMessage, modeContext);
+            const mode = resolveMode();
             this.session.currentMode = mode;
 
             // Add thinking step at mode detection
@@ -620,7 +803,10 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
             const workflowOutcome = await this.tryWorkflowExecution(userMessage, mode);
             switch (workflowOutcome.status) {
                 case 'applied':
-                    return workflowOutcome.output;
+                    // Set response and success flag - completion events emitted in finally
+                    fullResponse = workflowOutcome.output;
+                    runSucceeded = true;
+                    break;
                 case 'failed': {
                     const workflowLabel = workflowOutcome.workflow === 'unknown'
                         ? 'workflow'
@@ -642,6 +828,8 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
                     break;
             }
 
+            // Skip single-agent flow if workflow already handled the request
+            if (!runSucceeded) {
             // Simple requests: continue with single-agent flow
             // AI SDK 6: Get agent bundle with approval-aware tools
             const bundle = this.getAgentBundle(mode);
@@ -732,6 +920,29 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
                             }
                         }
                     }
+
+                    // Emit thinking_stream completion event when step finishes
+                    // This marks the end of reasoning for this step
+                    if (step.reasoning) {
+                        this.bus.emit({
+                            type: 'thinking_stream',
+                            text: '',
+                            isComplete: true
+                        });
+                    }
+                },
+
+                // AI SDK 6: onChunk callback for real-time reasoning/thinking stream
+                // Emits thinking_stream events for Claude Code-like UI feedback
+                onChunk: ({ chunk }) => {
+                    if (chunk.type === 'reasoning-delta') {
+                        // Emit reasoning text as it streams in
+                        this.bus.emit({
+                            type: 'thinking_stream',
+                            text: chunk.text,
+                            isComplete: false
+                        });
+                    }
                 },
 
                 // Error callback for stream errors (AI SDK v6)
@@ -778,8 +989,6 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
                 }
             });
 
-            let fullResponse = '';
-
             // Process the stream for all event types (AI SDK 6)
             for await (const part of result.fullStream) {
                 if (options?.signal?.aborted) {
@@ -795,7 +1004,7 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
                         });
                         break;
 
-                    case 'tool-call':
+                    case 'tool-call': {
                         // AI SDK 6: Emit tool call event from stream (uses 'input' not 'args')
                         this.bus.emit({
                             type: 'tool_call',
@@ -803,8 +1012,20 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
                             argsSummary: this.summarizeArgs(part.input),
                             args: part.input as Record<string, unknown>
                         });
+
+                        // Emit tool_progress 'started' state when tool call is received
+                        const toolInput = part.input as Record<string, unknown> | null;
+                        const toolFilePath = toolInput?.path as string | undefined;
+                        this.bus.emit({
+                            type: 'tool_progress',
+                            tool: part.toolName,
+                            state: 'started',
+                            metadata: toolFilePath ? { file: toolFilePath } : undefined
+                        });
+
                         options?.onToolCall?.(part.toolName, part.input);
                         break;
+                    }
 
                     case 'tool-result':
                         // AI SDK 6: Emit tool result event from stream (uses 'output' not 'result')
@@ -921,6 +1142,18 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
                 });
             }
 
+            // Mark single-agent flow as successful
+            runSucceeded = true;
+
+            } // End: if (!runSucceeded) after workflow check
+            } // End: if (!runSucceeded) after orchestrator check
+
+        } catch (error) {
+            // Save error for finally block - don't emit events here
+            runError = error;
+            runSucceeded = false;
+        } finally {
+            // Always emit completion events regardless of exit path
             this.bus.emit({ type: 'token_done' });
 
             // Emit agent lifecycle complete with token usage
@@ -929,7 +1162,7 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
             this.bus.emit({
                 type: 'agent_complete',
                 agentName: 'gateflow',
-                success: true,
+                success: runSucceeded,
                 durationMs: Date.now() - agentStartTime,
                 inputTokens: lastUsage?.inputTokens,
                 outputTokens: lastUsage?.outputTokens,
@@ -941,26 +1174,18 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
                 rawUsage: extendedUsage?.rawUsage
             });
 
-            return fullResponse;
-
-        } catch (error) {
-            // Emit error event
-            const errorMsg = error instanceof Error ? error.message : String(error);
-            this.bus.emit({
-                type: 'error',
-                message: errorMsg
-            });
-
-            // Emit agent_complete with failure
-            this.bus.emit({
-                type: 'agent_complete',
-                agentName: 'gateflow',
-                success: false,
-                durationMs: Date.now() - agentStartTime
-            });
-
-            throw error;
+            // Re-throw error if one occurred, or return response
+            if (runError) {
+                const errorMsg = runError instanceof Error ? runError.message : String(runError);
+                this.bus.emit({
+                    type: 'error',
+                    message: errorMsg
+                });
+                throw runError;
+            }
         }
+
+        return fullResponse;
     }
 
     // ========================================================================
@@ -1087,7 +1312,23 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
      * @param bundle - The agent bundle containing LanguageModel objects (required to avoid AI Gateway fallback)
      */
     private createPrepareStep(mode: PromptMode, bundle: AgentBundle): PrepareStepFn {
+        const effectiveLimit = getEffectiveStepLimit(mode, this.config.maxToolCalls);
+        // Clamp to at least 1 (1-indexed) to prevent false triggers on first step
+        const warningStep = Math.max(1, effectiveLimit - 5);
+        const criticalStep = Math.max(1, effectiveLimit - 2);
+
         return combinePrepareSteps(
+            // 0. Track step state for continuation guard
+            ({ stepNumber }) => {
+                this.toolContext.continuationState = {
+                    currentStep: stepNumber + 1,
+                    warningStep,
+                    criticalStep,
+                    stepLimit: effectiveLimit
+                };
+                return {};
+            },
+
             // 1. Context window management - trim old messages to stay within limits
             contextWindowManager({
                 maxMessages: 40,
@@ -1113,10 +1354,11 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
             }),
 
             // 4. Continuation warnings - alert agent as it approaches step limit
+            // Use mode-effective limit so warnings align with actual stop condition
             continuationWarning({
-                warningStep: 20,
-                criticalStep: 23,
-                stepLimit: this.config.maxToolCalls
+                warningStep,
+                criticalStep,
+                stepLimit: effectiveLimit
             }),
 
             // 5. Mode-specific tool control
@@ -1130,31 +1372,32 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
     private createModeSpecificPrepareStep(mode: PromptMode): PrepareStepFn {
         return ({ stepNumber, steps }) => {
             // Mode-specific tool restrictions
+            // NOTE: request_continuation is always included to support multi-segment execution
             switch (mode) {
                 case 'lint_fix':
                     // For lint fix, prioritize lint and edit tools
                     if (stepNumber === 0) {
-                        return { activeTools: ['lint_file', 'read_file'] };
+                        return { activeTools: ['lint_file', 'read_file', 'request_continuation'] };
                     }
-                    return { activeTools: ['lint_file', 'read_file', 'edit_lines', 'search_replace'] };
+                    return { activeTools: ['lint_file', 'read_file', 'edit_lines', 'search_replace', 'request_continuation'] };
 
                 case 'testbench':
                     // For testbench, focus on read then write
                     if (stepNumber < 2) {
-                        return { activeTools: ['read_file', 'find_module', 'list_files'] };
+                        return { activeTools: ['read_file', 'find_module', 'list_files', 'request_continuation'] };
                     }
-                    return { activeTools: ['write_file', 'read_file', 'run_simulation'] };
+                    return { activeTools: ['write_file', 'read_file', 'run_simulation', 'request_continuation'] };
 
                 case 'generate':
                     // For generation, analyze first then write
                     if (stepNumber < 2) {
-                        return { activeTools: ['read_file', 'find_module', 'list_files', 'search_code'] };
+                        return { activeTools: ['read_file', 'find_module', 'list_files', 'search_code', 'request_continuation'] };
                     }
                     return {}; // All tools available
 
                 case 'debug':
                     // Debug mode - focus on analysis tools
-                    return { activeTools: ['read_file', 'search_code', 'grep_context', 'tail_context', 'lint_file'] };
+                    return { activeTools: ['read_file', 'search_code', 'grep_context', 'tail_context', 'lint_file', 'request_continuation'] };
 
                 default:
                     // General mode - no restrictions
@@ -1247,6 +1490,8 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
      */
     resetSession(): void {
         this.session = this.createSession();
+        // Clear checkpoints file (fire-and-forget)
+        this.clearCheckpointsFile().catch(() => {});
     }
 
     /**
@@ -1291,18 +1536,28 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
 
     /** Last continuation checkpoint from request_continuation tool */
     private lastContinuationCheckpoint: ContinuationCheckpoint | null = null;
+    /** Message index at start of current segment (for scoped checkpoint extraction) */
+    private segmentStartMessageIndex: number = 0;
 
     /**
      * Run the agent with automatic continuation support.
      * Wraps run() in a loop that handles continuation checkpoints,
      * allowing tasks to complete across multiple segments.
      *
-     * Each segment gets up to maxToolCalls steps. When the agent calls
-     * request_continuation, a new segment starts with fresh step budget.
+     * Each segment gets a step budget determined by the agent's mode:
+     * - Base limit is maxToolCalls (default 25)
+     * - Mode multipliers apply (e.g., debug mode uses 1.5x)
+     * - Actual per-segment steps = getEffectiveStepLimit(mode, maxToolCalls)
+     *
+     * When the agent calls request_continuation, a new segment starts
+     * with a fresh step budget.
      *
      * Supports two modes:
      * - Fixed: Uses maxSegments (default 5) as hard limit
      * - Dynamic: Continues while progress is being made (tasks completing)
+     *
+     * Note: Total steps across all segments can exceed maxSegments * maxToolCalls
+     * when mode multipliers are active.
      *
      * @param userMessage - The user's request
      * @param options - Continuation options including maxSegments or dynamicSegments
@@ -1319,15 +1574,38 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
 
         let accumulatedResponse = '';
         let segmentNumber = 0;
-        let cumulativeSteps = 0;
+        let cumulativeToolCalls = 0;
         let currentMessage = userMessage;
         let previousRemainingCount = Infinity;  // For progress tracking
+        const completedTaskIds = new Set<string>(); // Track unique completed tasks across segments
+        let cumulativeCompletedCount = 0;       // Track total completed across segments
+        let lockedMode: PromptMode | undefined; // Preserve mode across continuation segments
 
-        // Reset continuation tracking
+        // Reset continuation tracking for this run
         this.lastContinuationCheckpoint = null;
+        // Clear checkpoints file to prevent stale data from previous runs affecting this run
+        await this.clearCheckpointsFile();
 
         while (segmentNumber < segmentLimit) {
             segmentNumber++;
+
+            // One-time warning when dynamic mode starts
+            if (isDynamic && segmentNumber === 1) {
+                this.bus.emit({
+                    type: 'status',
+                    phase: 'thinking',
+                    label: `Dynamic continuation enabled (up to ${segmentLimit} segments if making progress)`
+                });
+            }
+
+            // Snapshot tool call count at segment start to compute delta later
+            const segmentStartToolCalls = this.session.toolCallCount;
+
+            // Reset continuation checkpoint at start of each segment to prevent
+            // stale checkpoints from previous segments being returned
+            this.lastContinuationCheckpoint = null;
+            // Track message boundary for scoped checkpoint extraction
+            this.segmentStartMessageIndex = this.session.messages.length;
 
             const statusLabel = isDynamic
                 ? (segmentNumber > 1 ? `Continuing... (segment ${segmentNumber}, making progress)` : 'Processing...')
@@ -1340,8 +1618,10 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
             });
 
             // Run a segment with continuation stop condition added
+            // Lock mode after first segment to prevent re-detection from generic continuation prompts
             const response = await this.run(currentMessage, {
                 ...options,
+                mode: lockedMode ?? options?.mode,  // Use locked mode once established
                 runtimeOptions: {
                     ...options?.runtimeOptions,
                     stopConditions: [
@@ -1351,27 +1631,49 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
                 }
             });
 
+            // After first segment, lock the mode to prevent drift
+            if (!lockedMode) {
+                lockedMode = this.session.currentMode;
+            }
+
+            // Add delimiter between segments to prevent merged/ambiguous output
+            if (segmentNumber > 1 && response.trim()) {
+                accumulatedResponse += '\n\n';
+            }
             accumulatedResponse += response;
 
             // Check for continuation checkpoint
             const checkpoint = this.extractContinuationCheckpoint();
-            cumulativeSteps += this.session.toolCallCount;
+            // Add only the delta (tool calls made in THIS segment), not the session total
+            cumulativeToolCalls += this.session.toolCallCount - segmentStartToolCalls;
 
             if (!checkpoint || checkpoint.remainingTasks.length === 0) {
                 // Task complete - no continuation requested or no remaining tasks
                 break;
             }
 
+            // Track cumulative completed tasks across all segments (for both modes)
+            const newlyCompleted = checkpoint.completedTasks.filter(task => !completedTaskIds.has(task));
+            for (const task of newlyCompleted) {
+                completedTaskIds.add(task);
+            }
+            cumulativeCompletedCount = completedTaskIds.size;
+
             // Progress-based check for dynamic mode
             if (isDynamic) {
                 const currentRemainingCount = checkpoint.remainingTasks.length;
 
-                if (currentRemainingCount >= previousRemainingCount) {
-                    // No progress - remaining tasks same or increased
+                // Progress is made if: remaining decreased OR tasks were completed this segment
+                // remainingDecreased also covers the "all done" case even if completedTasks is empty.
+                const remainingDecreased = currentRemainingCount < previousRemainingCount;
+                const tasksCompleted = newlyCompleted.length > 0;
+
+                if (!remainingDecreased && !tasksCompleted) {
+                    // No progress - remaining didn't decrease AND no tasks completed
                     this.bus.emit({
                         type: 'status',
                         phase: 'thinking',
-                        label: `No progress detected (${currentRemainingCount} tasks remaining). Stopping.`
+                        label: `No progress detected (${currentRemainingCount} tasks remaining, 0 completed). Stopping.`
                     });
                     break;
                 }
@@ -1381,7 +1683,8 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
 
             // Update checkpoint with segment info
             checkpoint.segmentNumber = segmentNumber;
-            checkpoint.cumulativeSteps = cumulativeSteps;
+            checkpoint.cumulativeToolCalls = cumulativeToolCalls;
+            checkpoint.cumulativeCompletedTasks = cumulativeCompletedCount;
 
             // Emit continuation event
             this.bus.emit({
@@ -1393,8 +1696,21 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
             // Callback for progress tracking
             options?.onSegmentComplete?.(checkpoint);
 
+            // Defensive: external callbacks could mutate the checkpoint
+            if (checkpoint.remainingTasks.length === 0) {
+                this.bus.emit({
+                    type: 'status',
+                    phase: 'thinking',
+                    label: 'Continuation requested but remainingTasks is empty after callback. Stopping.'
+                });
+                break;
+            }
+
+            // Prune old messages to prevent unbounded growth
+            await this.pruneSegmentMessages();
+
             // Build continuation prompt for next segment
-            currentMessage = this.buildContinuationPrompt(checkpoint, userMessage);
+            currentMessage = await this.buildContinuationPrompt(checkpoint, userMessage);
         }
 
         // Final status
@@ -1412,12 +1728,44 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
     }
 
     /**
+     * Safely coerce an unknown value to a string array.
+     * Handles malformed LLM outputs gracefully:
+     * - Arrays: filters to string elements only
+     * - Strings: wraps in array
+     * - null/undefined/other: returns empty array
+     */
+    private toStringArray(value: unknown): string[] {
+        if (Array.isArray(value)) {
+            return value.filter((item): item is string => typeof item === 'string');
+        }
+        if (typeof value === 'string' && value.trim() !== '') {
+            return [value];
+        }
+        return [];
+    }
+
+    /**
      * Extract continuation checkpoint from the last tool result.
      * Looks for request_continuation tool output with _continuation marker.
+     * Only searches messages from the current segment (since segmentStartMessageIndex).
+     *
+     * NOTE: This only works for direct agent execution. Orchestrated multi-agent tasks
+     * don't populate session.messages with tool results, so continuation checkpoints
+     * from worker agents won't be found. See executeWithPlan() for details.
      */
     private extractContinuationCheckpoint(): ContinuationCheckpoint | null {
-        // Search recent messages for tool results from request_continuation
-        for (let i = this.session.messages.length - 1; i >= 0; i--) {
+        if (this.lastContinuationCheckpoint) {
+            return this.lastContinuationCheckpoint;
+        }
+
+        // If summarization pruned messages during this segment, the saved index may be
+        // out of bounds. Fall back to scanning all messages to ensure we find the checkpoint.
+        const scanStartIndex = this.segmentStartMessageIndex < this.session.messages.length
+            ? this.segmentStartMessageIndex
+            : 0;
+
+        // Search only current segment's messages for tool results from request_continuation
+        for (let i = this.session.messages.length - 1; i >= scanStartIndex; i--) {
             const msg = this.session.messages[i];
             if (msg.role !== 'tool') continue;
 
@@ -1435,12 +1783,13 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
                     const output = toolResult.output as Record<string, unknown> | null;
                     if (output && output._continuation === true) {
                         this.lastContinuationCheckpoint = {
-                            completedTasks: (output.completedTasks as string[]) ?? [],
-                            remainingTasks: (output.remainingTasks as string[]) ?? [],
-                            partialResults: output.partialResults as string | undefined,
-                            notes: output.notes as string | undefined,
+                            completedTasks: this.toStringArray(output.completedTasks),
+                            remainingTasks: this.toStringArray(output.remainingTasks),
+                            partialResults: typeof output.partialResults === 'string' ? output.partialResults : undefined,
+                            notes: typeof output.notes === 'string' ? output.notes : undefined,
                             segmentNumber: 0,
-                            cumulativeSteps: 0
+                            cumulativeToolCalls: 0,
+                            cumulativeCompletedTasks: 0
                         };
                         return this.lastContinuationCheckpoint;
                     }
@@ -1451,23 +1800,129 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
         return null;
     }
 
+    // =========================================================================
+    // Checkpoint File Storage
+    // =========================================================================
+
+    /**
+     * Get path to checkpoints file for this session.
+     */
+    private getCheckpointsFilePath(): string {
+        return path.join(this.toolContext.projectRoot, '.gateflow', 'checkpoints.jsonl');
+    }
+
+    /** Max checkpoints to keep in file (prevents unbounded growth) */
+    private static readonly MAX_CHECKPOINTS = 100;
+
+    /** Mutex to serialize checkpoint file operations (prevents write interleaving) */
+    private checkpointMutex = new AsyncMutex();
+
+    /**
+     * Save a checkpoint to the JSONL file.
+     * Appends to existing file and rotates if exceeding MAX_CHECKPOINTS.
+     * Uses mutex to prevent concurrent writes from corrupting the file.
+     */
+    private async saveCheckpointToFile(checkpoint: ContinuationCheckpoint): Promise<void> {
+        const filePath = this.getCheckpointsFilePath();
+        const dir = path.dirname(filePath);
+
+        await this.checkpointMutex.withLock(async () => {
+            try {
+                await fs.mkdir(dir, { recursive: true });
+                await fs.appendFile(filePath, JSON.stringify(checkpoint) + '\n', 'utf-8');
+
+                // Rotate file if it exceeds max checkpoints (prevents unbounded disk growth)
+                await this.rotateCheckpointsFileIfNeeded(filePath);
+            } catch {
+                // Non-critical - pruning will fall back to regex if file unavailable
+            }
+        });
+    }
+
+    /**
+     * Rotate checkpoints file if it exceeds MAX_CHECKPOINTS lines.
+     * Keeps only the most recent checkpoints.
+     */
+    private async rotateCheckpointsFileIfNeeded(filePath: string): Promise<void> {
+        try {
+            const content = await fs.readFile(filePath, 'utf-8');
+            const lines = content.trim().split('\n').filter(Boolean);
+
+            if (lines.length > GateFlowAgent.MAX_CHECKPOINTS) {
+                const recentLines = lines.slice(-GateFlowAgent.MAX_CHECKPOINTS);
+                await fs.writeFile(filePath, recentLines.join('\n') + '\n', 'utf-8');
+            }
+        } catch {
+            // Rotation failed - not critical, file will be rotated on next save
+        }
+    }
+
+    /**
+     * Load checkpoints from the JSONL file.
+     * Returns empty array if file doesn't exist or is corrupted.
+     * File is bounded by rotation, but slice is kept as safety measure.
+     * Uses mutex to prevent reading during concurrent writes.
+     */
+    private async loadCheckpointsFromFile(): Promise<ContinuationCheckpoint[]> {
+        const filePath = this.getCheckpointsFilePath();
+
+        return this.checkpointMutex.withLock(async () => {
+            try {
+                const content = await fs.readFile(filePath, 'utf-8');
+                const lines = content.trim().split('\n').filter(Boolean);
+                // Safety limit in case rotation was skipped
+                const recentLines = lines.slice(-GateFlowAgent.MAX_CHECKPOINTS);
+                return recentLines.map(line => JSON.parse(line) as ContinuationCheckpoint);
+            } catch {
+                return [];
+            }
+        });
+    }
+
+    /**
+     * Clear checkpoints file (called when starting new conversation or run).
+     * Uses mutex to prevent clearing during concurrent operations.
+     */
+    private async clearCheckpointsFile(): Promise<void> {
+        await this.checkpointMutex.withLock(async () => {
+            try {
+                await fs.unlink(this.getCheckpointsFilePath());
+            } catch {
+                // File may not exist
+            }
+        });
+    }
+
     /**
      * Build continuation prompt for the next segment.
-     * Adds context summary to session and returns focused continuation message.
+     * Adds context summary to session, saves checkpoint to file, and returns focused continuation message.
      */
-    private buildContinuationPrompt(
+    private async buildContinuationPrompt(
         checkpoint: ContinuationCheckpoint,
         _originalMessage: string
-    ): string {
+    ): Promise<string> {
+        // Save checkpoint to file for later consolidation (avoids regex parsing)
+        await this.saveCheckpointToFile(checkpoint);
+
         // Add continuation context as system message
+        // NOTE: Format must match regex fallback in pruneSegmentMessages() for consolidation
         const contextSummary = [
-            `[Continuation - Segment ${checkpoint.segmentNumber + 1}]`,
-            `Completed: ${checkpoint.completedTasks.join(', ')}`,
-            `Remaining: ${checkpoint.remainingTasks.join(', ')}`
+            `[Continuation - Segment ${checkpoint.segmentNumber}]`,
+            `Completed: ${checkpoint.completedTasks.join(', ')}`,  // Parsed by /Completed:\s*([^\n]+)/
+            `Remaining: ${checkpoint.remainingTasks.join(', ')}`   // Parsed by /Remaining:\s*([^\n]+)/
         ];
 
         if (checkpoint.notes) {
             contextSummary.push(`Notes: ${checkpoint.notes}`);
+        }
+
+        // Include partial results so agent can continue from intermediate work
+        if (checkpoint.partialResults) {
+            const maxLength = this.config.continuationPartialResultsMaxChars ?? DEFAULT_CONTINUATION_PARTIAL_MAX_CHARS;
+            if (maxLength > 0) {
+                const partial = truncatePartialResults(checkpoint.partialResults, maxLength);
+                contextSummary.push(`Partial results from previous segment:\n${partial}`);
+            }
         }
 
         this.session.messages.push({
@@ -1477,5 +1932,141 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
 
         // Return focused continuation prompt
         return `Continue with the remaining tasks: ${checkpoint.remainingTasks.join(', ')}`;
+    }
+
+    /**
+     * Prune session messages to prevent unbounded growth across continuation segments.
+     * Keeps: first user message, non-continuation system messages, consolidated continuation context, and recent messages.
+     * Uses stored checkpoints from filesystem for reliable consolidation (no regex parsing).
+     * @param keepRecent - Number of recent messages to preserve (default: 10)
+     */
+    private async pruneSegmentMessages(keepRecent: number = 10): Promise<void> {
+        const messages = this.session.messages;
+        if (messages.length <= keepRecent + 5) {
+            // Not enough messages to warrant pruning
+            return;
+        }
+
+        // Load checkpoints from file for reliable consolidation
+        const storedCheckpoints = await this.loadCheckpointsFromFile();
+
+        // Separate continuation system messages from other system messages
+        const continuationPrefix = '[Continuation -';
+        const continuationMessages: Array<{ index: number; content: string }> = [];
+        const otherSystemIndices: number[] = [];
+
+        for (let i = 0; i < messages.length; i++) {
+            if (messages[i].role === 'system') {
+                const msgContent = messages[i].content;
+                const content = typeof msgContent === 'string' ? msgContent : '';
+                if (content.startsWith(continuationPrefix)) {
+                    continuationMessages.push({ index: i, content });
+                } else {
+                    otherSystemIndices.push(i);
+                }
+            }
+        }
+
+        // Find indices to keep
+        const keepIndices = new Set<number>();
+
+        // Always keep the original user request (not context injection)
+        // Find by content rather than numeric index since indices shift after each prune
+        for (let i = 0; i < messages.length; i++) {
+            if (messages[i].role === 'user') {
+                const msgContent = messages[i].content;
+                const content = typeof msgContent === 'string' ? msgContent : '';
+                if (!content.startsWith('[Context]:')) {
+                    keepIndices.add(i);
+                    break;
+                }
+            }
+        }
+
+        // Keep all non-continuation system messages
+        for (const idx of otherSystemIndices) {
+            keepIndices.add(idx);
+        }
+
+        // For continuation messages: keep only the most recent one
+        // Use stored checkpoints for reliable consolidation (no regex parsing)
+        if (continuationMessages.length > 0) {
+            const lastContinuation = continuationMessages[continuationMessages.length - 1];
+
+            if (continuationMessages.length > 1) {
+                let mergedCompleted: string[] = [];
+                let remainingTasks: string[] = [];
+                let notes: string | undefined;
+
+                if (storedCheckpoints.length > 0) {
+                    // Consolidate: collect completed tasks from all stored checkpoints
+                    const allCompletedTasks = storedCheckpoints.flatMap(cp => cp.completedTasks);
+                    mergedCompleted = [...new Set(allCompletedTasks)];
+                    const latestCheckpoint = storedCheckpoints[storedCheckpoints.length - 1];
+                    remainingTasks = latestCheckpoint?.remainingTasks ?? [];
+                    notes = latestCheckpoint?.notes;
+                } else {
+                    // Fallback: parse completed tasks from message content using regex
+                    // NOTE: Regex must match format in buildContinuationPrompt()
+                    const completedRegex = /Completed:\s*([^\n]+)/;
+                    const remainingRegex = /Remaining:\s*([^\n]+)/;
+
+                    for (const contMsg of continuationMessages) {
+                        const completedMatch = contMsg.content.match(completedRegex);
+                        if (completedMatch) {
+                            const tasks = completedMatch[1].split(',').map(t => t.trim()).filter(Boolean);
+                            mergedCompleted.push(...tasks);
+                        }
+                    }
+                    mergedCompleted = [...new Set(mergedCompleted)];
+
+                    // Get remaining from the last continuation
+                    const lastRemainingMatch = lastContinuation.content.match(remainingRegex);
+                    if (lastRemainingMatch) {
+                        remainingTasks = lastRemainingMatch[1].split(',').map(t => t.trim()).filter(Boolean);
+                    }
+                }
+
+                if (mergedCompleted.length > 0) {
+                    // Extract segment number from last continuation for backward compatibility
+                    const segmentMatch = lastContinuation.content.match(/\[Continuation - Segment (\d+)\]/);
+                    const segmentLabel = segmentMatch
+                        ? `[Continuation - Segment ${segmentMatch[1]}]`
+                        : `[Continuation - Consolidated]`;
+
+                    // Build consolidated continuation message
+                    const consolidatedContent = [
+                        segmentLabel,
+                        `Completed: ${mergedCompleted.join(', ')}`,
+                        `Remaining: ${remainingTasks.join(', ')}`
+                    ];
+
+                    if (notes) {
+                        consolidatedContent.push(`Notes: ${notes}`);
+                    }
+
+                    messages[lastContinuation.index] = {
+                        role: 'system',
+                        content: consolidatedContent.join('\n')
+                    };
+                }
+            }
+
+            // Only keep the (now consolidated) last continuation message
+            keepIndices.add(lastContinuation.index);
+        }
+
+        // Keep the most recent messages
+        let startRecent = Math.max(0, messages.length - keepRecent);
+        // Ensure we don't start on a tool message (which needs its parent assistant)
+        while (startRecent > 0 && startRecent < messages.length && messages[startRecent].role === 'tool') {
+            startRecent--;
+        }
+        for (let i = startRecent; i < messages.length; i++) {
+            keepIndices.add(i);
+        }
+
+        // Build pruned array (use direct assignment to avoid call stack limit with spread)
+        this.session.messages = messages.filter((_, i) => keepIndices.has(i));
     }
 }

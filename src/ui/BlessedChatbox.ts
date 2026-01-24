@@ -8,6 +8,35 @@
 import blessed from 'blessed';
 import chalk from 'chalk';
 import readline from 'readline';
+import stringWidth from 'string-width';
+
+const ELLIPSIS = '…';
+const GRAPHEME_SEGMENTER =
+    typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function'
+        ? new Intl.Segmenter(undefined, { granularity: 'grapheme' })
+        : null;
+
+/**
+ * Iterate over graphemes lazily to avoid allocating large arrays.
+ * Use this in loops that may break early (e.g., truncation).
+ */
+function* iterateGraphemes(value: string): Generator<string> {
+    if (!GRAPHEME_SEGMENTER) {
+        yield* value;
+        return;
+    }
+    for (const segment of GRAPHEME_SEGMENTER.segment(value)) {
+        yield segment.segment;
+    }
+}
+
+/**
+ * Split string into graphemes array.
+ * For large strings with early termination, prefer iterateGraphemes().
+ */
+const splitGraphemes = (value: string): string[] => {
+    return Array.from(iterateGraphemes(value));
+};
 
 export interface ChatboxOptions {
     /** Width of the chatbox (number or percentage string like '80%') */
@@ -196,19 +225,26 @@ export class BlessedChatbox {
  *
  * Keyboard shortcuts:
  * - Ctrl+Up/Down: Resize height
- * - Ctrl+Left/Right: Resize width
  * - Enter: Submit input
  * - Escape: Cancel
  */
 export class InlineChatbox {
     private options: Required<ChatboxOptions>;
-    private currentWidth: number;
     private currentHeight: number;
+    /** Track whether cursor is positioned inside the rendered box */
+    private cursorInBox: boolean = false;
 
     constructor(options?: ChatboxOptions) {
         this.options = { ...DEFAULT_OPTIONS, ...options };
-        this.currentWidth = this.calculateWidth(this.options.width);
-        this.currentHeight = this.options.height;
+        this.currentHeight = this.clampHeight(this.options.height);
+    }
+
+    /**
+     * Clamp height to valid range (3 to termHeight - 5)
+     */
+    private clampHeight(height: number): number {
+        const termHeight = process.stdout.rows || 24;
+        return Math.max(3, Math.min(termHeight - 5, height));
     }
 
     /**
@@ -216,41 +252,30 @@ export class InlineChatbox {
      */
     updateOptions(options: Partial<ChatboxOptions>): void {
         this.options = { ...this.options, ...options };
-        if (options.width !== undefined) {
-            this.currentWidth = this.calculateWidth(options.width);
-        }
         if (options.height !== undefined) {
-            this.currentHeight = options.height;
+            this.currentHeight = this.clampHeight(options.height);
         }
     }
 
     /**
-     * Calculate width from number or percentage
+     * Get terminal width
      */
-    private calculateWidth(width: number | string): number {
-        if (typeof width === 'number') {
-            return width;
-        }
-        const percent = parseInt(width) || 100;
-        return Math.floor((process.stdout.columns || 80) * (percent / 100));
+    private getTerminalWidth(): number {
+        return process.stdout.columns || 80;
     }
 
     /**
      * Get current dimensions
      */
     getDimensions(): { width: number; height: number } {
-        return { width: this.currentWidth, height: this.currentHeight };
+        return { width: this.getTerminalWidth(), height: this.currentHeight };
     }
 
     /**
-     * Resize the chatbox
+     * Resize the chatbox height
      */
-    resize(widthDelta: number, heightDelta: number): void {
-        const termWidth = process.stdout.columns || 80;
-        const termHeight = process.stdout.rows || 24;
-
-        this.currentWidth = Math.max(20, Math.min(termWidth - 2, this.currentWidth + widthDelta));
-        this.currentHeight = Math.max(3, Math.min(termHeight - 5, this.currentHeight + heightDelta));
+    resize(heightDelta: number): void {
+        this.currentHeight = this.clampHeight(this.currentHeight + heightDelta);
     }
 
     /**
@@ -258,14 +283,14 @@ export class InlineChatbox {
      */
     private drawFrame(inputText: string = ''): string[] {
         const lines: string[] = [];
-        // Use the configured width (affected by Ctrl+Left/Right resize handlers)
-        const w = this.currentWidth;
+        // Use terminal width with Math.max guard to prevent negative width edge cases
+        const w = Math.max(10, this.getTerminalWidth());
         const h = this.currentHeight;
 
         // Top border with label (no size hint)
         const label = this.options.label;
         const labelStr = label ? ` ${label} ` : '';
-        const lineLength = Math.max(0, w - 2 - labelStr.length);
+        const lineLength = Math.max(0, w - 2 - stringWidth(labelStr));
         const leftLine = Math.floor(lineLength / 2);
         const rightLine = lineLength - leftLine;
 
@@ -281,7 +306,7 @@ export class InlineChatbox {
             if (i === 0) {
                 // First line has the prompt and input
                 const content = prompt + inputText;
-                const padding = Math.max(0, innerWidth - content.length);
+                const padding = Math.max(0, innerWidth - stringWidth(content));
                 lines.push(chalk.cyan('│ ') + content + ' '.repeat(padding) + chalk.cyan(' │'));
             } else {
                 // Empty lines
@@ -291,7 +316,7 @@ export class InlineChatbox {
 
         // Bottom border with help
         const help = ' Enter:send  Esc:cancel ';
-        const bottomLineLen = Math.max(0, w - 2 - help.length);
+        const bottomLineLen = Math.max(0, w - 2 - stringWidth(help));
         const bottomLeft = Math.floor(bottomLineLen / 2);
         const bottomRight = bottomLineLen - bottomLeft;
 
@@ -306,6 +331,17 @@ export class InlineChatbox {
      * Clear the drawn box
      */
     private clearBox(lineCount: number): void {
+        if (!this.cursorInBox) {
+            // Cursor not in expected position - just clear from current position
+            for (let i = 0; i < lineCount + 1; i++) {
+                process.stdout.write('\x1B[2K'); // Clear line
+                if (i < lineCount) {
+                    process.stdout.write('\x1B[1A'); // Move up
+                }
+            }
+            return;
+        }
+
         const h = lineCount;
         // Cursor is inside the box (h-1 lines from bottom), move to bottom first
         process.stdout.write(`\x1B[${h - 1}B`); // Move down to bottom
@@ -317,31 +353,81 @@ export class InlineChatbox {
             process.stdout.write('\x1B[1A'); // Move up
         }
         process.stdout.write('\x1B[2K'); // Clear the top line too
+        this.cursorInBox = false;
     }
 
     /**
      * Render the box and position cursor inside
      */
     private render(inputText: string = ''): number {
-        const lines = this.drawFrame(inputText);
+        // Calculate available width for input
+        // Math.max guard prevents negative width edge cases
+        const w = Math.max(10, process.stdout.columns || 80);
+        const innerWidth = w - 4; // Account for "│ " and " │"
+        const prompt = this.options.prompt || '> ';
+        // Use stringWidth for accurate visual length (handles ANSI, emoji, CJK chars)
+        const visualPromptLength = stringWidth(prompt);
+        const maxInputWidth = Math.max(0, innerWidth - visualPromptLength);
+        const displayInput = this.truncateInputByWidth(inputText, maxInputWidth);
+
+        const lines = this.drawFrame(displayInput);
         console.log(lines.join('\n'));
 
         // Position cursor inside the box (on the input line)
-        const prompt = this.options.prompt || '> ';
         const h = this.currentHeight;
-        // Move cursor up to the first content line (h-1 lines up from bottom)
-        // Then move right to after "│ " + prompt + inputText
-        const cursorX = 2 + prompt.length + inputText.length + 1; // +1 for the space after "│"
+        // Use stringWidth for accurate cursor positioning with multi-byte chars
+        const cursorX = 2 + visualPromptLength + stringWidth(displayInput) + 1; // +1 for the space after "│"
         const cursorY = h - 1; // lines to move up from current position
         process.stdout.write(`\x1B[${cursorY}A`); // Move up
         process.stdout.write(`\x1B[${cursorX}G`); // Move to column
 
+        this.cursorInBox = true;
         return lines.length;
+    }
+
+    private truncateInputByWidth(inputText: string, maxWidth: number): string {
+        if (maxWidth <= 0) {
+            return '';
+        }
+
+        // Use lazy iterator to avoid allocating full array (perf for large pastes)
+        const segments = iterateGraphemes(inputText);
+        const kept: string[] = [];
+        const keptWidths: number[] = [];
+        let width = 0;
+        let truncated = false;
+
+        for (const segment of segments) {
+            const segmentWidth = stringWidth(segment);
+            if (width + segmentWidth > maxWidth) {
+                truncated = true;
+                break;
+            }
+            kept.push(segment);
+            keptWidths.push(segmentWidth);
+            width += segmentWidth;
+        }
+
+        if (!truncated) {
+            return kept.join('');
+        }
+
+        const ellipsisWidth = stringWidth(ELLIPSIS);
+        if (ellipsisWidth > maxWidth) {
+            return '';
+        }
+
+        while (kept.length > 0 && width + ellipsisWidth > maxWidth) {
+            width -= keptWidths.pop()!;
+            kept.pop();
+        }
+
+        return kept.join('') + ELLIPSIS;
     }
 
     /**
      * Render a visual box around the input area and get input
-     * Supports resizing with Ctrl+Arrow keys
+     * Supports height resizing with Ctrl+Up/Down keys
      */
     async getInput(): Promise<ChatboxResult> {
         return new Promise((resolve) => {
@@ -376,23 +462,15 @@ export class InlineChatbox {
             const handleKeypress = (str: string | undefined, key: { name: string; ctrl?: boolean; shift?: boolean; sequence?: string }) => {
                 if (!key) return;
 
-                // Resize with Ctrl+Arrow
+                // Resize height with Ctrl+Arrow
                 if (key.ctrl) {
                     switch (key.name) {
                         case 'up':
-                            this.resize(0, -1);
+                            this.resize(-1);
                             redraw();
                             return;
                         case 'down':
-                            this.resize(0, 1);
-                            redraw();
-                            return;
-                        case 'left':
-                            this.resize(-5, 0);
-                            redraw();
-                            return;
-                        case 'right':
-                            this.resize(5, 0);
+                            this.resize(1);
                             redraw();
                             return;
                         case 'c':

@@ -33,8 +33,12 @@ import {
     type AgentResilienceConfig
 } from './resilience.js';
 import { withAbortableTimeout } from '../../resilience/timeout.js';
+import { ToolTimeoutError } from '../../error/classes.js';
 import { PromptBuilder } from '../prompts/PromptBuilder.js';
 import { metrics } from '../../observability/index.js';
+
+/** Max safe value for setTimeout (~24.8 days) - larger values cause platform-dependent overflow */
+const MAX_SAFE_TIMEOUT_MS = 2_147_483_647;
 
 interface TaskExecutionOutput {
     output: string;
@@ -61,8 +65,8 @@ const DEFAULT_ORCHESTRATOR_CONFIG = {
     planningTokenBudget: 2000,
     summaryTokenBudget: 500,
     planConfidenceThreshold: 0.6,
-    /** Default 3 minutes per parallel task - defensive timeout */
-    parallelTaskTimeoutMs: 180000
+    /** Default 5 minutes per parallel task - defensive timeout for complex AI tasks */
+    parallelTaskTimeoutMs: 300000
 };
 
 class OrchestratorAbortError extends Error {
@@ -120,8 +124,12 @@ export class Orchestrator {
             summaryTokenBudget:
                 config?.summaryTokenBudget ?? DEFAULT_ORCHESTRATOR_CONFIG.summaryTokenBudget,
             planConfidenceThreshold,
-            parallelTaskTimeoutMs:
-                config?.parallelTaskTimeoutMs ?? DEFAULT_ORCHESTRATOR_CONFIG.parallelTaskTimeoutMs
+            parallelTaskTimeoutMs: Math.min(
+                Number.isFinite(config?.parallelTaskTimeoutMs)
+                    ? Math.max(1, config!.parallelTaskTimeoutMs!)
+                    : DEFAULT_ORCHESTRATOR_CONFIG.parallelTaskTimeoutMs,
+                MAX_SAFE_TIMEOUT_MS
+            )
         };
 
         this.resilienceLayer = new AgentResilienceLayer(bus, config?.resilience);
@@ -225,7 +233,11 @@ export class Orchestrator {
                 }
             } else {
                 const levelResults = await this.executeParallelWithLimit(
-                    level.map(task => () => this.executeSingleTask(task, projectContext, plan)),
+                    level.map(task => ({
+                        id: task.id,
+                        agent: task.agent,
+                        fn: (signal: AbortSignal) => this.executeSingleTask(task, projectContext, plan, signal)
+                    })),
                     this.config.concurrencyLimit
                 );
 
@@ -265,11 +277,24 @@ export class Orchestrator {
         return results.join('\n\n');
     }
 
+    /**
+     * Execute a single task with optional external abort signal.
+     * @param task - The task to execute
+     * @param projectContext - Project context for the task
+     * @param plan - The execution plan
+     * @param signal - Optional external AbortSignal for timeout cancellation
+     */
     private async executeSingleTask(
         task: Task,
         projectContext: ProjectContext,
-        plan: ExecutionPlan
+        plan: ExecutionPlan,
+        signal?: AbortSignal
     ): Promise<string | null> {
+        // Check if already aborted before starting (when signal provided)
+        if (signal?.aborted) {
+            throw new Error('Task aborted before execution');
+        }
+
         const worker = this.workers.get(task.agent);
         if (!worker) {
             const error = new Error(`Unknown agent: ${task.agent}`);
@@ -310,6 +335,24 @@ export class Orchestrator {
         const controller = new AbortController();
         this.abortControllers.set(task.id, controller);
 
+        // Chain external signal to our controller (when provided)
+        let abortHandler: (() => void) | null = null;
+        if (signal) {
+            if (signal.aborted) {
+                controller.abort();
+            } else {
+                abortHandler = () => {
+                    controller.abort();
+                    this.bus.emit({
+                        type: 'status',
+                        phase: 'thinking',
+                        label: `Task ${task.id} aborted by timeout`
+                    });
+                };
+                signal.addEventListener('abort', abortHandler, { once: true });
+            }
+        }
+
         try {
             // Get the model ID for rate limit tracking (worker-specific or default)
             const modelId = worker.modelName ?? this.modelName;
@@ -317,7 +360,7 @@ export class Orchestrator {
             const execution = await this.resilienceLayer.executeWithResilience(
                 task.agent,
                 task.id,
-                (signal) => this.runTaskStream(worker, task, taskContext, signal),
+                (innerSignal) => this.runTaskStream(worker, task, taskContext, innerSignal),
                 controller.signal,
                 modelId
             );
@@ -331,24 +374,48 @@ export class Orchestrator {
             const taskResult = this.createFailedTaskResult(task, error, startTime);
             this.taskResults.set(task.id, taskResult);
 
-            const errorMsg = error instanceof Error ? error.message : String(error);
             const durationMs = Date.now() - startTime;
-            this.bus.emit({
-                type: 'error',
-                message: `Task ${task.id} (${task.agent}) failed after ${durationMs}ms: ${errorMsg}`
-            });
+            const isTimeout = error instanceof ToolTimeoutError;
+
+            if (isTimeout) {
+                // Emit dedicated timeout event for clearer UI feedback
+                this.bus.emit({
+                    type: 'timeout',
+                    taskId: task.id,
+                    agentName: task.agent,
+                    timeoutMs: error.timeoutMs,
+                    durationMs,
+                    message: `Task ${task.id} (${task.agent}) timed out after ${durationMs}ms (limit: ${error.timeoutMs}ms)`
+                });
+
+                // Track timeout metrics
+                metrics.taskTimeouts.inc({ agent: task.agent });
+                metrics.timeoutDuration.observe(durationMs / 1000, { agent: task.agent });
+            } else {
+                // Regular error event
+                const errorMsg = error instanceof Error ? error.message : String(error);
+                this.bus.emit({
+                    type: 'error',
+                    message: `Task ${task.id} (${task.agent}) failed after ${durationMs}ms: ${errorMsg}`
+                });
+            }
 
             this.emitAgentComplete(task, false, undefined, startTime);
 
+            const errorMsg = error instanceof Error ? error.message : String(error);
             this.thinkingChain.addFixingStep(
-                `Task ${task.id} failed: ${errorMsg}`,
-                { task, error: errorMsg },
+                `Task ${task.id} ${isTimeout ? 'timed out' : 'failed'}: ${errorMsg}`,
+                { task, error: errorMsg, isTimeout },
                 0.3
             );
 
             throw error;
         } finally {
             this.abortControllers.delete(task.id);
+            // Clean up signal listener if we set one
+            if (signal && abortHandler) {
+                signal.removeEventListener('abort', abortHandler);
+            }
         }
     }
 
@@ -811,32 +878,52 @@ export class Orchestrator {
     }
 
     /**
-     * Execute tasks in parallel with concurrency limit and per-task timeout
-     * Issue #13 fix: Added defensive per-task timeout to prevent hanging
+     * Execute tasks in parallel with concurrency limit and per-task timeout.
+     * Issue #13 fix: Added defensive per-task timeout to prevent hanging.
+     *
+     * @param tasks - Task descriptors with id/agent for logging and fn for execution.
+     *                The fn receives an AbortSignal for timeout cancellation.
+     * @param concurrencyLimit - Max concurrent tasks
+     * @param taskTimeoutMs - Per-task timeout (defaults to config.parallelTaskTimeoutMs)
      */
     private async executeParallelWithLimit<T>(
-        tasks: Array<() => Promise<T>>,
+        tasks: Array<{ id: string; agent: string; fn: (signal: AbortSignal) => Promise<T> }>,
         concurrencyLimit: number,
         taskTimeoutMs?: number
     ): Promise<PromiseSettledResult<T>[]> {
         const results: PromiseSettledResult<T>[] = new Array(tasks.length);
         const executing = new Set<Promise<void>>();
-        const timeout = taskTimeoutMs ?? this.config.parallelTaskTimeoutMs;
+        // Clamp timeout to max safe setTimeout value to prevent overflow
+        const rawTimeout = taskTimeoutMs ?? this.config.parallelTaskTimeoutMs;
+        const timeout = Math.min(rawTimeout, MAX_SAFE_TIMEOUT_MS);
 
         for (let i = 0; i < tasks.length; i++) {
-            const task = tasks[i];
+            const { id: taskId, agent, fn } = tasks[i];
 
             const p = (async () => {
+                // Set warning timer at 80% of timeout
+                const warningMs = timeout * 0.8;
+                const warningTimer = setTimeout(() => {
+                    this.bus.emit({
+                        type: 'status',
+                        phase: 'thinking',
+                        label: `Task ${taskId} (${agent}) running long (${Math.round(warningMs / 1000)}s elapsed, ${Math.round(timeout / 1000)}s limit)...`
+                    });
+                }, warningMs);
+
                 try {
                     // Wrap task with defensive timeout to prevent indefinite hanging
                     const value = await withAbortableTimeout(
-                        () => task(),
+                        (signal) => fn(signal),
                         timeout,
-                        `parallel_task_${i}`
+                        `task_${taskId}_${agent}`,
+                        undefined // externalSignal - none in this context
                     );
                     results[i] = { status: 'fulfilled', value };
                 } catch (reason) {
                     results[i] = { status: 'rejected', reason };
+                } finally {
+                    clearTimeout(warningTimer);
                 }
             })();
 
