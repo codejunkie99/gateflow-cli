@@ -29,7 +29,7 @@ import type { MemoryService } from '../memory/MemoryService.js';
 import { getSystemPrompt, detectMode, type PromptMode, type DetectModeContext } from './prompts.js';
 import { PromptBuilder } from './prompts/PromptBuilder.js';
 import { ThinkingChain } from './reasoning/ThinkingChain.js';
-import { Orchestrator } from './orchestrator/Orchestrator.js';
+import { Orchestrator, type OrchestratorResult } from './orchestrator/Orchestrator.js';
 import { ComplexityDetectionSchema } from '../types/agent-shared.js';
 import {
     createUnderstandingAgent,
@@ -376,6 +376,9 @@ export class GateFlowAgent {
                 console.warn('⚠️  Failed to prefetch OpenRouter models:', err);
             }
         });
+
+        // Clean up stale checkpoint files from previous sessions (fire-and-forget)
+        this.cleanupStaleCheckpointFiles().catch(() => {});
     }
 
     /**
@@ -755,15 +758,25 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
                 // TODO: To support continuation for orchestrated tasks, either:
                 //   1. Have orchestrator populate session.messages with tool results, or
                 //   2. Implement a separate continuation mechanism for orchestrated tasks
-                const orchestratorResult = await this.orchestrator.executeWithPlan(userMessage);
-                const trimmedResult = orchestratorResult.trim();
+                // Pass abort signal to orchestrator for proper cancellation support
+                const orchestratorResult = await this.orchestrator.executeWithPlan(userMessage, options?.signal);
+                const trimmedResult = orchestratorResult.result.trim();
+
+                // Capture aggregated token usage from orchestrated tasks
+                if (orchestratorResult.usage) {
+                    lastUsage = {
+                        inputTokens: orchestratorResult.usage.inputTokens,
+                        outputTokens: orchestratorResult.usage.outputTokens
+                    };
+                }
+
                 // Guard against empty content which violates LLM API contracts
                 if (trimmedResult) {
                     this.session.messages.push({
                         role: 'assistant',
-                        content: orchestratorResult
+                        content: orchestratorResult.result
                     });
-                    fullResponse = orchestratorResult;
+                    fullResponse = orchestratorResult.result;
                 } else {
                     const emptyResultMessage =
                         'Multi-agent run completed with no text output. Check file changes or logs for results.';
@@ -1663,17 +1676,23 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
             if (isDynamic) {
                 const currentRemainingCount = checkpoint.remainingTasks.length;
 
-                // Progress is made if: remaining decreased OR tasks were completed this segment
-                // remainingDecreased also covers the "all done" case even if completedTasks is empty.
+                // Progress is made if ANY of:
+                // 1. Remaining tasks decreased (covers "all done" case)
+                // 2. Tasks were explicitly completed this segment
+                // 3. Partial results generated (ongoing work with output)
+                // 4. Tool calls made this segment (active work even without task completion)
                 const remainingDecreased = currentRemainingCount < previousRemainingCount;
                 const tasksCompleted = newlyCompleted.length > 0;
+                const hasPartialProgress = Boolean(checkpoint.partialResults?.trim());
+                const segmentToolCalls = this.session.toolCallCount - segmentStartToolCalls;
+                const hasToolActivity = segmentToolCalls > 0;
 
-                if (!remainingDecreased && !tasksCompleted) {
-                    // No progress - remaining didn't decrease AND no tasks completed
+                if (!remainingDecreased && !tasksCompleted && !hasPartialProgress && !hasToolActivity) {
+                    // No progress - remaining didn't decrease, no tasks completed, no partial results, no tool calls
                     this.bus.emit({
                         type: 'status',
                         phase: 'thinking',
-                        label: `No progress detected (${currentRemainingCount} tasks remaining, 0 completed). Stopping.`
+                        label: `No progress detected (${currentRemainingCount} tasks remaining, 0 completed, no activity). Stopping.`
                     });
                     break;
                 }
@@ -1707,7 +1726,9 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
             }
 
             // Prune old messages to prevent unbounded growth
-            await this.pruneSegmentMessages();
+            // Adjust segmentStartMessageIndex to account for removed messages
+            const removedBefore = await this.pruneSegmentMessages();
+            this.segmentStartMessageIndex = Math.max(0, this.segmentStartMessageIndex - removedBefore);
 
             // Build continuation prompt for next segment
             currentMessage = await this.buildContinuationPrompt(checkpoint, userMessage);
@@ -1806,9 +1827,14 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
 
     /**
      * Get path to checkpoints file for this session.
+     * Uses sessionId to scope checkpoints per-session, preventing cross-instance conflicts
+     * when multiple GateFlowAgent instances share the same projectRoot.
      */
     private getCheckpointsFilePath(): string {
-        return path.join(this.toolContext.projectRoot, '.gateflow', 'checkpoints.jsonl');
+        const sessionId = this.toolContext.sessionId || 'default';
+        // Sanitize sessionId to be filesystem-safe (replace non-alphanumeric with underscore)
+        const safeSessionId = sessionId.replace(/[^a-zA-Z0-9_-]/g, '_');
+        return path.join(this.toolContext.projectRoot, '.gateflow', `checkpoints-${safeSessionId}.jsonl`);
     }
 
     /** Max checkpoints to keep in file (prevents unbounded growth) */
@@ -1893,6 +1919,43 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
         });
     }
 
+    /** Max age for stale checkpoint files (24 hours in ms) */
+    private static readonly CHECKPOINT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+
+    /**
+     * Clean up stale checkpoint files from other sessions.
+     * Removes checkpoint-*.jsonl files older than CHECKPOINT_MAX_AGE_MS.
+     * This is a best-effort cleanup that doesn't affect current session.
+     */
+    async cleanupStaleCheckpointFiles(): Promise<void> {
+        const gateflowDir = path.join(this.toolContext.projectRoot, '.gateflow');
+        const currentFile = this.getCheckpointsFilePath();
+        const maxAge = GateFlowAgent.CHECKPOINT_MAX_AGE_MS;
+        const now = Date.now();
+
+        try {
+            const files = await fs.readdir(gateflowDir);
+            const checkpointFiles = files.filter(f => f.startsWith('checkpoints-') && f.endsWith('.jsonl'));
+
+            for (const file of checkpointFiles) {
+                const filePath = path.join(gateflowDir, file);
+                // Don't delete current session's file
+                if (filePath === currentFile) continue;
+
+                try {
+                    const stats = await fs.stat(filePath);
+                    if (now - stats.mtimeMs > maxAge) {
+                        await fs.unlink(filePath);
+                    }
+                } catch {
+                    // File may have been deleted by another process
+                }
+            }
+        } catch {
+            // Directory may not exist or be inaccessible
+        }
+    }
+
     /**
      * Build continuation prompt for the next segment.
      * Adds context summary to session, saves checkpoint to file, and returns focused continuation message.
@@ -1939,12 +2002,13 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
      * Keeps: first user message, non-continuation system messages, consolidated continuation context, and recent messages.
      * Uses stored checkpoints from filesystem for reliable consolidation (no regex parsing).
      * @param keepRecent - Number of recent messages to preserve (default: 10)
+     * @returns Number of messages removed before segmentStartMessageIndex (for index adjustment)
      */
-    private async pruneSegmentMessages(keepRecent: number = 10): Promise<void> {
+    private async pruneSegmentMessages(keepRecent: number = 10): Promise<number> {
         const messages = this.session.messages;
         if (messages.length <= keepRecent + 5) {
             // Not enough messages to warrant pruning
-            return;
+            return 0;
         }
 
         // Load checkpoints from file for reliable consolidation
@@ -2066,7 +2130,18 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
             keepIndices.add(i);
         }
 
+        // Count how many messages before segmentStartMessageIndex will be removed
+        // (needed to adjust the index after pruning)
+        let removedBeforeSegmentStart = 0;
+        for (let i = 0; i < this.segmentStartMessageIndex && i < messages.length; i++) {
+            if (!keepIndices.has(i)) {
+                removedBeforeSegmentStart++;
+            }
+        }
+
         // Build pruned array (use direct assignment to avoid call stack limit with spread)
         this.session.messages = messages.filter((_, i) => keepIndices.has(i));
+
+        return removedBeforeSegmentStart;
     }
 }
