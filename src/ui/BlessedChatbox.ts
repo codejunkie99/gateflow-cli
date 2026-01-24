@@ -10,6 +10,19 @@ import chalk from 'chalk';
 import readline from 'readline';
 import stringWidth from 'string-width';
 
+const ELLIPSIS = '…';
+const GRAPHEME_SEGMENTER =
+    typeof Intl !== 'undefined' && typeof Intl.Segmenter === 'function'
+        ? new Intl.Segmenter(undefined, { granularity: 'grapheme' })
+        : null;
+
+const splitGraphemes = (value: string): string[] => {
+    if (!GRAPHEME_SEGMENTER) {
+        return Array.from(value);
+    }
+    return Array.from(GRAPHEME_SEGMENTER.segment(value), (segment) => segment.segment);
+};
+
 export interface ChatboxOptions {
     /** Width of the chatbox (number or percentage string like '80%') */
     width?: number | string;
@@ -208,7 +221,15 @@ export class InlineChatbox {
 
     constructor(options?: ChatboxOptions) {
         this.options = { ...DEFAULT_OPTIONS, ...options };
-        this.currentHeight = this.options.height;
+        this.currentHeight = this.clampHeight(this.options.height);
+    }
+
+    /**
+     * Clamp height to valid range (3 to termHeight - 5)
+     */
+    private clampHeight(height: number): number {
+        const termHeight = process.stdout.rows || 24;
+        return Math.max(3, Math.min(termHeight - 5, height));
     }
 
     /**
@@ -217,7 +238,7 @@ export class InlineChatbox {
     updateOptions(options: Partial<ChatboxOptions>): void {
         this.options = { ...this.options, ...options };
         if (options.height !== undefined) {
-            this.currentHeight = options.height;
+            this.currentHeight = this.clampHeight(options.height);
         }
     }
 
@@ -239,8 +260,7 @@ export class InlineChatbox {
      * Resize the chatbox height
      */
     resize(heightDelta: number): void {
-        const termHeight = process.stdout.rows || 24;
-        this.currentHeight = Math.max(3, Math.min(termHeight - 5, this.currentHeight + heightDelta));
+        this.currentHeight = this.clampHeight(this.currentHeight + heightDelta);
     }
 
     /**
@@ -255,7 +275,7 @@ export class InlineChatbox {
         // Top border with label (no size hint)
         const label = this.options.label;
         const labelStr = label ? ` ${label} ` : '';
-        const lineLength = Math.max(0, w - 2 - labelStr.length);
+        const lineLength = Math.max(0, w - 2 - stringWidth(labelStr));
         const leftLine = Math.floor(lineLength / 2);
         const rightLine = lineLength - leftLine;
 
@@ -271,7 +291,7 @@ export class InlineChatbox {
             if (i === 0) {
                 // First line has the prompt and input
                 const content = prompt + inputText;
-                const padding = Math.max(0, innerWidth - content.length);
+                const padding = Math.max(0, innerWidth - stringWidth(content));
                 lines.push(chalk.cyan('│ ') + content + ' '.repeat(padding) + chalk.cyan(' │'));
             } else {
                 // Empty lines
@@ -281,7 +301,7 @@ export class InlineChatbox {
 
         // Bottom border with help
         const help = ' Enter:send  Esc:cancel ';
-        const bottomLineLen = Math.max(0, w - 2 - help.length);
+        const bottomLineLen = Math.max(0, w - 2 - stringWidth(help));
         const bottomLeft = Math.floor(bottomLineLen / 2);
         const bottomRight = bottomLineLen - bottomLeft;
 
@@ -332,20 +352,8 @@ export class InlineChatbox {
         const prompt = this.options.prompt || '> ';
         // Use stringWidth for accurate visual length (handles ANSI, emoji, CJK chars)
         const visualPromptLength = stringWidth(prompt);
-        const maxInputWidth = innerWidth - visualPromptLength;
-
-        // Truncate input by visual width, not character count
-        let truncatedInput = inputText;
-        let isTruncated = false;
-        while (stringWidth(truncatedInput) > maxInputWidth && truncatedInput.length > 0) {
-            truncatedInput = truncatedInput.slice(0, -1);
-            isTruncated = true;
-        }
-
-        // Show truncation indicator if input was cut off
-        const displayInput = isTruncated && truncatedInput.length > 0
-            ? truncatedInput.slice(0, -1) + '…'
-            : truncatedInput;
+        const maxInputWidth = Math.max(0, innerWidth - visualPromptLength);
+        const displayInput = this.truncateInputByWidth(inputText, maxInputWidth);
 
         const lines = this.drawFrame(displayInput);
         console.log(lines.join('\n'));
@@ -360,6 +368,45 @@ export class InlineChatbox {
 
         this.cursorInBox = true;
         return lines.length;
+    }
+
+    private truncateInputByWidth(inputText: string, maxWidth: number): string {
+        if (maxWidth <= 0) {
+            return '';
+        }
+
+        const segments = splitGraphemes(inputText);
+        const kept: string[] = [];
+        const keptWidths: number[] = [];
+        let width = 0;
+        let truncated = false;
+
+        for (const segment of segments) {
+            const segmentWidth = stringWidth(segment);
+            if (width + segmentWidth > maxWidth) {
+                truncated = true;
+                break;
+            }
+            kept.push(segment);
+            keptWidths.push(segmentWidth);
+            width += segmentWidth;
+        }
+
+        if (!truncated) {
+            return kept.join('');
+        }
+
+        const ellipsisWidth = stringWidth(ELLIPSIS);
+        if (ellipsisWidth > maxWidth) {
+            return '';
+        }
+
+        while (kept.length > 0 && width + ellipsisWidth > maxWidth) {
+            width -= keptWidths.pop()!;
+            kept.pop();
+        }
+
+        return kept.join('') + ELLIPSIS;
     }
 
     /**
