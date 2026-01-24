@@ -286,7 +286,9 @@ export class Orchestrator {
                             level.map(task => ({
                                 id: task.id,
                                 agent: task.agent,
-                                fn: (taskSignal: AbortSignal) => this.executeSingleTask(task, projectContext, plan, taskSignal)
+                                fn: (taskSignal: AbortSignal) => signal?.aborted
+                                    ? Promise.reject(new OrchestratorAbortError(`Task ${task.id} aborted before start`))
+                                    : this.executeSingleTask(task, projectContext, plan, signal ?? taskSignal)
                             })),
                             this.config.concurrencyLimit
                         );
