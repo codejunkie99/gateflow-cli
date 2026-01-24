@@ -1824,8 +1824,9 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
     }
 
     /**
-     * Load all checkpoints from the JSONL file.
+     * Load checkpoints from the JSONL file.
      * Returns empty array if file doesn't exist or is corrupted.
+     * Limits to last 100 checkpoints to prevent unbounded memory growth.
      */
     private async loadCheckpointsFromFile(): Promise<ContinuationCheckpoint[]> {
         const filePath = this.getCheckpointsFilePath();
@@ -1833,7 +1834,9 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
         try {
             const content = await fs.readFile(filePath, 'utf-8');
             const lines = content.trim().split('\n').filter(Boolean);
-            return lines.map(line => JSON.parse(line) as ContinuationCheckpoint);
+            // Limit to last 100 checkpoints to prevent unbounded memory growth
+            const recentLines = lines.slice(-100);
+            return recentLines.map(line => JSON.parse(line) as ContinuationCheckpoint);
         } catch {
             return [];
         }
