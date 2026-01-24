@@ -414,7 +414,9 @@ export async function startStandaloneServer(options: StandaloneServerOptions = {
                        </script>`
                     : '';
 
-                const htmlWithData = html.replace('</body>', `${script}</body>`);
+                // Use replacer function to avoid $ being treated as special replacement pattern
+                // (waveformData may contain Verilog system tasks like $display, $finish, etc.)
+                const htmlWithData = html.replace('</body>', () => `${script}</body>`);
 
                 res.writeHead(200, { 'Content-Type': 'text/html' });
                 res.end(htmlWithData);

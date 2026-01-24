@@ -165,6 +165,7 @@ export function dynamicModelSelector(config: DynamicModelSelectorConfig): Prepar
         // Normalize tool result access: AI SDK v6 uses 'output', older versions use 'result'
         const hadErrors = steps.some((step: any) =>
             step.toolResults?.some((r: any) => {
+                if (typeof r !== 'object' || r === null) return false;
                 const result = 'output' in r ? r.output : r.result;
                 return typeof result === 'object' && result !== null && 'error' in result;
             })
@@ -394,9 +395,12 @@ export function combinePrepareSteps(...fns: PrepareStepFn[]): PrepareStepFn {
             settings = { ...settings, ...rest };
         }
 
-        // Concatenate all system prompts if any were provided
+        // Concatenate all system prompts with proper separation
         if (systemParts.length > 0) {
-            settings.system = systemParts.join('');
+            settings.system = systemParts
+                .map(s => s.trim())
+                .filter(Boolean)
+                .join('\n\n');
         }
 
         return settings;

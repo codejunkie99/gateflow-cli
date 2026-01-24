@@ -139,10 +139,12 @@ interface ToolCall {
 function getAllToolResults(context: any): ToolResult[] {
     const steps = context.steps ?? [];
     return steps.flatMap((step: any) =>
-        (step.toolResults ?? []).map((r: any) => ({
-            toolName: r.toolName as string,
-            value: 'output' in r ? r.output : r.result
-        }))
+        (step.toolResults ?? [])
+            .filter((r: any) => typeof r === 'object' && r !== null)
+            .map((r: any) => ({
+                toolName: r.toolName as string,
+                value: 'output' in r ? r.output : r.result
+            }))
     );
 }
 
