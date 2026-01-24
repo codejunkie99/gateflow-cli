@@ -988,8 +988,6 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
                 }
             });
 
-            let fullResponse = '';
-
             // Process the stream for all event types (AI SDK 6)
             for await (const part of result.fullStream) {
                 if (options?.signal?.aborted) {
