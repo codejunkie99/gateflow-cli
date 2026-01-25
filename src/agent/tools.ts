@@ -59,6 +59,19 @@ export interface ToolContext {
     dynamicContextManager?: DynamicContextManager;
     fileChunker?: FileChunker;
     tokenBudgetManager?: TokenBudgetManager;
+    // Continuation tracking for multi-step agent loops
+    onContinuationCheckpoint?: (checkpoint: {
+        completedTasks: string[];
+        remainingTasks: string[];
+        partialResults: string;
+        notes: string;
+    }) => void;
+    continuationState?: {
+        currentStep: number;
+        warningStep: number;
+        criticalStep: number;
+        stepLimit: number;
+    };
 }
 
 // ============================================================================

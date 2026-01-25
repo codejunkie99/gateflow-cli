@@ -286,6 +286,28 @@ export interface DelegationEvent {
     taskData: Record<string, unknown>;
 }
 
+/**
+ * Tool progress events - detailed tool execution lifecycle
+ */
+export interface ToolProgressEvent {
+    type: 'tool_progress';
+    tool: string;
+    state: 'started' | 'executing' | 'completed' | 'failed';
+    metadata?: {
+        file?: string;
+        lineCount?: number;
+    };
+}
+
+/**
+ * Thinking/reasoning stream events - real-time LLM reasoning
+ */
+export interface ThinkingStreamEvent {
+    type: 'thinking_stream';
+    text: string;
+    isComplete: boolean;
+}
+
 // ============================================================================
 // Union Type
 // ============================================================================
@@ -327,7 +349,10 @@ export type UiEvent =
     | ThoughtEvent
     | AgentStartEvent
     | AgentCompleteEvent
-    | DelegationEvent;
+    | DelegationEvent
+    // Tool progress and thinking stream
+    | ToolProgressEvent
+    | ThinkingStreamEvent;
 
 // ============================================================================
 // Event Type Guards
