@@ -375,10 +375,12 @@ export class PluginManager implements PluginRegistry {
         fn: () => Promise<T> | T,
         errorMessage?: string
     ): Promise<T | undefined> {
+        let timeoutId: ReturnType<typeof setTimeout> | undefined;
+
         try {
-            // Add timeout
+            // Add timeout with cleanup to prevent timer leak
             const timeoutPromise = new Promise<never>((_, reject) => {
-                setTimeout(
+                timeoutId = setTimeout(
                     () => reject(new Error('Hook execution timed out')),
                     this.config.hookTimeout
                 );
@@ -399,6 +401,11 @@ export class PluginManager implements PluginRegistry {
             }
 
             return undefined;
+        } finally {
+            // Always clear the timeout to prevent memory leaks
+            if (timeoutId !== undefined) {
+                clearTimeout(timeoutId);
+            }
         }
     }
 }

@@ -10,6 +10,7 @@
 
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+import { createHash } from 'node:crypto';
 import { streamText, stepCountIs, type StepResult, type Tool, type ModelMessage } from 'ai';
 import { z } from 'zod';
 import {
@@ -378,7 +379,12 @@ export class GateFlowAgent {
         });
 
         // Clean up stale checkpoint files from previous sessions (fire-and-forget)
-        this.cleanupStaleCheckpointFiles().catch(() => {});
+        // Log errors in verbose mode to aid debugging without disrupting normal operation
+        this.cleanupStaleCheckpointFiles().catch((err) => {
+            if (process.env.VERBOSE) {
+                console.warn('⚠️  Failed to cleanup stale checkpoint files:', err);
+            }
+        });
     }
 
     /**
@@ -769,6 +775,13 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
                         outputTokens: orchestratorResult.usage.outputTokens
                     };
                 }
+
+                // Emit task execution statistics for UI/debugging
+                this.bus.emit({
+                    type: 'status',
+                    phase: 'thinking',
+                    label: `Multi-agent execution complete: ${orchestratorResult.tasksSucceeded}/${orchestratorResult.tasksExecuted} tasks succeeded`
+                });
 
                 // Guard against empty content which violates LLM API contracts
                 if (trimmedResult) {
@@ -1326,9 +1339,10 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
      */
     private createPrepareStep(mode: PromptMode, bundle: AgentBundle): PrepareStepFn {
         const effectiveLimit = getEffectiveStepLimit(mode, this.config.maxToolCalls);
-        // Clamp to at least 1 (1-indexed) to prevent false triggers on first step
-        const warningStep = Math.max(1, effectiveLimit - 5);
-        const criticalStep = Math.max(1, effectiveLimit - 2);
+        // Use percentage-based thresholds to avoid aggressive warnings with low limits
+        // Warning at 80% of limit, critical at 90% (minimum step 2, and critical must be > warning)
+        const warningStep = Math.max(2, Math.floor(effectiveLimit * 0.8));
+        const criticalStep = Math.max(warningStep + 1, Math.floor(effectiveLimit * 0.9));
 
         return combinePrepareSteps(
             // 0. Track step state for continuation guard
@@ -1593,6 +1607,7 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
         const completedTaskIds = new Set<string>(); // Track unique completed tasks across segments
         let cumulativeCompletedCount = 0;       // Track total completed across segments
         let lockedMode: PromptMode | undefined; // Preserve mode across continuation segments
+        let consecutiveToolOnlySegments = 0;    // Track segments with only tool activity (no task/partial progress)
 
         // Reset continuation tracking for this run
         this.lastContinuationCheckpoint = null;
@@ -1687,14 +1702,33 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
                 const segmentToolCalls = this.session.toolCallCount - segmentStartToolCalls;
                 const hasToolActivity = segmentToolCalls > 0;
 
-                if (!remainingDecreased && !tasksCompleted && !hasPartialProgress && !hasToolActivity) {
-                    // No progress - remaining didn't decrease, no tasks completed, no partial results, no tool calls
+                // Track "real" progress vs just tool activity
+                const hasRealProgress = remainingDecreased || tasksCompleted || hasPartialProgress;
+
+                if (!hasRealProgress && !hasToolActivity) {
+                    // No progress at all - stop immediately
                     this.bus.emit({
                         type: 'status',
                         phase: 'thinking',
                         label: `No progress detected (${currentRemainingCount} tasks remaining, 0 completed, no activity). Stopping.`
                     });
                     break;
+                }
+
+                if (!hasRealProgress && hasToolActivity) {
+                    // Tool activity only - track consecutive occurrences
+                    consecutiveToolOnlySegments++;
+                    if (consecutiveToolOnlySegments >= 3) {
+                        this.bus.emit({
+                            type: 'status',
+                            phase: 'thinking',
+                            label: `Tool activity but no task progress for ${consecutiveToolOnlySegments} consecutive segments. Stopping.`
+                        });
+                        break;
+                    }
+                } else {
+                    // Real progress made - reset counter
+                    consecutiveToolOnlySegments = 0;
                 }
 
                 previousRemainingCount = currentRemainingCount;
@@ -1833,8 +1867,11 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
     private getCheckpointsFilePath(): string {
         const sessionId = this.toolContext.sessionId || 'default';
         // Sanitize sessionId to be filesystem-safe (replace non-alphanumeric with underscore)
+        // Include short hash suffix to prevent collisions when IDs differ only in special chars
+        // e.g., "test@1" and "test#1" both sanitize to "test_1" but have different hashes
         const safeSessionId = sessionId.replace(/[^a-zA-Z0-9_-]/g, '_');
-        return path.join(this.toolContext.projectRoot, '.gateflow', `checkpoints-${safeSessionId}.jsonl`);
+        const hashSuffix = createHash('sha256').update(sessionId).digest('hex').slice(0, 8);
+        return path.join(this.toolContext.projectRoot, '.gateflow', `checkpoints-${safeSessionId}-${hashSuffix}.jsonl`);
     }
 
     /** Max checkpoints to keep in file (prevents unbounded growth) */
@@ -1919,8 +1956,10 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
         });
     }
 
-    /** Max age for stale checkpoint files (24 hours in ms) */
-    private static readonly CHECKPOINT_MAX_AGE_MS = 24 * 60 * 60 * 1000;
+    /** Max age for stale checkpoint files (7 days in ms)
+     * Extended from 24 hours to handle system hibernate/suspend scenarios
+     * where sessions could be paused for extended periods */
+    private static readonly CHECKPOINT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
     /**
      * Clean up stale checkpoint files from other sessions.
