@@ -1341,9 +1341,13 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
         const effectiveLimit = getEffectiveStepLimit(mode, this.config.maxToolCalls);
         // Use percentage-based thresholds to avoid aggressive warnings with low limits
         // Warning at 80% of limit, critical at 90%
-        // Clamp: warning must be < limit, critical must be <= limit
-        const warningStep = Math.max(1, Math.min(effectiveLimit - 1, Math.floor(effectiveLimit * 0.8)));
-        const criticalStep = Math.min(effectiveLimit, Math.max(warningStep + 1, Math.floor(effectiveLimit * 0.9)));
+        // For effectiveLimit=1, disable warnings (no room to act on them)
+        const warningStep = effectiveLimit <= 1
+            ? Number.MAX_SAFE_INTEGER
+            : Math.max(1, Math.min(effectiveLimit - 1, Math.floor(effectiveLimit * 0.8)));
+        const criticalStep = effectiveLimit <= 1
+            ? Number.MAX_SAFE_INTEGER
+            : Math.min(effectiveLimit, Math.max(warningStep + 1, Math.floor(effectiveLimit * 0.9)));
 
         return combinePrepareSteps(
             // 0. Track step state for continuation guard
