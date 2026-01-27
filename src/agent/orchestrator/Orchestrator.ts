@@ -138,6 +138,29 @@ function formatAbortReason(reason: AbortReason): string {
     }
 }
 
+/**
+ * Combine multiple AbortSignals - aborts when ANY signal fires.
+ * Returns a new signal that propagates the first abort reason.
+ */
+function combineAbortSignals(...signals: AbortSignal[]): AbortSignal {
+    const controller = new AbortController();
+
+    for (const signal of signals) {
+        if (signal.aborted) {
+            controller.abort(signal.reason);
+            return controller.signal;
+        }
+
+        signal.addEventListener('abort', () => {
+            if (!controller.signal.aborted) {
+                controller.abort(signal.reason);
+            }
+        }, { once: true });
+    }
+
+    return controller.signal;
+}
+
 export class Orchestrator {
     private workers: Map<string, WorkerProfile> = new Map();
     private resilienceLayer: AgentResilienceLayer;
@@ -315,9 +338,16 @@ export class Orchestrator {
                         level.map(task => ({
                             id: task.id,
                             agent: task.agent,
-                            fn: (taskSignal: AbortSignal) => signal?.aborted
-                                ? Promise.reject(new OrchestratorAbortError(`Task ${task.id} aborted before start`))
-                                : this.executeSingleTask(ctx, task, projectContext, plan, signal ?? taskSignal)
+                            fn: (taskSignal: AbortSignal) => {
+                                if (signal?.aborted) {
+                                    return Promise.reject(new OrchestratorAbortError(`Task ${task.id} aborted before start`));
+                                }
+                                // Combine user signal and timeout signal - abort on EITHER
+                                const combinedSignal = signal
+                                    ? combineAbortSignals(signal, taskSignal)
+                                    : taskSignal;
+                                return this.executeSingleTask(ctx, task, projectContext, plan, combinedSignal);
+                            }
                         })),
                         this.config.concurrencyLimit
                     );
