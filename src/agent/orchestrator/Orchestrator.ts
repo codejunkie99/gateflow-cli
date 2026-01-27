@@ -104,6 +104,40 @@ interface ExecutionContext {
     thinkingChain: ThinkingChain;
 }
 
+/**
+ * Structured abort reason for debugging and UX.
+ * Pass to controller.abort(reason) and read from signal.reason.
+ */
+export interface AbortReason {
+    type: 'user' | 'timeout' | 'dependency_failed' | 'task_failed' | 'unknown';
+    taskId?: string;
+    message?: string;
+}
+
+/**
+ * Extract abort reason from signal, with fallback to 'unknown'
+ */
+function getAbortReason(signal: AbortSignal): AbortReason {
+    const reason = signal.reason;
+    if (reason && typeof reason === 'object' && 'type' in reason) {
+        return reason as AbortReason;
+    }
+    return { type: 'unknown' };
+}
+
+/**
+ * Format abort reason for display
+ */
+function formatAbortReason(reason: AbortReason): string {
+    switch (reason.type) {
+        case 'user': return 'cancelled by user';
+        case 'timeout': return 'timed out';
+        case 'dependency_failed': return `dependency failed${reason.taskId ? `: ${reason.taskId}` : ''}`;
+        case 'task_failed': return `task failed${reason.taskId ? `: ${reason.taskId}` : ''}`;
+        default: return 'aborted';
+    }
+}
+
 export class Orchestrator {
     private workers: Map<string, WorkerProfile> = new Map();
     private resilienceLayer: AgentResilienceLayer;
@@ -168,9 +202,10 @@ export class Orchestrator {
     /**
      * Cancel all running tasks within an execution context
      */
-    private cancelAll(ctx: ExecutionContext): void {
+    private cancelAll(ctx: ExecutionContext, reason?: AbortReason): void {
+        const abortReason = reason ?? { type: 'unknown' as const };
         for (const controller of ctx.abortControllers.values()) {
-            controller.abort();
+            controller.abort(abortReason);
         }
         ctx.abortControllers.clear();
     }
@@ -198,12 +233,13 @@ export class Orchestrator {
         let abortHandler: (() => void) | null = null;
         if (signal) {
             abortHandler = () => {
+                const reason = getAbortReason(signal);
                 this.bus.emit({
                     type: 'status',
                     phase: 'thinking',
-                    label: 'Orchestration aborted'
+                    label: `Orchestration ${formatAbortReason(reason)}`
                 });
-                this.cancelAll(ctx);
+                this.cancelAll(ctx, reason);
             };
             signal.addEventListener('abort', abortHandler, { once: true });
         }
@@ -293,10 +329,10 @@ export class Orchestrator {
                         if (result.status === 'fulfilled') {
                             if (result.value) results.push(result.value);
                         } else {
-                            const reason = result.reason;
-                            if (reason instanceof OrchestratorAbortError) {
-                                this.cancelAll(ctx);
-                                throw reason;
+                            const rejectionReason = result.reason;
+                            if (rejectionReason instanceof OrchestratorAbortError) {
+                                this.cancelAll(ctx, { type: 'task_failed', message: rejectionReason.message });
+                                throw rejectionReason;
                             }
                         }
                     }
@@ -402,14 +438,16 @@ export class Orchestrator {
         let abortHandler: (() => void) | null = null;
         if (signal) {
             if (signal.aborted) {
-                controller.abort();
+                const reason = getAbortReason(signal);
+                controller.abort(reason);
             } else {
                 abortHandler = () => {
-                    controller.abort();
+                    const reason = getAbortReason(signal);
+                    controller.abort(reason);
                     this.bus.emit({
                         type: 'status',
                         phase: 'thinking',
-                        label: `Task ${task.id} aborted`
+                        label: `Task ${task.id} ${formatAbortReason(reason)}`
                     });
                 };
                 signal.addEventListener('abort', abortHandler, { once: true });
