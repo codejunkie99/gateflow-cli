@@ -166,19 +166,6 @@ export class Orchestrator {
     }
 
     /**
-     * Cancel a running task by ID within an execution context
-     */
-    private cancelTask(ctx: ExecutionContext, taskId: string): boolean {
-        const controller = ctx.abortControllers.get(taskId);
-        if (controller) {
-            controller.abort();
-            ctx.abortControllers.delete(taskId);
-            return true;
-        }
-        return false;
-    }
-
-    /**
      * Cancel all running tasks within an execution context
      */
     private cancelAll(ctx: ExecutionContext): void {
