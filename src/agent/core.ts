@@ -1326,9 +1326,10 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
      */
     private createPrepareStep(mode: PromptMode, bundle: AgentBundle): PrepareStepFn {
         const effectiveLimit = getEffectiveStepLimit(mode, this.config.maxToolCalls);
-        // Clamp to at least 1 (1-indexed) to prevent false triggers on first step
-        const warningStep = Math.max(1, effectiveLimit - 5);
-        const criticalStep = Math.max(1, effectiveLimit - 2);
+        // Use percentage-based thresholds to avoid aggressive warnings with low limits
+        // Warning at 80% of limit, critical at 90% of limit (minimum step 2 to avoid first-step warnings)
+        const warningStep = Math.max(2, Math.floor(effectiveLimit * 0.8));
+        const criticalStep = Math.max(2, Math.floor(effectiveLimit * 0.9));
 
         return combinePrepareSteps(
             // 0. Track step state for continuation guard
