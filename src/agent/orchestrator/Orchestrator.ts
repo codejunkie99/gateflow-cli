@@ -141,9 +141,24 @@ function formatAbortReason(reason: AbortReason): string {
 /**
  * Combine multiple AbortSignals - aborts when ANY signal fires.
  * Returns a new signal that propagates the first abort reason.
+ * Uses AbortSignal.any() if available (Node 20+), otherwise manual linking with cleanup.
  */
 function combineAbortSignals(...signals: AbortSignal[]): AbortSignal {
+    // Use native AbortSignal.any() if available (Node 20+)
+    if ('any' in AbortSignal && typeof AbortSignal.any === 'function') {
+        return AbortSignal.any(signals);
+    }
+
+    // Fallback: manual combination with proper cleanup to avoid memory leaks
     const controller = new AbortController();
+    const handlers: Array<{ signal: AbortSignal; handler: () => void }> = [];
+
+    const cleanup = () => {
+        for (const { signal, handler } of handlers) {
+            signal.removeEventListener('abort', handler);
+        }
+        handlers.length = 0;
+    };
 
     for (const signal of signals) {
         if (signal.aborted) {
@@ -151,11 +166,15 @@ function combineAbortSignals(...signals: AbortSignal[]): AbortSignal {
             return controller.signal;
         }
 
-        signal.addEventListener('abort', () => {
+        const handler = () => {
             if (!controller.signal.aborted) {
                 controller.abort(signal.reason);
+                cleanup();  // Remove listeners from other signals
             }
-        }, { once: true });
+        };
+
+        handlers.push({ signal, handler });
+        signal.addEventListener('abort', handler, { once: true });
     }
 
     return controller.signal;
