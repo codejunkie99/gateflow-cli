@@ -221,6 +221,7 @@ export class Orchestrator {
             signal.addEventListener('abort', abortHandler, { once: true });
         }
 
+        try {
             ctx.thinkingChain.addPlanningStep(
                 'Creating execution plan for complex request',
                 { request: userRequest },
@@ -260,7 +261,6 @@ export class Orchestrator {
 
             const results: string[] = [];
 
-        try {
             for (let levelIndex = 0; levelIndex < taskLevels.length; levelIndex++) {
                 // Check for abort before each level
                 if (signal?.aborted) {
@@ -301,7 +301,7 @@ export class Orchestrator {
 
                     for (let i = 0; i < levelResults.length; i++) {
                         const result = levelResults[i];
-                        const task = level[i];
+                        // task available as level[i] if needed for error logging
 
                         if (result.status === 'fulfilled') {
                             if (result.value) results.push(result.value);
