@@ -36,7 +36,6 @@ import { withAbortableTimeout } from '../../resilience/timeout.js';
 import { ToolTimeoutError } from '../../error/classes.js';
 import { PromptBuilder } from '../prompts/PromptBuilder.js';
 import { metrics } from '../../observability/index.js';
-import { AsyncMutex } from '../../concurrency/index.js';
 
 /** Max safe value for setTimeout (~24.8 days) - larger values cause platform-dependent overflow */
 const MAX_SAFE_TIMEOUT_MS = 2_147_483_647;
@@ -95,17 +94,23 @@ class OrchestratorAbortError extends Error {
     }
 }
 
+/**
+ * Per-execution context to avoid instance-level state.
+ * Allows concurrent executeWithPlan calls without mutex serialization.
+ */
+interface ExecutionContext {
+    taskResults: Map<string, TaskResult>;
+    abortControllers: Map<string, AbortController>;
+}
+
 export class Orchestrator {
     private workers: Map<string, WorkerProfile> = new Map();
     private thinkingChain: ThinkingChain;
-    private taskResults: Map<string, TaskResult> = new Map();
-    private abortControllers: Map<string, AbortController> = new Map();
     private resilienceLayer: AgentResilienceLayer;
     private indexer?: SVIndexerAdapter;
     private memoryService?: MemoryService;
     /** Model bundle with variant options for API calls */
     private modelBundle: ModelWithVariant;
-    private executionMutex = new AsyncMutex();
     private config: {
         dependencyFailurePolicy: DependencyFailurePolicy;
         concurrencyLimit: number;
@@ -163,26 +168,26 @@ export class Orchestrator {
     }
 
     /**
-     * Cancel a running task by ID
+     * Cancel a running task by ID within an execution context
      */
-    cancelTask(taskId: string): boolean {
-        const controller = this.abortControllers.get(taskId);
+    private cancelTask(ctx: ExecutionContext, taskId: string): boolean {
+        const controller = ctx.abortControllers.get(taskId);
         if (controller) {
             controller.abort();
-            this.abortControllers.delete(taskId);
+            ctx.abortControllers.delete(taskId);
             return true;
         }
         return false;
     }
 
     /**
-     * Cancel all running tasks
+     * Cancel all running tasks within an execution context
      */
-    cancelAll(): void {
-        for (const controller of this.abortControllers.values()) {
+    private cancelAll(ctx: ExecutionContext): void {
+        for (const controller of ctx.abortControllers.values()) {
             controller.abort();
         }
-        this.abortControllers.clear();
+        ctx.abortControllers.clear();
     }
 
     /**
@@ -192,28 +197,30 @@ export class Orchestrator {
      * @returns OrchestratorResult with result text and aggregated token usage
      */
     async executeWithPlan(userRequest: string, signal?: AbortSignal): Promise<OrchestratorResult> {
-        return this.executionMutex.withLock(async () => {
-            this.taskResults.clear();
-            this.abortControllers.clear();
+        // Create per-execution context - allows concurrent executions without mutex
+        const ctx: ExecutionContext = {
+            taskResults: new Map(),
+            abortControllers: new Map()
+        };
 
-            // Check if already aborted before starting
-            if (signal?.aborted) {
-                throw new OrchestratorAbortError('Orchestration aborted before execution');
-            }
+        // Check if already aborted before starting
+        if (signal?.aborted) {
+            throw new OrchestratorAbortError('Orchestration aborted before execution');
+        }
 
-            // Set up abort listener to cancel all tasks when signal fires
-            let abortHandler: (() => void) | null = null;
-            if (signal) {
-                abortHandler = () => {
-                    this.bus.emit({
-                        type: 'status',
-                        phase: 'thinking',
-                        label: 'Orchestration aborted by user'
-                    });
-                    this.cancelAll();
-                };
-                signal.addEventListener('abort', abortHandler, { once: true });
-            }
+        // Set up abort listener to cancel all tasks when signal fires
+        let abortHandler: (() => void) | null = null;
+        if (signal) {
+            abortHandler = () => {
+                this.bus.emit({
+                    type: 'status',
+                    phase: 'thinking',
+                    label: 'Orchestration aborted by user'
+                });
+                this.cancelAll(ctx);
+            };
+            signal.addEventListener('abort', abortHandler, { once: true });
+        }
 
             this.thinkingChain.addPlanningStep(
                 'Creating execution plan for complex request',
@@ -254,106 +261,107 @@ export class Orchestrator {
 
             const results: string[] = [];
 
-            try {
-                for (let levelIndex = 0; levelIndex < taskLevels.length; levelIndex++) {
-                    // Check for abort before each level
-                    if (signal?.aborted) {
-                        throw new OrchestratorAbortError('Orchestration aborted during execution');
-                    }
+        try {
+            for (let levelIndex = 0; levelIndex < taskLevels.length; levelIndex++) {
+                // Check for abort before each level
+                if (signal?.aborted) {
+                    throw new OrchestratorAbortError('Orchestration aborted during execution');
+                }
 
-                    const level = taskLevels[levelIndex];
+                const level = taskLevels[levelIndex];
 
-                    if (level.length > 1) {
-                        this.bus.emit({
-                            type: 'status',
-                            phase: 'thinking',
-                            label: `Executing ${level.length} tasks in parallel (level ${levelIndex + 1}/${taskLevels.length})`
-                        });
-                    }
+                if (level.length > 1) {
+                    this.bus.emit({
+                        type: 'status',
+                        phase: 'thinking',
+                        label: `Executing ${level.length} tasks in parallel (level ${levelIndex + 1}/${taskLevels.length})`
+                    });
+                }
 
-                    if (level.length === 1) {
-                        try {
-                            // Pass signal to single-task execution
-                            const result = await this.executeSingleTask(level[0], projectContext, plan, signal);
-                            if (result) results.push(result);
-                        } catch (error) {
-                            if (error instanceof OrchestratorAbortError) {
-                                throw error;
-                            }
-                        }
-                    } else {
-                        const levelResults = await this.executeParallelWithLimit(
-                            level.map(task => ({
-                                id: task.id,
-                                agent: task.agent,
-                                fn: (taskSignal: AbortSignal) => signal?.aborted
-                                    ? Promise.reject(new OrchestratorAbortError(`Task ${task.id} aborted before start`))
-                                    : this.executeSingleTask(task, projectContext, plan, signal ?? taskSignal)
-                            })),
-                            this.config.concurrencyLimit
-                        );
-
-                        for (let i = 0; i < levelResults.length; i++) {
-                            const result = levelResults[i];
-                            const task = level[i];
-
-                            if (result.status === 'fulfilled') {
-                                if (result.value) results.push(result.value);
-                            } else {
-                                const reason = result.reason;
-                                if (reason instanceof OrchestratorAbortError) {
-                                    this.cancelAll();
-                                    throw reason;
-                                }
-                            }
+                if (level.length === 1) {
+                    try {
+                        // Pass signal and context to single-task execution
+                        const result = await this.executeSingleTask(ctx, level[0], projectContext, plan, signal);
+                        if (result) results.push(result);
+                    } catch (error) {
+                        if (error instanceof OrchestratorAbortError) {
+                            throw error;
                         }
                     }
+                } else {
+                    const levelResults = await this.executeParallelWithLimit(
+                        level.map(task => ({
+                            id: task.id,
+                            agent: task.agent,
+                            fn: (taskSignal: AbortSignal) => signal?.aborted
+                                ? Promise.reject(new OrchestratorAbortError(`Task ${task.id} aborted before start`))
+                                : this.executeSingleTask(ctx, task, projectContext, plan, signal ?? taskSignal)
+                        })),
+                        this.config.concurrencyLimit
+                    );
 
-                    const levelOutcomes = level
-                        .map(task => this.taskResults.get(task.id))
-                        .filter((result): result is TaskResult => Boolean(result));
-                    const succeeded = levelOutcomes.filter(result => result.success).length;
+                    for (let i = 0; i < levelResults.length; i++) {
+                        const result = levelResults[i];
+                        const task = level[i];
 
-                    if (levelOutcomes.length > 0 && succeeded === 0) {
-                        this.bus.emit({
-                            type: 'error',
-                            message: `All ${level.length} tasks at level ${levelIndex + 1} failed`
-                        });
-
-                        if (this.config.dependencyFailurePolicy === 'abort') {
-                            throw new OrchestratorAbortError('All tasks in level failed');
+                        if (result.status === 'fulfilled') {
+                            if (result.value) results.push(result.value);
+                        } else {
+                            const reason = result.reason;
+                            if (reason instanceof OrchestratorAbortError) {
+                                this.cancelAll(ctx);
+                                throw reason;
+                            }
                         }
                     }
                 }
 
-                // Aggregate token usage from all executed tasks
-                const aggregatedUsage = this.aggregateTaskUsage();
-                const allResults = Array.from(this.taskResults.values());
-                const succeededCount = allResults.filter(r => r.success).length;
+                const levelOutcomes = level
+                    .map(task => ctx.taskResults.get(task.id))
+                    .filter((result): result is TaskResult => Boolean(result));
+                const succeeded = levelOutcomes.filter(result => result.success).length;
 
-                return {
-                    result: results.join('\n\n'),
-                    usage: aggregatedUsage,
-                    tasksExecuted: allResults.length,
-                    tasksSucceeded: succeededCount
-                };
-            } finally {
-                // Clean up abort listener
-                if (signal && abortHandler) {
-                    signal.removeEventListener('abort', abortHandler);
+                if (levelOutcomes.length > 0 && succeeded === 0) {
+                    this.bus.emit({
+                        type: 'error',
+                        message: `All ${level.length} tasks at level ${levelIndex + 1} failed`
+                    });
+
+                    if (this.config.dependencyFailurePolicy === 'abort') {
+                        throw new OrchestratorAbortError('All tasks in level failed');
+                    }
                 }
             }
-        });
+
+            // Aggregate token usage from all executed tasks
+            const aggregatedUsage = this.aggregateTaskUsage(ctx);
+            const allResults = Array.from(ctx.taskResults.values());
+            const succeededCount = allResults.filter(r => r.success).length;
+
+            return {
+                result: results.join('\n\n'),
+                usage: aggregatedUsage,
+                tasksExecuted: allResults.length,
+                tasksSucceeded: succeededCount
+            };
+        } finally {
+            // Clean up abort listener
+            if (signal && abortHandler) {
+                signal.removeEventListener('abort', abortHandler);
+            }
+        }
     }
 
     /**
      * Execute a single task with optional external abort signal.
+     * @param ctx - Execution context for this run
      * @param task - The task to execute
      * @param projectContext - Project context for the task
      * @param plan - The execution plan
      * @param signal - Optional external AbortSignal for timeout cancellation
      */
     private async executeSingleTask(
+        ctx: ExecutionContext,
         task: Task,
         projectContext: ProjectContext,
         plan: ExecutionPlan,
@@ -367,7 +375,7 @@ export class Orchestrator {
         const worker = this.workers.get(task.agent);
         if (!worker) {
             const error = new Error(`Unknown agent: ${task.agent}`);
-            this.taskResults.set(task.id, this.createFailedTaskResult(task, error, Date.now()));
+            ctx.taskResults.set(task.id, this.createFailedTaskResult(task, error, Date.now()));
             this.bus.emit({
                 type: 'error',
                 message: `Unknown agent ${task.agent} for task ${task.id}`
@@ -375,11 +383,11 @@ export class Orchestrator {
             throw error;
         }
 
-        const failedDependencies = this.getFailedDependencies(task);
+        const failedDependencies = this.getFailedDependencies(ctx, task);
         if (failedDependencies.length > 0) {
             if (this.config.dependencyFailurePolicy === 'skip') {
                 const summary = `Skipped due to failed dependencies: ${failedDependencies.join(', ')}`;
-                this.taskResults.set(task.id, this.createSkippedTaskResult(task, summary));
+                ctx.taskResults.set(task.id, this.createSkippedTaskResult(task, summary));
                 this.bus.emit({
                     type: 'status',
                     phase: 'thinking',
@@ -390,19 +398,19 @@ export class Orchestrator {
 
             if (this.config.dependencyFailurePolicy === 'abort') {
                 const summary = `Dependencies failed: ${failedDependencies.join(', ')}`;
-                this.taskResults.set(task.id, this.createSkippedTaskResult(task, summary));
+                ctx.taskResults.set(task.id, this.createSkippedTaskResult(task, summary));
                 throw new OrchestratorAbortError(summary);
             }
         }
 
-        const taskContext = this.buildTaskContext(task, projectContext, plan);
+        const taskContext = this.buildTaskContext(ctx, task, projectContext, plan);
         const startTime = Date.now();
 
         this.emitDelegation(task);
         this.emitAgentStart(task);
 
         const controller = new AbortController();
-        this.abortControllers.set(task.id, controller);
+        ctx.abortControllers.set(task.id, controller);
 
         // Chain external signal to our controller (when provided)
         let abortHandler: (() => void) | null = null;
@@ -435,13 +443,13 @@ export class Orchestrator {
             );
 
             const taskResult = this.createTaskResult(task, execution.output, startTime, execution.usage);
-            this.taskResults.set(task.id, taskResult);
+            ctx.taskResults.set(task.id, taskResult);
 
             this.emitAgentComplete(task, true, execution.output, startTime, execution.usage);
             return execution.output;
         } catch (error) {
             const taskResult = this.createFailedTaskResult(task, error, startTime);
-            this.taskResults.set(task.id, taskResult);
+            ctx.taskResults.set(task.id, taskResult);
 
             const durationMs = Date.now() - startTime;
             const isTimeout = error instanceof ToolTimeoutError;
@@ -480,7 +488,7 @@ export class Orchestrator {
 
             throw error;
         } finally {
-            this.abortControllers.delete(task.id);
+            ctx.abortControllers.delete(task.id);
             // Clean up signal listener if we set one
             if (signal && abortHandler) {
                 signal.removeEventListener('abort', abortHandler);
@@ -637,6 +645,7 @@ export class Orchestrator {
     }
 
     private buildTaskContext(
+        ctx: ExecutionContext,
         task: Task,
         projectContext: ProjectContext,
         plan: ExecutionPlan
@@ -644,7 +653,7 @@ export class Orchestrator {
         const previousResults = new Map<string, TaskResult>();
 
         for (const depId of task.dependencies) {
-            const result = this.taskResults.get(depId);
+            const result = ctx.taskResults.get(depId);
             if (result) {
                 previousResults.set(depId, result);
             }
@@ -655,9 +664,9 @@ export class Orchestrator {
             previousResults,
             projectContext,
             orchestrationState: {
-                completedTasks: this.taskResults.size,
+                completedTasks: ctx.taskResults.size,
                 totalTasks: plan.tasks.length,
-                failedTasks: Array.from(this.taskResults.entries())
+                failedTasks: Array.from(ctx.taskResults.entries())
                     .filter(([, result]) => !result.success)
                     .map(([id]) => id)
             }
@@ -767,12 +776,12 @@ export class Orchestrator {
      * Aggregate token usage from all executed tasks.
      * @returns Combined usage if any task has usage data, undefined otherwise
      */
-    private aggregateTaskUsage(): { inputTokens: number; outputTokens: number } | undefined {
+    private aggregateTaskUsage(ctx: ExecutionContext): { inputTokens: number; outputTokens: number } | undefined {
         let totalInput = 0;
         let totalOutput = 0;
         let hasUsage = false;
 
-        for (const result of this.taskResults.values()) {
+        for (const result of ctx.taskResults.values()) {
             if (result.tokenUsage) {
                 totalInput += result.tokenUsage.input;
                 totalOutput += result.tokenUsage.output;
@@ -921,10 +930,10 @@ export class Orchestrator {
         }
     }
 
-    private getFailedDependencies(task: Task): string[] {
+    private getFailedDependencies(ctx: ExecutionContext, task: Task): string[] {
         const failed: string[] = [];
         for (const depId of task.dependencies) {
-            const result = this.taskResults.get(depId);
+            const result = ctx.taskResults.get(depId);
             if (!result || !result.success) {
                 failed.push(depId);
             }
