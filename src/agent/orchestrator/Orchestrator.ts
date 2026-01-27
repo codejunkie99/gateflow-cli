@@ -201,7 +201,7 @@ export class Orchestrator {
                 this.bus.emit({
                     type: 'status',
                     phase: 'thinking',
-                    label: 'Orchestration aborted by user'
+                    label: 'Orchestration aborted'
                 });
                 this.cancelAll(ctx);
             };
@@ -409,7 +409,7 @@ export class Orchestrator {
                     this.bus.emit({
                         type: 'status',
                         phase: 'thinking',
-                        label: `Task ${task.id} aborted by timeout`
+                        label: `Task ${task.id} aborted`
                     });
                 };
                 signal.addEventListener('abort', abortHandler, { once: true });
