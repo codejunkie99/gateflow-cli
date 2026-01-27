@@ -101,11 +101,11 @@ class OrchestratorAbortError extends Error {
 interface ExecutionContext {
     taskResults: Map<string, TaskResult>;
     abortControllers: Map<string, AbortController>;
+    thinkingChain: ThinkingChain;
 }
 
 export class Orchestrator {
     private workers: Map<string, WorkerProfile> = new Map();
-    private thinkingChain: ThinkingChain;
     private resilienceLayer: AgentResilienceLayer;
     private indexer?: SVIndexerAdapter;
     private memoryService?: MemoryService;
@@ -126,8 +126,6 @@ export class Orchestrator {
         private modelName: string = 'claude-sonnet-4-20250514',
         config?: OrchestratorConfig
     ) {
-        this.thinkingChain = new ThinkingChain(bus, { showByDefault: true });
-
         this.indexer = config?.indexer;
         this.memoryService = config?.memoryService;
 
@@ -200,7 +198,8 @@ export class Orchestrator {
         // Create per-execution context - allows concurrent executions without mutex
         const ctx: ExecutionContext = {
             taskResults: new Map(),
-            abortControllers: new Map()
+            abortControllers: new Map(),
+            thinkingChain: new ThinkingChain(this.bus, { showByDefault: true })
         };
 
         // Check if already aborted before starting
@@ -222,7 +221,7 @@ export class Orchestrator {
             signal.addEventListener('abort', abortHandler, { once: true });
         }
 
-            this.thinkingChain.addPlanningStep(
+            ctx.thinkingChain.addPlanningStep(
                 'Creating execution plan for complex request',
                 { request: userRequest },
                 0.9
@@ -244,11 +243,11 @@ export class Orchestrator {
                 throw new Error(`Plan validation failed: ${validation.error}`);
             }
 
-            await this.requestPlanApprovalIfNeeded(plan);
+            await this.requestPlanApprovalIfNeeded(ctx, plan);
 
             const taskLevels = this.groupTasksByLevel(plan.tasks);
 
-            this.thinkingChain.addDecompositionStep(
+            ctx.thinkingChain.addDecompositionStep(
                 `Created plan with ${plan.tasks.length} tasks in ${taskLevels.length} levels`,
                 {
                     levels: taskLevels.map((level, index) => ({
@@ -437,7 +436,7 @@ export class Orchestrator {
             const execution = await this.resilienceLayer.executeWithResilience(
                 task.agent,
                 task.id,
-                (innerSignal) => this.runTaskStream(worker, task, taskContext, innerSignal),
+                (innerSignal) => this.runTaskStream(ctx, worker, task, taskContext, innerSignal),
                 controller.signal,
                 modelId
             );
@@ -480,7 +479,7 @@ export class Orchestrator {
             this.emitAgentComplete(task, false, undefined, startTime);
 
             const errorMsg = error instanceof Error ? error.message : String(error);
-            this.thinkingChain.addFixingStep(
+            ctx.thinkingChain.addFixingStep(
                 `Task ${task.id} ${isTimeout ? 'timed out' : 'failed'}: ${errorMsg}`,
                 { task, error: errorMsg, isTimeout },
                 0.3
@@ -537,6 +536,7 @@ export class Orchestrator {
     }
 
     private async runTaskStream(
+        ctx: ExecutionContext,
         worker: WorkerProfile,
         task: Task,
         context: TaskContext,
@@ -549,7 +549,7 @@ export class Orchestrator {
         const result = await this.runWorkerTask(worker, enhancedPrompt, signal, {
             onStepFinish: (step) => {
                 stepCount += 1;
-                this.thinkingChain.onStepFinish(step as StepResult<any>);
+                ctx.thinkingChain.onStepFinish(step as StepResult<any>);
             },
             onError: ({ error }) => {
                 this.bus.emit({
@@ -899,7 +899,7 @@ export class Orchestrator {
         return { valid: true };
     }
 
-    private async requestPlanApprovalIfNeeded(plan: ExecutionPlan): Promise<void> {
+    private async requestPlanApprovalIfNeeded(ctx: ExecutionContext, plan: ExecutionPlan): Promise<void> {
         if (plan.confidence >= this.config.planConfidenceThreshold) {
             return;
         }
@@ -914,7 +914,7 @@ export class Orchestrator {
             `tasks: ${taskSummary}${suffix}`
         ].join('\n');
 
-        this.thinkingChain.addCoordinationStep(
+        ctx.thinkingChain.addCoordinationStep(
             'Plan confidence low; requesting approval',
             { confidence: plan.confidence },
             0.6
