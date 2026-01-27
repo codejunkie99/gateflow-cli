@@ -164,9 +164,10 @@ export async function withAbortableTimeout<T>(
     const controller = new AbortController();
     let timeoutId: NodeJS.Timeout | undefined;
 
-    // Link to external abort signal
+    // Link to external abort signal, propagating its reason
     const abortHandler = () => {
-        controller.abort();
+        const reason = externalSignal?.reason ?? { type: 'unknown' };
+        controller.abort(reason);
     };
 
     if (externalSignal) {
@@ -179,7 +180,7 @@ export async function withAbortableTimeout<T>(
     try {
         return await new Promise<T>((resolve, reject) => {
             timeoutId = setTimeout(() => {
-                controller.abort();
+                controller.abort({ type: 'timeout', message: `${operationName} timed out after ${timeoutMs}ms` });
                 reject(new ToolTimeoutError(operationName, timeoutMs));
             }, timeoutMs);
 
