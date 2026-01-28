@@ -180,7 +180,10 @@ export async function withAbortableTimeout<T>(
     try {
         return await new Promise<T>((resolve, reject) => {
             timeoutId = setTimeout(() => {
-                controller.abort({ type: 'timeout', message: `${operationName} timed out after ${timeoutMs}ms` });
+                // Use Error object for abort reason to prevent crashes when consumers access .stack
+                const abortError = new Error(`${operationName} timed out after ${timeoutMs}ms`);
+                (abortError as Error & { type: string }).type = 'timeout';
+                controller.abort(abortError);
                 reject(new ToolTimeoutError(operationName, timeoutMs));
             }, timeoutMs);
 
