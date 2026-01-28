@@ -213,10 +213,11 @@ function combineAbortSignals(...signals: AbortSignal[]): CombinedSignalResult {
                     }
                 };
                 if (nativeCombined.aborted) {
+                    // Already aborted - no listener added, so cleanup is no-op
                     handler();
-                } else {
-                    nativeCombined.addEventListener('abort', handler, { once: true });
+                    return { signal: controller.signal, cleanup: () => {} };
                 }
+                nativeCombined.addEventListener('abort', handler, { once: true });
                 return {
                     signal: controller.signal,
                     cleanup: () => nativeCombined.removeEventListener('abort', handler)
