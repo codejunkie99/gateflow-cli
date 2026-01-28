@@ -164,14 +164,28 @@ export async function withAbortableTimeout<T>(
     const controller = new AbortController();
     let timeoutId: NodeJS.Timeout | undefined;
 
-    // Link to external abort signal
+    // Link to external abort signal, propagating its reason
+    // If reason is already an Error, use it directly; otherwise create DOMException
+    // with name 'AbortError' to match standard cancellation patterns
     const abortHandler = () => {
-        controller.abort();
+        const reason = externalSignal?.reason;
+        if (reason instanceof Error) {
+            controller.abort(reason);
+        } else {
+            // Use DOMException with 'AbortError' name for standard abort handling
+            const error = new DOMException('Operation aborted', 'AbortError');
+            controller.abort(error);
+        }
     };
 
     if (externalSignal) {
         if (externalSignal.aborted) {
-            throw new Error('Operation aborted');
+            // Preserve original reason for consistency with abortHandler behavior
+            const reason = externalSignal.reason;
+            if (reason instanceof Error) {
+                throw reason;
+            }
+            throw new DOMException('Operation aborted', 'AbortError');
         }
         externalSignal.addEventListener('abort', abortHandler);
     }
@@ -179,7 +193,10 @@ export async function withAbortableTimeout<T>(
     try {
         return await new Promise<T>((resolve, reject) => {
             timeoutId = setTimeout(() => {
-                controller.abort();
+                // Use Error object for abort reason to prevent crashes when consumers access .stack
+                const abortError = new Error(`${operationName} timed out after ${timeoutMs}ms`);
+                (abortError as Error & { type: string }).type = 'timeout';
+                controller.abort(abortError);
                 reject(new ToolTimeoutError(operationName, timeoutMs));
             }, timeoutMs);
 
