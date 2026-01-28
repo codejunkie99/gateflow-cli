@@ -1179,6 +1179,8 @@ export class Orchestrator {
         const failed: string[] = [];
         for (const depId of task.dependencies) {
             const result = ctx.taskResults.get(depId);
+            // !result should never occur due to level-based execution order,
+            // but treat as failed defensively. Skipped tasks have success=false.
             if (!result || !result.success) {
                 failed.push(depId);
             }

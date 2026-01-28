@@ -1024,8 +1024,10 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
             });
 
             // Process the stream for all event types (AI SDK 6)
+            // Use same signal precedence as streamText: runtime?.signal ?? options?.signal
+            const effectiveSignal = runtime?.signal ?? options?.signal;
             for await (const part of result.fullStream) {
-                if (options?.signal?.aborted) {
+                if (effectiveSignal?.aborted) {
                     throw new Error('Aborted');
                 }
 
