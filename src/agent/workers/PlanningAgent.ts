@@ -15,8 +15,8 @@ import { ExecutionPlanSchema } from '../../types/agent-shared.js';
  */
 export async function createPlan(
     userRequest: string,
-    projectContext: string = '',
-    modelName: string = 'claude-sonnet-4-20250514',
+    projectContext: string,
+    modelName: string,
     signal?: AbortSignal
 ): Promise<ExecutionPlan> {
     // Parse model and get variant options for extended thinking support
