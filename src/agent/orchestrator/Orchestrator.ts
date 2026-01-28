@@ -220,6 +220,8 @@ function combineAbortSignals(...signals: AbortSignal[]): CombinedSignalResult {
 
     for (const signal of signals) {
         if (signal.aborted) {
+            // Clean up any listeners already attached before returning
+            cleanup();
             controller.abort(getAbortValue(signal));
             return { signal: controller.signal, cleanup: () => {} };
         }
@@ -427,6 +429,10 @@ export class Orchestrator {
                                 taskStartTime
                             ));
                         }
+                        // Honor abort policy for single-task failures
+                        if (this.config.dependencyFailurePolicy === 'abort') {
+                            throw new OrchestratorAbortError(`Task ${task.id} failed: ${errorMsg}`);
+                        }
                     }
                 } else {
                     // Track start times for accurate duration in fallback error handling
@@ -490,15 +496,25 @@ export class Orchestrator {
                     .map(task => ctx.taskResults.get(task.id))
                     .filter((result): result is TaskResult => Boolean(result));
                 const succeeded = levelOutcomes.filter(result => result.success).length;
+                const failed = levelOutcomes.filter(result => !result.success).length;
 
-                if (levelOutcomes.length > 0 && succeeded === 0) {
+                // Check for failures at this level
+                if (failed > 0) {
+                    const allFailed = succeeded === 0;
                     this.bus.emit({
                         type: 'error',
-                        message: `All ${level.length} tasks at level ${levelIndex + 1} failed`
+                        message: allFailed
+                            ? `All ${level.length} tasks at level ${levelIndex + 1} failed`
+                            : `${failed}/${level.length} tasks at level ${levelIndex + 1} failed`
                     });
 
+                    // Abort on ANY failure when policy is 'abort', not just when all fail
                     if (this.config.dependencyFailurePolicy === 'abort') {
-                        throw new OrchestratorAbortError('All tasks in level failed');
+                        const failedTasks = levelOutcomes
+                            .filter(r => !r.success)
+                            .map(r => r.taskId)
+                            .join(', ');
+                        throw new OrchestratorAbortError(`Task(s) failed: ${failedTasks}`);
                     }
                 }
             }
