@@ -106,7 +106,6 @@ interface ExecutionContext {
 
 /**
  * Structured abort reason for debugging and UX.
- * Pass to controller.abort(reason) and read from signal.reason.
  */
 export interface AbortReason {
     type: 'user' | 'timeout' | 'dependency_failed' | 'task_failed' | 'unknown';
@@ -115,12 +114,29 @@ export interface AbortReason {
 }
 
 /**
- * Extract abort reason from signal, with fallback to 'unknown'
+ * Create an Error object with structured abort reason.
+ * Using Error objects prevents crashes when consumers access .stack
+ */
+function createAbortError(reason: AbortReason): Error {
+    const message = reason.message ?? formatAbortReason(reason);
+    const error = new Error(message) as Error & AbortReason;
+    error.type = reason.type;
+    if (reason.taskId) error.taskId = reason.taskId;
+    return error;
+}
+
+/**
+ * Extract abort reason from signal, with fallback to 'unknown'.
+ * Handles both Error objects with type property and plain objects.
  */
 function getAbortReason(signal: AbortSignal): AbortReason {
     const reason = signal.reason;
     if (reason && typeof reason === 'object' && 'type' in reason) {
-        return reason as AbortReason;
+        return {
+            type: (reason as AbortReason).type,
+            taskId: (reason as AbortReason).taskId,
+            message: reason instanceof Error ? reason.message : (reason as AbortReason).message
+        };
     }
     return { type: 'unknown' };
 }
@@ -170,15 +186,21 @@ function combineAbortSignals(...signals: AbortSignal[]): CombinedSignalResult {
         handlers.length = 0;
     };
 
+    // Helper to get Error-wrapped reason for abort
+    const getAbortValue = (signal: AbortSignal): Error => {
+        if (signal.reason instanceof Error) return signal.reason;
+        return createAbortError(getAbortReason(signal));
+    };
+
     for (const signal of signals) {
         if (signal.aborted) {
-            controller.abort(signal.reason);
+            controller.abort(getAbortValue(signal));
             return { signal: controller.signal, cleanup: () => {} };
         }
 
         const handler = () => {
             if (!controller.signal.aborted) {
-                controller.abort(signal.reason);
+                controller.abort(getAbortValue(signal));
                 cleanup();  // Remove listeners from other signals on abort
             }
         };
@@ -256,8 +278,9 @@ export class Orchestrator {
      */
     private cancelAll(ctx: ExecutionContext, reason?: AbortReason): void {
         const abortReason = reason ?? { type: 'unknown' as const };
+        const abortError = createAbortError(abortReason);
         for (const controller of ctx.abortControllers.values()) {
-            controller.abort(abortReason);
+            controller.abort(abortError);
         }
         ctx.abortControllers.clear();
     }
@@ -514,15 +537,23 @@ export class Orchestrator {
         ctx.abortControllers.set(task.id, controller);
 
         // Chain external signal to our controller (when provided)
+        // Propagate the original reason if it's an Error, otherwise wrap it
         let abortHandler: (() => void) | null = null;
         if (signal) {
+            const propagateAbort = () => {
+                // If signal.reason is already an Error, use it directly; otherwise wrap
+                const abortValue = signal.reason instanceof Error
+                    ? signal.reason
+                    : createAbortError(getAbortReason(signal));
+                controller.abort(abortValue);
+            };
+
             if (signal.aborted) {
-                const reason = getAbortReason(signal);
-                controller.abort(reason);
+                propagateAbort();
             } else {
                 abortHandler = () => {
+                    propagateAbort();
                     const reason = getAbortReason(signal);
-                    controller.abort(reason);
                     this.bus.emit({
                         type: 'status',
                         phase: 'thinking',
