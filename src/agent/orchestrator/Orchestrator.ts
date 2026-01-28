@@ -127,16 +127,21 @@ function createAbortError(reason: AbortReason): Error {
 
 /**
  * Extract abort reason from signal, with fallback to 'unknown'.
- * Handles both Error objects with type property and plain objects.
+ * Handles Error objects, plain objects with type property, and primitives.
  */
 function getAbortReason(signal: AbortSignal): AbortReason {
     const reason = signal.reason;
+    // Handle structured abort reasons (Error or plain object with type)
     if (reason && typeof reason === 'object' && 'type' in reason) {
         return {
             type: (reason as AbortReason).type,
             taskId: (reason as AbortReason).taskId,
             message: reason instanceof Error ? reason.message : (reason as AbortReason).message
         };
+    }
+    // Handle primitive reasons (strings like 'Timeout') - preserve in message
+    if (reason !== undefined && reason !== null) {
+        return { type: 'unknown', message: String(reason) };
     }
     return { type: 'unknown' };
 }
@@ -330,7 +335,8 @@ export class Orchestrator {
             const plan = await createPlan(
                 userRequest,
                 this.formatContextForPlanning(projectContext),
-                this.modelName
+                this.modelName,
+                signal  // Make planning phase cancellable
             );
 
             const validation = this.validatePlan(plan);
@@ -376,13 +382,29 @@ export class Orchestrator {
                 }
 
                 if (level.length === 1) {
+                    const task = level[0];
+                    const taskStartTime = Date.now();
                     try {
                         // Pass signal and context to single-task execution
-                        const result = await this.executeSingleTask(ctx, level[0], projectContext, plan, signal);
+                        const result = await this.executeSingleTask(ctx, task, projectContext, plan, signal);
                         if (result) results.push(result);
                     } catch (error) {
                         if (error instanceof OrchestratorAbortError) {
                             throw error;
+                        }
+                        // Handle non-abort errors consistently with parallel branch
+                        const errorMsg = error instanceof Error ? error.message : String(error);
+                        this.bus.emit({
+                            type: 'error',
+                            message: `Task ${task.id} failed: ${errorMsg}`
+                        });
+                        // Ensure task is registered as failed for dependency/level checks
+                        if (!ctx.taskResults.has(task.id)) {
+                            ctx.taskResults.set(task.id, this.createFailedTaskResult(
+                                task,
+                                error instanceof Error ? error : new Error(errorMsg),
+                                taskStartTime
+                            ));
                         }
                     }
                 } else {
