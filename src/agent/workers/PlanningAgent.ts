@@ -15,8 +15,9 @@ import { ExecutionPlanSchema } from '../../types/agent-shared.js';
  */
 export async function createPlan(
     userRequest: string,
-    projectContext: string = '',
-    modelName: string = 'claude-sonnet-4-20250514'
+    projectContext: string,
+    modelName: string,
+    signal?: AbortSignal
 ): Promise<ExecutionPlan> {
     // Parse model and get variant options for extended thinking support
     const { model, variantOptions, config } = createModelWithVariant(modelName);
@@ -53,7 +54,8 @@ export async function createPlan(
         modelId,
         schema: ExecutionPlanSchema,
         ...variantOptions,
-        prompt
+        prompt,
+        abortSignal: signal
     });
     
     return plan;  // Fully typed, no parsing needed!
