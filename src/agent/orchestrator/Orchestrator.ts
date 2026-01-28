@@ -42,7 +42,13 @@ const MAX_SAFE_TIMEOUT_MS = 2_147_483_647;
 
 interface TaskExecutionOutput {
     output: string;
-    usage?: { inputTokens?: number; outputTokens?: number };
+    usage?: {
+        inputTokens?: number;
+        outputTokens?: number;
+        /** Extended usage for reasoning models */
+        reasoningTokens?: number;
+        cachedTokens?: number;
+    };
     stepsExecuted: number;
 }
 
@@ -746,7 +752,7 @@ export class Orchestrator {
         signal: AbortSignal
     ): Promise<TaskExecutionOutput> {
         const enhancedPrompt = this.buildEnhancedPrompt(task, context);
-        let lastUsage: { inputTokens?: number; outputTokens?: number } | undefined;
+        let lastUsage: TaskExecutionOutput['usage'];
         let stepCount = 0;
 
         const result = await this.runWorkerTask(worker, enhancedPrompt, signal, {
@@ -842,7 +848,13 @@ export class Orchestrator {
 
         return {
             output: finalText || output,
-            usage: lastUsage ? { inputTokens: lastUsage.inputTokens, outputTokens: lastUsage.outputTokens } : undefined,
+            usage: lastUsage ? {
+                inputTokens: lastUsage.inputTokens,
+                outputTokens: lastUsage.outputTokens,
+                // Extract extended usage from AI SDK's outputTokenDetails
+                reasoningTokens: (lastUsage as { outputTokenDetails?: { reasoningTokens?: number } }).outputTokenDetails?.reasoningTokens,
+                cachedTokens: (lastUsage as { cachedTokens?: number }).cachedTokens
+            } : undefined,
             stepsExecuted
         };
     }
@@ -921,7 +933,7 @@ export class Orchestrator {
         task: Task,
         output: string,
         startTime: number,
-        usage?: { inputTokens?: number; outputTokens?: number }
+        usage?: TaskExecutionOutput['usage']
     ): TaskResult {
         return {
             taskId: task.id,
@@ -933,7 +945,12 @@ export class Orchestrator {
             insights: this.extractInsights(output, task.type),
             durationMs: Date.now() - startTime,
             tokenUsage: usage
-                ? { input: usage.inputTokens ?? 0, output: usage.outputTokens ?? 0 }
+                ? {
+                    input: usage.inputTokens ?? 0,
+                    output: usage.outputTokens ?? 0,
+                    reasoningTokens: usage.reasoningTokens,
+                    cachedTokens: usage.cachedTokens
+                }
                 : undefined
         };
     }
