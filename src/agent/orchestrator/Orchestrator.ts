@@ -176,8 +176,17 @@ interface CombinedSignalResult {
  */
 function combineAbortSignals(...signals: AbortSignal[]): CombinedSignalResult {
     // Use native AbortSignal.any() if available (Node 20+)
+    // Wrap in try-catch to handle broken polyfills or non-standard implementations
     if ('any' in AbortSignal && typeof AbortSignal.any === 'function') {
-        return { signal: AbortSignal.any(signals), cleanup: () => {} };
+        try {
+            const combined = AbortSignal.any(signals);
+            // Verify it returned a valid AbortSignal
+            if (combined && typeof combined.aborted === 'boolean') {
+                return { signal: combined, cleanup: () => {} };
+            }
+        } catch {
+            // Fall through to manual implementation
+        }
     }
 
     // Fallback: manual combination with proper cleanup to avoid memory leaks
