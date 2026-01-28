@@ -139,14 +139,24 @@ function formatAbortReason(reason: AbortReason): string {
 }
 
 /**
- * Combine multiple AbortSignals - aborts when ANY signal fires.
- * Returns a new signal that propagates the first abort reason.
- * Uses AbortSignal.any() if available (Node 20+), otherwise manual linking with cleanup.
+ * Result of combining abort signals - includes cleanup function to prevent memory leaks
  */
-function combineAbortSignals(...signals: AbortSignal[]): AbortSignal {
+interface CombinedSignalResult {
+    signal: AbortSignal;
+    /** Call when done to remove event listeners (prevents memory leak if signals never abort) */
+    cleanup: () => void;
+}
+
+/**
+ * Combine multiple AbortSignals - aborts when ANY signal fires.
+ * Returns the combined signal AND a cleanup function.
+ * IMPORTANT: Always call cleanup() when done, even if no abort occurred.
+ * Uses AbortSignal.any() if available (Node 20+), otherwise manual linking.
+ */
+function combineAbortSignals(...signals: AbortSignal[]): CombinedSignalResult {
     // Use native AbortSignal.any() if available (Node 20+)
     if ('any' in AbortSignal && typeof AbortSignal.any === 'function') {
-        return AbortSignal.any(signals);
+        return { signal: AbortSignal.any(signals), cleanup: () => {} };
     }
 
     // Fallback: manual combination with proper cleanup to avoid memory leaks
@@ -163,13 +173,13 @@ function combineAbortSignals(...signals: AbortSignal[]): AbortSignal {
     for (const signal of signals) {
         if (signal.aborted) {
             controller.abort(signal.reason);
-            return controller.signal;
+            return { signal: controller.signal, cleanup: () => {} };
         }
 
         const handler = () => {
             if (!controller.signal.aborted) {
                 controller.abort(signal.reason);
-                cleanup();  // Remove listeners from other signals
+                cleanup();  // Remove listeners from other signals on abort
             }
         };
 
@@ -177,7 +187,7 @@ function combineAbortSignals(...signals: AbortSignal[]): AbortSignal {
         signal.addEventListener('abort', handler, { once: true });
     }
 
-    return controller.signal;
+    return { signal: controller.signal, cleanup };
 }
 
 export class Orchestrator {
@@ -357,15 +367,19 @@ export class Orchestrator {
                         level.map(task => ({
                             id: task.id,
                             agent: task.agent,
-                            fn: (taskSignal: AbortSignal) => {
+                            fn: async (taskSignal: AbortSignal) => {
                                 if (signal?.aborted) {
-                                    return Promise.reject(new OrchestratorAbortError(`Task ${task.id} aborted before start`));
+                                    throw new OrchestratorAbortError(`Task ${task.id} aborted before start`);
                                 }
                                 // Combine user signal and timeout signal - abort on EITHER
-                                const combinedSignal = signal
+                                const { signal: combinedSignal, cleanup } = signal
                                     ? combineAbortSignals(signal, taskSignal)
-                                    : taskSignal;
-                                return this.executeSingleTask(ctx, task, projectContext, plan, combinedSignal);
+                                    : { signal: taskSignal, cleanup: () => {} };
+                                try {
+                                    return await this.executeSingleTask(ctx, task, projectContext, plan, combinedSignal);
+                                } finally {
+                                    cleanup();  // Always cleanup to prevent memory leak
+                                }
                             }
                         })),
                         this.config.concurrencyLimit
@@ -373,7 +387,7 @@ export class Orchestrator {
 
                     for (let i = 0; i < levelResults.length; i++) {
                         const result = levelResults[i];
-                        // task available as level[i] if needed for error logging
+                        const task = level[i];
 
                         if (result.status === 'fulfilled') {
                             if (result.value) results.push(result.value);
@@ -382,6 +396,22 @@ export class Orchestrator {
                             if (rejectionReason instanceof OrchestratorAbortError) {
                                 this.cancelAll(ctx, { type: 'task_failed', message: rejectionReason.message });
                                 throw rejectionReason;
+                            }
+                            // Handle non-abort errors: log and register as failed task
+                            const errorMsg = rejectionReason instanceof Error
+                                ? rejectionReason.message
+                                : String(rejectionReason);
+                            this.bus.emit({
+                                type: 'error',
+                                message: `Task ${task.id} failed: ${errorMsg}`
+                            });
+                            // Ensure task is registered as failed so levelOutcomes check works
+                            if (!ctx.taskResults.has(task.id)) {
+                                ctx.taskResults.set(task.id, this.createFailedTaskResult(
+                                    task,
+                                    rejectionReason instanceof Error ? rejectionReason : new Error(errorMsg),
+                                    Date.now()
+                                ));
                             }
                         }
                     }
