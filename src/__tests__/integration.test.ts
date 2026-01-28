@@ -7,7 +7,6 @@ import { describe, it, expect, vi } from 'vitest';
 import { EventBus } from '../events/bus.js';
 import { ThinkingChain } from '../agent/reasoning/ThinkingChain.js';
 import { PromptBuilder } from '../agent/prompts/PromptBuilder.js';
-import { createPlan } from '../agent/workers/PlanningAgent.js';
 
 describe('Integration Tests', () => {
     describe('ThinkingChain + EventBus', () => {

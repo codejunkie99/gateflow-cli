@@ -10,6 +10,7 @@
 
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
+import { createHash } from 'node:crypto';
 import { streamText, stepCountIs, type StepResult, type Tool, type ModelMessage } from 'ai';
 import { z } from 'zod';
 import {
@@ -29,7 +30,7 @@ import type { MemoryService } from '../memory/MemoryService.js';
 import { getSystemPrompt, detectMode, type PromptMode, type DetectModeContext } from './prompts.js';
 import { PromptBuilder } from './prompts/PromptBuilder.js';
 import { ThinkingChain } from './reasoning/ThinkingChain.js';
-import { Orchestrator } from './orchestrator/Orchestrator.js';
+import { Orchestrator, type OrchestratorResult } from './orchestrator/Orchestrator.js';
 import { ComplexityDetectionSchema } from '../types/agent-shared.js';
 import {
     createUnderstandingAgent,
@@ -374,6 +375,14 @@ export class GateFlowAgent {
             // Silently fail - this is just an optimization
             if (process.env.VERBOSE) {
                 console.warn('⚠️  Failed to prefetch OpenRouter models:', err);
+            }
+        });
+
+        // Clean up stale checkpoint files from previous sessions (fire-and-forget)
+        // Log errors in verbose mode to aid debugging without disrupting normal operation
+        this.cleanupStaleCheckpointFiles().catch((err) => {
+            if (process.env.VERBOSE) {
+                console.warn('⚠️  Failed to cleanup stale checkpoint files:', err);
             }
         });
     }
@@ -755,15 +764,41 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
                 // TODO: To support continuation for orchestrated tasks, either:
                 //   1. Have orchestrator populate session.messages with tool results, or
                 //   2. Implement a separate continuation mechanism for orchestrated tasks
-                const orchestratorResult = await this.orchestrator.executeWithPlan(userMessage);
-                const trimmedResult = orchestratorResult.trim();
+                // Pass abort signal to orchestrator for proper cancellation support
+                // Use same signal precedence as single-agent path: runtimeOptions.signal ?? options.signal
+                const orchestratorResult = await this.orchestrator.executeWithPlan(userMessage, options?.runtimeOptions?.signal ?? options?.signal);
+                const trimmedResult = orchestratorResult.result.trim();
+
+                // Capture aggregated token usage from orchestrated tasks
+                if (orchestratorResult.usage) {
+                    const { inputTokens, outputTokens, reasoningTokens, cachedTokens } = orchestratorResult.usage;
+                    lastUsage = {
+                        inputTokens,
+                        outputTokens,
+                        // Include extended details if available from aggregated tasks
+                        extended: (reasoningTokens || cachedTokens) ? {
+                            inputTokens,
+                            outputTokens,
+                            reasoningTokens,
+                            cachedTokens
+                        } : undefined
+                    };
+                }
+
+                // Emit task execution statistics for UI/debugging
+                this.bus.emit({
+                    type: 'status',
+                    phase: 'thinking',
+                    label: `Multi-agent execution complete: ${orchestratorResult.tasksSucceeded}/${orchestratorResult.tasksExecuted} tasks succeeded`
+                });
+
                 // Guard against empty content which violates LLM API contracts
                 if (trimmedResult) {
                     this.session.messages.push({
                         role: 'assistant',
-                        content: orchestratorResult
+                        content: orchestratorResult.result
                     });
-                    fullResponse = orchestratorResult;
+                    fullResponse = orchestratorResult.result;
                 } else {
                     const emptyResultMessage =
                         'Multi-agent run completed with no text output. Check file changes or logs for results.';
@@ -990,8 +1025,10 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
             });
 
             // Process the stream for all event types (AI SDK 6)
+            // Use same signal precedence as streamText: runtime?.signal ?? options?.signal
+            const effectiveSignal = runtime?.signal ?? options?.signal;
             for await (const part of result.fullStream) {
-                if (options?.signal?.aborted) {
+                if (effectiveSignal?.aborted) {
                     throw new Error('Aborted');
                 }
 
@@ -1313,9 +1350,15 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
      */
     private createPrepareStep(mode: PromptMode, bundle: AgentBundle): PrepareStepFn {
         const effectiveLimit = getEffectiveStepLimit(mode, this.config.maxToolCalls);
-        // Clamp to at least 1 (1-indexed) to prevent false triggers on first step
-        const warningStep = Math.max(1, effectiveLimit - 5);
-        const criticalStep = Math.max(1, effectiveLimit - 2);
+        // Use percentage-based thresholds to avoid aggressive warnings with low limits
+        // Warning at 80% of limit, critical at 90%
+        // For effectiveLimit=1, disable warnings (no room to act on them)
+        const warningStep = effectiveLimit <= 1
+            ? Number.MAX_SAFE_INTEGER
+            : Math.max(1, Math.min(effectiveLimit - 1, Math.floor(effectiveLimit * 0.8)));
+        const criticalStep = effectiveLimit <= 1
+            ? Number.MAX_SAFE_INTEGER
+            : Math.min(effectiveLimit, Math.max(warningStep + 1, Math.floor(effectiveLimit * 0.9)));
 
         return combinePrepareSteps(
             // 0. Track step state for continuation guard
@@ -1580,6 +1623,7 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
         const completedTaskIds = new Set<string>(); // Track unique completed tasks across segments
         let cumulativeCompletedCount = 0;       // Track total completed across segments
         let lockedMode: PromptMode | undefined; // Preserve mode across continuation segments
+        let consecutiveToolOnlySegments = 0;    // Track segments with only tool activity (no task/partial progress)
 
         // Reset continuation tracking for this run
         this.lastContinuationCheckpoint = null;
@@ -1663,19 +1707,44 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
             if (isDynamic) {
                 const currentRemainingCount = checkpoint.remainingTasks.length;
 
-                // Progress is made if: remaining decreased OR tasks were completed this segment
-                // remainingDecreased also covers the "all done" case even if completedTasks is empty.
+                // Progress is made if ANY of:
+                // 1. Remaining tasks decreased (covers "all done" case)
+                // 2. Tasks were explicitly completed this segment
+                // 3. Partial results generated (ongoing work with output)
+                // 4. Tool calls made this segment (active work even without task completion)
                 const remainingDecreased = currentRemainingCount < previousRemainingCount;
                 const tasksCompleted = newlyCompleted.length > 0;
+                const hasPartialProgress = Boolean(checkpoint.partialResults?.trim());
+                const segmentToolCalls = this.session.toolCallCount - segmentStartToolCalls;
+                const hasToolActivity = segmentToolCalls > 0;
 
-                if (!remainingDecreased && !tasksCompleted) {
-                    // No progress - remaining didn't decrease AND no tasks completed
+                // Track "real" progress vs just tool activity
+                const hasRealProgress = remainingDecreased || tasksCompleted || hasPartialProgress;
+
+                if (!hasRealProgress && !hasToolActivity) {
+                    // No progress at all - stop immediately
                     this.bus.emit({
                         type: 'status',
                         phase: 'thinking',
-                        label: `No progress detected (${currentRemainingCount} tasks remaining, 0 completed). Stopping.`
+                        label: `No progress detected (${currentRemainingCount} tasks remaining, 0 completed, no activity). Stopping.`
                     });
                     break;
+                }
+
+                if (!hasRealProgress && hasToolActivity) {
+                    // Tool activity only - track consecutive occurrences
+                    consecutiveToolOnlySegments++;
+                    if (consecutiveToolOnlySegments >= 3) {
+                        this.bus.emit({
+                            type: 'status',
+                            phase: 'thinking',
+                            label: `Tool activity but no task progress for ${consecutiveToolOnlySegments} consecutive segments. Stopping.`
+                        });
+                        break;
+                    }
+                } else {
+                    // Real progress made - reset counter
+                    consecutiveToolOnlySegments = 0;
                 }
 
                 previousRemainingCount = currentRemainingCount;
@@ -1707,7 +1776,9 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
             }
 
             // Prune old messages to prevent unbounded growth
-            await this.pruneSegmentMessages();
+            // Adjust segmentStartMessageIndex to account for removed messages
+            const removedBefore = await this.pruneSegmentMessages();
+            this.segmentStartMessageIndex = Math.max(0, this.segmentStartMessageIndex - removedBefore);
 
             // Build continuation prompt for next segment
             currentMessage = await this.buildContinuationPrompt(checkpoint, userMessage);
@@ -1806,9 +1877,17 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
 
     /**
      * Get path to checkpoints file for this session.
+     * Uses sessionId to scope checkpoints per-session, preventing cross-instance conflicts
+     * when multiple GateFlowAgent instances share the same projectRoot.
      */
     private getCheckpointsFilePath(): string {
-        return path.join(this.toolContext.projectRoot, '.gateflow', 'checkpoints.jsonl');
+        const sessionId = this.toolContext.sessionId || 'default';
+        // Sanitize sessionId to be filesystem-safe (replace non-alphanumeric with underscore)
+        // Include short hash suffix to prevent collisions when IDs differ only in special chars
+        // e.g., "test@1" and "test#1" both sanitize to "test_1" but have different hashes
+        const safeSessionId = sessionId.replace(/[^a-zA-Z0-9_-]/g, '_');
+        const hashSuffix = createHash('sha256').update(sessionId).digest('hex').slice(0, 8);
+        return path.join(this.toolContext.projectRoot, '.gateflow', `checkpoints-${safeSessionId}-${hashSuffix}.jsonl`);
     }
 
     /** Max checkpoints to keep in file (prevents unbounded growth) */
@@ -1893,6 +1972,45 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
         });
     }
 
+    /** Max age for stale checkpoint files (7 days in ms)
+     * Extended from 24 hours to handle system hibernate/suspend scenarios
+     * where sessions could be paused for extended periods */
+    private static readonly CHECKPOINT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
+    /**
+     * Clean up stale checkpoint files from other sessions.
+     * Removes checkpoint-*.jsonl files older than CHECKPOINT_MAX_AGE_MS.
+     * This is a best-effort cleanup that doesn't affect current session.
+     */
+    async cleanupStaleCheckpointFiles(): Promise<void> {
+        const gateflowDir = path.join(this.toolContext.projectRoot, '.gateflow');
+        const currentFile = this.getCheckpointsFilePath();
+        const maxAge = GateFlowAgent.CHECKPOINT_MAX_AGE_MS;
+        const now = Date.now();
+
+        try {
+            const files = await fs.readdir(gateflowDir);
+            const checkpointFiles = files.filter(f => f.startsWith('checkpoints-') && f.endsWith('.jsonl'));
+
+            for (const file of checkpointFiles) {
+                const filePath = path.join(gateflowDir, file);
+                // Don't delete current session's file
+                if (filePath === currentFile) continue;
+
+                try {
+                    const stats = await fs.stat(filePath);
+                    if (now - stats.mtimeMs > maxAge) {
+                        await fs.unlink(filePath);
+                    }
+                } catch {
+                    // File may have been deleted by another process
+                }
+            }
+        } catch {
+            // Directory may not exist or be inaccessible
+        }
+    }
+
     /**
      * Build continuation prompt for the next segment.
      * Adds context summary to session, saves checkpoint to file, and returns focused continuation message.
@@ -1939,12 +2057,13 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
      * Keeps: first user message, non-continuation system messages, consolidated continuation context, and recent messages.
      * Uses stored checkpoints from filesystem for reliable consolidation (no regex parsing).
      * @param keepRecent - Number of recent messages to preserve (default: 10)
+     * @returns Number of messages removed before segmentStartMessageIndex (for index adjustment)
      */
-    private async pruneSegmentMessages(keepRecent: number = 10): Promise<void> {
+    private async pruneSegmentMessages(keepRecent: number = 10): Promise<number> {
         const messages = this.session.messages;
         if (messages.length <= keepRecent + 5) {
             // Not enough messages to warrant pruning
-            return;
+            return 0;
         }
 
         // Load checkpoints from file for reliable consolidation
@@ -2066,7 +2185,18 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
             keepIndices.add(i);
         }
 
+        // Count how many messages before segmentStartMessageIndex will be removed
+        // (needed to adjust the index after pruning)
+        let removedBeforeSegmentStart = 0;
+        for (let i = 0; i < this.segmentStartMessageIndex && i < messages.length; i++) {
+            if (!keepIndices.has(i)) {
+                removedBeforeSegmentStart++;
+            }
+        }
+
         // Build pruned array (use direct assignment to avoid call stack limit with spread)
         this.session.messages = messages.filter((_, i) => keepIndices.has(i));
+
+        return removedBeforeSegmentStart;
     }
 }
