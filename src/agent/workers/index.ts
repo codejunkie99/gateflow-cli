@@ -4,7 +4,7 @@
  */
 
 export { createAgent } from './workerFactory.js';
-export { createPlan, parsePlan } from './PlanningAgent.js';
+// Note: createPlan/parsePlan are internal to Orchestrator (not exported)
 export { createUnderstandingAgent } from './UnderstandingAgent.js';
 export { createCodeGenAgent } from './CodeGenerationAgent.js';
 export { createTestbenchAgent } from './TestbenchAgent.js';
