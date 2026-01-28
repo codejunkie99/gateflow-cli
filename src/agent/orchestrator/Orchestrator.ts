@@ -42,7 +42,13 @@ const MAX_SAFE_TIMEOUT_MS = 2_147_483_647;
 
 interface TaskExecutionOutput {
     output: string;
-    usage?: { inputTokens?: number; outputTokens?: number };
+    usage?: {
+        inputTokens?: number;
+        outputTokens?: number;
+        /** Extended usage for reasoning models */
+        reasoningTokens?: number;
+        cachedTokens?: number;
+    };
     stepsExecuted: number;
 }
 
@@ -57,6 +63,9 @@ export interface OrchestratorResult {
     usage?: {
         inputTokens: number;
         outputTokens: number;
+        /** Extended usage details (reasoning models, caching, etc.) */
+        reasoningTokens?: number;
+        cachedTokens?: number;
     };
     /** Number of tasks executed */
     tasksExecuted: number;
@@ -94,11 +103,172 @@ class OrchestratorAbortError extends Error {
     }
 }
 
+/**
+ * Per-execution context to avoid instance-level state.
+ * Allows concurrent executeWithPlan calls without mutex serialization.
+ */
+interface ExecutionContext {
+    taskResults: Map<string, TaskResult>;
+    abortControllers: Map<string, AbortController>;
+    thinkingChain: ThinkingChain;
+}
+
+/**
+ * Structured abort reason for debugging and UX.
+ */
+export interface AbortReason {
+    type: 'user' | 'timeout' | 'dependency_failed' | 'task_failed' | 'unknown';
+    taskId?: string;
+    message?: string;
+}
+
+/**
+ * Create an Error object with structured abort reason.
+ * Using Error objects prevents crashes when consumers access .stack
+ */
+function createAbortError(reason: AbortReason): Error {
+    const message = reason.message ?? formatAbortReason(reason);
+    const error = new Error(message) as Error & AbortReason;
+    error.type = reason.type;
+    if (reason.taskId) error.taskId = reason.taskId;
+    return error;
+}
+
+/** Valid abort reason types for runtime validation */
+const VALID_ABORT_TYPES = ['user', 'timeout', 'dependency_failed', 'task_failed', 'unknown'] as const;
+
+/**
+ * Extract abort reason from signal, with fallback to 'unknown'.
+ * Handles Error objects, plain objects with type property, and primitives.
+ * Validates type against allowed values to maintain type contract at runtime.
+ */
+function getAbortReason(signal: AbortSignal): AbortReason {
+    const reason = signal.reason;
+    // Handle structured abort reasons (Error or plain object with type)
+    if (reason && typeof reason === 'object' && 'type' in reason) {
+        const extractedType = (reason as AbortReason).type;
+        // Validate type against allowed values, fallback to 'unknown' if invalid
+        const type = VALID_ABORT_TYPES.includes(extractedType as typeof VALID_ABORT_TYPES[number])
+            ? extractedType
+            : 'unknown';
+        return {
+            type,
+            taskId: (reason as AbortReason).taskId,
+            message: reason instanceof Error ? reason.message : (reason as AbortReason).message
+        };
+    }
+    // Handle primitive reasons (strings like 'Timeout') - preserve in message
+    if (reason !== undefined && reason !== null) {
+        return { type: 'unknown', message: String(reason) };
+    }
+    return { type: 'unknown' };
+}
+
+/**
+ * Format abort reason for display
+ */
+function formatAbortReason(reason: AbortReason): string {
+    switch (reason.type) {
+        case 'user': return 'cancelled by user';
+        case 'timeout': return 'timed out';
+        case 'dependency_failed': return `dependency failed${reason.taskId ? `: ${reason.taskId}` : ''}`;
+        case 'task_failed': return `task failed${reason.taskId ? `: ${reason.taskId}` : ''}`;
+        default: return 'aborted';
+    }
+}
+
+/**
+ * Result of combining abort signals - includes cleanup function to prevent memory leaks
+ */
+interface CombinedSignalResult {
+    signal: AbortSignal;
+    /** Call when done to remove event listeners (prevents memory leak if signals never abort) */
+    cleanup: () => void;
+}
+
+/**
+ * Combine multiple AbortSignals - aborts when ANY signal fires.
+ * Returns the combined signal AND a cleanup function.
+ * IMPORTANT: Always call cleanup() when done, even if no abort occurred.
+ * Uses AbortSignal.any() if available (Node 20+), otherwise manual linking.
+ * Note: Both paths normalize abort reasons to Error objects for consistent consumer behavior.
+ */
+function combineAbortSignals(...signals: AbortSignal[]): CombinedSignalResult {
+    // Use native AbortSignal.any() if available (Node 20+)
+    // Wrap in try-catch to handle broken polyfills or non-standard implementations
+    if ('any' in AbortSignal && typeof AbortSignal.any === 'function') {
+        try {
+            const nativeCombined = AbortSignal.any(signals);
+            // Verify it returned a valid AbortSignal
+            if (nativeCombined && typeof nativeCombined.aborted === 'boolean') {
+                // Wrap native signal to ensure consistent Error-wrapped reasons
+                // (AbortSignal.any passes through original reason, but consumers expect Error)
+                const controller = new AbortController();
+                const handler = () => {
+                    const reason = nativeCombined.reason;
+                    if (reason instanceof Error) {
+                        controller.abort(reason);
+                    } else {
+                        controller.abort(createAbortError(getAbortReason(nativeCombined)));
+                    }
+                };
+                if (nativeCombined.aborted) {
+                    // Already aborted - no listener added, so cleanup is no-op
+                    handler();
+                    return { signal: controller.signal, cleanup: () => {} };
+                }
+                nativeCombined.addEventListener('abort', handler, { once: true });
+                return {
+                    signal: controller.signal,
+                    cleanup: () => nativeCombined.removeEventListener('abort', handler)
+                };
+            }
+        } catch {
+            // Fall through to manual implementation
+        }
+    }
+
+    // Fallback: manual combination with proper cleanup to avoid memory leaks
+    const controller = new AbortController();
+    const handlers: Array<{ signal: AbortSignal; handler: () => void }> = [];
+
+    const cleanup = () => {
+        for (const { signal, handler } of handlers) {
+            signal.removeEventListener('abort', handler);
+        }
+        handlers.length = 0;
+    };
+
+    // Helper to get Error-wrapped reason for abort
+    const getAbortValue = (signal: AbortSignal): Error => {
+        if (signal.reason instanceof Error) return signal.reason;
+        return createAbortError(getAbortReason(signal));
+    };
+
+    for (const signal of signals) {
+        if (signal.aborted) {
+            // Clean up any listeners already attached before returning
+            cleanup();
+            controller.abort(getAbortValue(signal));
+            return { signal: controller.signal, cleanup: () => {} };
+        }
+
+        const handler = () => {
+            if (!controller.signal.aborted) {
+                controller.abort(getAbortValue(signal));
+                cleanup();  // Remove listeners from other signals on abort
+            }
+        };
+
+        handlers.push({ signal, handler });
+        signal.addEventListener('abort', handler, { once: true });
+    }
+
+    return { signal: controller.signal, cleanup };
+}
+
 export class Orchestrator {
     private workers: Map<string, WorkerProfile> = new Map();
-    private thinkingChain: ThinkingChain;
-    private taskResults: Map<string, TaskResult> = new Map();
-    private abortControllers: Map<string, AbortController> = new Map();
     private resilienceLayer: AgentResilienceLayer;
     private indexer?: SVIndexerAdapter;
     private memoryService?: MemoryService;
@@ -119,8 +289,6 @@ export class Orchestrator {
         private modelName: string = 'claude-sonnet-4-20250514',
         config?: OrchestratorConfig
     ) {
-        this.thinkingChain = new ThinkingChain(bus, { showByDefault: true });
-
         this.indexer = config?.indexer;
         this.memoryService = config?.memoryService;
 
@@ -161,26 +329,15 @@ export class Orchestrator {
     }
 
     /**
-     * Cancel a running task by ID
+     * Cancel all running tasks within an execution context
      */
-    cancelTask(taskId: string): boolean {
-        const controller = this.abortControllers.get(taskId);
-        if (controller) {
-            controller.abort();
-            this.abortControllers.delete(taskId);
-            return true;
+    private cancelAll(ctx: ExecutionContext, reason?: AbortReason): void {
+        const abortReason = reason ?? { type: 'unknown' as const };
+        const abortError = createAbortError(abortReason);
+        for (const controller of ctx.abortControllers.values()) {
+            controller.abort(abortError);
         }
-        return false;
-    }
-
-    /**
-     * Cancel all running tasks
-     */
-    cancelAll(): void {
-        for (const controller of this.abortControllers.values()) {
-            controller.abort();
-        }
-        this.abortControllers.clear();
+        ctx.abortControllers.clear();
     }
 
     /**
@@ -190,8 +347,12 @@ export class Orchestrator {
      * @returns OrchestratorResult with result text and aggregated token usage
      */
     async executeWithPlan(userRequest: string, signal?: AbortSignal): Promise<OrchestratorResult> {
-        this.taskResults.clear();
-        this.abortControllers.clear();
+        // Create per-execution context - allows concurrent executions without mutex
+        const ctx: ExecutionContext = {
+            taskResults: new Map(),
+            abortControllers: new Map(),
+            thinkingChain: new ThinkingChain(this.bus, { showByDefault: true })
+        };
 
         // Check if already aborted before starting
         if (signal?.aborted) {
@@ -202,56 +363,58 @@ export class Orchestrator {
         let abortHandler: (() => void) | null = null;
         if (signal) {
             abortHandler = () => {
+                const reason = getAbortReason(signal);
                 this.bus.emit({
                     type: 'status',
                     phase: 'thinking',
-                    label: 'Orchestration aborted by user'
+                    label: `Orchestration ${formatAbortReason(reason)}`
                 });
-                this.cancelAll();
+                this.cancelAll(ctx, reason);
             };
             signal.addEventListener('abort', abortHandler, { once: true });
         }
 
-        this.thinkingChain.addPlanningStep(
-            'Creating execution plan for complex request',
-            { request: userRequest },
-            0.9
-        );
-
-        const projectContext = await this.buildProjectContext();
-        const plan = await createPlan(
-            userRequest,
-            this.formatContextForPlanning(projectContext),
-            this.modelName
-        );
-
-        const validation = this.validatePlan(plan);
-        if (!validation.valid) {
-            this.bus.emit({
-                type: 'error',
-                message: `Plan validation failed: ${validation.error}`
-            });
-            throw new Error(`Plan validation failed: ${validation.error}`);
-        }
-
-        await this.requestPlanApprovalIfNeeded(plan);
-
-        const taskLevels = this.groupTasksByLevel(plan.tasks);
-
-        this.thinkingChain.addDecompositionStep(
-            `Created plan with ${plan.tasks.length} tasks in ${taskLevels.length} levels`,
-            {
-                levels: taskLevels.map((level, index) => ({
-                    level: index,
-                    tasks: level.map(task => ({ id: task.id, agent: task.agent }))
-                }))
-            },
-            0.9
-        );
-
-        const results: string[] = [];
-
         try {
+            ctx.thinkingChain.addPlanningStep(
+                'Creating execution plan for complex request',
+                { request: userRequest },
+                0.9
+            );
+
+            const projectContext = await this.buildProjectContext();
+            const plan = await createPlan(
+                userRequest,
+                this.formatContextForPlanning(projectContext),
+                this.modelName,
+                signal  // Make planning phase cancellable
+            );
+
+            const validation = this.validatePlan(plan);
+            if (!validation.valid) {
+                this.bus.emit({
+                    type: 'error',
+                    message: `Plan validation failed: ${validation.error}`
+                });
+                throw new Error(`Plan validation failed: ${validation.error}`);
+            }
+
+            await this.requestPlanApprovalIfNeeded(ctx, plan);
+
+            const taskLevels = this.groupTasksByLevel(plan.tasks);
+
+            ctx.thinkingChain.addDecompositionStep(
+                `Created plan with ${plan.tasks.length} tasks in ${taskLevels.length} levels`,
+                {
+                    levels: taskLevels.map((level, index) => ({
+                        level: index,
+                        tasks: level.map(task => ({ id: task.id, agent: task.agent }))
+                    }))
+                },
+                0.9
+            );
+
+            const results: string[] = [];
+
             for (let levelIndex = 0; levelIndex < taskLevels.length; levelIndex++) {
                 // Check for abort before each level
                 if (signal?.aborted) {
@@ -269,21 +432,59 @@ export class Orchestrator {
                 }
 
                 if (level.length === 1) {
+                    const task = level[0];
+                    const taskStartTime = Date.now();
                     try {
-                        // Pass signal to single-task execution
-                        const result = await this.executeSingleTask(level[0], projectContext, plan, signal);
+                        // Pass signal and context to single-task execution
+                        const result = await this.executeSingleTask(ctx, task, projectContext, plan, signal);
                         if (result) results.push(result);
                     } catch (error) {
                         if (error instanceof OrchestratorAbortError) {
                             throw error;
                         }
+                        // Handle non-abort errors consistently with parallel branch
+                        const errorMsg = error instanceof Error ? error.message : String(error);
+                        this.bus.emit({
+                            type: 'error',
+                            message: `Task ${task.id} failed: ${errorMsg}`
+                        });
+                        // Defensive fallback: executeSingleTask normally writes to ctx.taskResults
+                        // in both success and failure cases. This guard handles edge cases where
+                        // executeSingleTask throws before its try-catch (first-write wins).
+                        if (!ctx.taskResults.has(task.id)) {
+                            ctx.taskResults.set(task.id, this.createFailedTaskResult(
+                                task,
+                                error instanceof Error ? error : new Error(errorMsg),
+                                taskStartTime
+                            ));
+                        }
+                        // Honor abort policy for single-task failures
+                        if (this.config.dependencyFailurePolicy === 'abort') {
+                            throw new OrchestratorAbortError(`Task ${task.id} failed: ${errorMsg}`);
+                        }
                     }
                 } else {
+                    // Track start times for accurate duration in fallback error handling
+                    const taskStartTimes = new Map<string, number>();
                     const levelResults = await this.executeParallelWithLimit(
                         level.map(task => ({
                             id: task.id,
                             agent: task.agent,
-                            fn: (taskSignal: AbortSignal) => this.executeSingleTask(task, projectContext, plan, taskSignal)
+                            fn: async (taskSignal: AbortSignal) => {
+                                taskStartTimes.set(task.id, Date.now());  // Record before any work
+                                if (signal?.aborted) {
+                                    throw new OrchestratorAbortError(`Task ${task.id} aborted before start`);
+                                }
+                                // Combine user signal and timeout signal - abort on EITHER
+                                const { signal: combinedSignal, cleanup } = signal
+                                    ? combineAbortSignals(signal, taskSignal)
+                                    : { signal: taskSignal, cleanup: () => {} };
+                                try {
+                                    return await this.executeSingleTask(ctx, task, projectContext, plan, combinedSignal);
+                                } finally {
+                                    cleanup();  // Always cleanup to prevent memory leak
+                                }
+                            }
                         })),
                         this.config.concurrencyLimit
                     );
@@ -295,35 +496,65 @@ export class Orchestrator {
                         if (result.status === 'fulfilled') {
                             if (result.value) results.push(result.value);
                         } else {
-                            const reason = result.reason;
-                            if (reason instanceof OrchestratorAbortError) {
-                                this.cancelAll();
-                                throw reason;
+                            const rejectionReason = result.reason;
+                            if (rejectionReason instanceof OrchestratorAbortError) {
+                                this.cancelAll(ctx, { type: 'task_failed', message: rejectionReason.message });
+                                throw rejectionReason;
+                            }
+                            // Handle non-abort errors: log and register as failed task
+                            const errorMsg = rejectionReason instanceof Error
+                                ? rejectionReason.message
+                                : String(rejectionReason);
+                            this.bus.emit({
+                                type: 'error',
+                                message: `Task ${task.id} failed: ${errorMsg}`
+                            });
+                            // Defensive fallback: executeSingleTask normally writes to ctx.taskResults
+                            // in both success and failure cases. This guard handles edge cases where
+                            // executeSingleTask throws before reaching its try-catch (e.g., during
+                            // dependency validation). Note: timing may differ slightly from inner
+                            // startTime since taskStartTimes is recorded at fn() entry.
+                            if (!ctx.taskResults.has(task.id)) {
+                                ctx.taskResults.set(task.id, this.createFailedTaskResult(
+                                    task,
+                                    rejectionReason instanceof Error ? rejectionReason : new Error(errorMsg),
+                                    taskStartTimes.get(task.id) ?? Date.now()
+                                ));
                             }
                         }
                     }
                 }
 
                 const levelOutcomes = level
-                    .map(task => this.taskResults.get(task.id))
+                    .map(task => ctx.taskResults.get(task.id))
                     .filter((result): result is TaskResult => Boolean(result));
                 const succeeded = levelOutcomes.filter(result => result.success).length;
+                const failed = levelOutcomes.filter(result => !result.success).length;
 
-                if (levelOutcomes.length > 0 && succeeded === 0) {
+                // Check for failures at this level
+                if (failed > 0) {
+                    const allFailed = succeeded === 0;
                     this.bus.emit({
                         type: 'error',
-                        message: `All ${level.length} tasks at level ${levelIndex + 1} failed`
+                        message: allFailed
+                            ? `All ${level.length} tasks at level ${levelIndex + 1} failed`
+                            : `${failed}/${level.length} tasks at level ${levelIndex + 1} failed`
                     });
 
+                    // Abort on ANY failure when policy is 'abort', not just when all fail
                     if (this.config.dependencyFailurePolicy === 'abort') {
-                        throw new OrchestratorAbortError('All tasks in level failed');
+                        const failedTasks = levelOutcomes
+                            .filter(r => !r.success)
+                            .map(r => r.taskId)
+                            .join(', ');
+                        throw new OrchestratorAbortError(`Task(s) failed: ${failedTasks}`);
                     }
                 }
             }
 
             // Aggregate token usage from all executed tasks
-            const aggregatedUsage = this.aggregateTaskUsage();
-            const allResults = Array.from(this.taskResults.values());
+            const aggregatedUsage = this.aggregateTaskUsage(ctx);
+            const allResults = Array.from(ctx.taskResults.values());
             const succeededCount = allResults.filter(r => r.success).length;
 
             return {
@@ -342,12 +573,14 @@ export class Orchestrator {
 
     /**
      * Execute a single task with optional external abort signal.
+     * @param ctx - Execution context for this run
      * @param task - The task to execute
      * @param projectContext - Project context for the task
      * @param plan - The execution plan
      * @param signal - Optional external AbortSignal for timeout cancellation
      */
     private async executeSingleTask(
+        ctx: ExecutionContext,
         task: Task,
         projectContext: ProjectContext,
         plan: ExecutionPlan,
@@ -361,7 +594,7 @@ export class Orchestrator {
         const worker = this.workers.get(task.agent);
         if (!worker) {
             const error = new Error(`Unknown agent: ${task.agent}`);
-            this.taskResults.set(task.id, this.createFailedTaskResult(task, error, Date.now()));
+            ctx.taskResults.set(task.id, this.createFailedTaskResult(task, error, Date.now()));
             this.bus.emit({
                 type: 'error',
                 message: `Unknown agent ${task.agent} for task ${task.id}`
@@ -369,11 +602,11 @@ export class Orchestrator {
             throw error;
         }
 
-        const failedDependencies = this.getFailedDependencies(task);
+        const failedDependencies = this.getFailedDependencies(ctx, task);
         if (failedDependencies.length > 0) {
             if (this.config.dependencyFailurePolicy === 'skip') {
                 const summary = `Skipped due to failed dependencies: ${failedDependencies.join(', ')}`;
-                this.taskResults.set(task.id, this.createSkippedTaskResult(task, summary));
+                ctx.taskResults.set(task.id, this.createSkippedTaskResult(task, summary));
                 this.bus.emit({
                     type: 'status',
                     phase: 'thinking',
@@ -384,32 +617,42 @@ export class Orchestrator {
 
             if (this.config.dependencyFailurePolicy === 'abort') {
                 const summary = `Dependencies failed: ${failedDependencies.join(', ')}`;
-                this.taskResults.set(task.id, this.createSkippedTaskResult(task, summary));
+                ctx.taskResults.set(task.id, this.createSkippedTaskResult(task, summary));
                 throw new OrchestratorAbortError(summary);
             }
         }
 
-        const taskContext = this.buildTaskContext(task, projectContext, plan);
+        const taskContext = this.buildTaskContext(ctx, task, projectContext, plan);
         const startTime = Date.now();
 
         this.emitDelegation(task);
         this.emitAgentStart(task);
 
         const controller = new AbortController();
-        this.abortControllers.set(task.id, controller);
+        ctx.abortControllers.set(task.id, controller);
 
         // Chain external signal to our controller (when provided)
+        // Propagate the original reason if it's an Error, otherwise wrap it
         let abortHandler: (() => void) | null = null;
         if (signal) {
+            const propagateAbort = () => {
+                // If signal.reason is already an Error, use it directly; otherwise wrap
+                const abortValue = signal.reason instanceof Error
+                    ? signal.reason
+                    : createAbortError(getAbortReason(signal));
+                controller.abort(abortValue);
+            };
+
             if (signal.aborted) {
-                controller.abort();
+                propagateAbort();
             } else {
                 abortHandler = () => {
-                    controller.abort();
+                    propagateAbort();
+                    const reason = getAbortReason(signal);
                     this.bus.emit({
                         type: 'status',
                         phase: 'thinking',
-                        label: `Task ${task.id} aborted by timeout`
+                        label: `Task ${task.id} ${formatAbortReason(reason)}`
                     });
                 };
                 signal.addEventListener('abort', abortHandler, { once: true });
@@ -423,19 +666,19 @@ export class Orchestrator {
             const execution = await this.resilienceLayer.executeWithResilience(
                 task.agent,
                 task.id,
-                (innerSignal) => this.runTaskStream(worker, task, taskContext, innerSignal),
+                (innerSignal) => this.runTaskStream(ctx, worker, task, taskContext, innerSignal),
                 controller.signal,
                 modelId
             );
 
             const taskResult = this.createTaskResult(task, execution.output, startTime, execution.usage);
-            this.taskResults.set(task.id, taskResult);
+            ctx.taskResults.set(task.id, taskResult);
 
             this.emitAgentComplete(task, true, execution.output, startTime, execution.usage);
             return execution.output;
         } catch (error) {
             const taskResult = this.createFailedTaskResult(task, error, startTime);
-            this.taskResults.set(task.id, taskResult);
+            ctx.taskResults.set(task.id, taskResult);
 
             const durationMs = Date.now() - startTime;
             const isTimeout = error instanceof ToolTimeoutError;
@@ -466,7 +709,7 @@ export class Orchestrator {
             this.emitAgentComplete(task, false, undefined, startTime);
 
             const errorMsg = error instanceof Error ? error.message : String(error);
-            this.thinkingChain.addFixingStep(
+            ctx.thinkingChain.addFixingStep(
                 `Task ${task.id} ${isTimeout ? 'timed out' : 'failed'}: ${errorMsg}`,
                 { task, error: errorMsg, isTimeout },
                 0.3
@@ -474,7 +717,7 @@ export class Orchestrator {
 
             throw error;
         } finally {
-            this.abortControllers.delete(task.id);
+            ctx.abortControllers.delete(task.id);
             // Clean up signal listener if we set one
             if (signal && abortHandler) {
                 signal.removeEventListener('abort', abortHandler);
@@ -523,19 +766,20 @@ export class Orchestrator {
     }
 
     private async runTaskStream(
+        ctx: ExecutionContext,
         worker: WorkerProfile,
         task: Task,
         context: TaskContext,
         signal: AbortSignal
     ): Promise<TaskExecutionOutput> {
         const enhancedPrompt = this.buildEnhancedPrompt(task, context);
-        let lastUsage: { inputTokens?: number; outputTokens?: number } | undefined;
+        let lastUsage: TaskExecutionOutput['usage'];
         let stepCount = 0;
 
         const result = await this.runWorkerTask(worker, enhancedPrompt, signal, {
             onStepFinish: (step) => {
                 stepCount += 1;
-                this.thinkingChain.onStepFinish(step as StepResult<any>);
+                ctx.thinkingChain.onStepFinish(step as StepResult<any>);
             },
             onError: ({ error }) => {
                 this.bus.emit({
@@ -625,12 +869,19 @@ export class Orchestrator {
 
         return {
             output: finalText || output,
-            usage: lastUsage ? { inputTokens: lastUsage.inputTokens, outputTokens: lastUsage.outputTokens } : undefined,
+            usage: lastUsage ? {
+                inputTokens: lastUsage.inputTokens,
+                outputTokens: lastUsage.outputTokens,
+                // Extract extended usage from AI SDK's outputTokenDetails
+                reasoningTokens: (lastUsage as { outputTokenDetails?: { reasoningTokens?: number } }).outputTokenDetails?.reasoningTokens,
+                cachedTokens: (lastUsage as { cachedTokens?: number }).cachedTokens
+            } : undefined,
             stepsExecuted
         };
     }
 
     private buildTaskContext(
+        ctx: ExecutionContext,
         task: Task,
         projectContext: ProjectContext,
         plan: ExecutionPlan
@@ -638,7 +889,7 @@ export class Orchestrator {
         const previousResults = new Map<string, TaskResult>();
 
         for (const depId of task.dependencies) {
-            const result = this.taskResults.get(depId);
+            const result = ctx.taskResults.get(depId);
             if (result) {
                 previousResults.set(depId, result);
             }
@@ -649,9 +900,9 @@ export class Orchestrator {
             previousResults,
             projectContext,
             orchestrationState: {
-                completedTasks: this.taskResults.size,
+                completedTasks: ctx.taskResults.size,
                 totalTasks: plan.tasks.length,
-                failedTasks: Array.from(this.taskResults.entries())
+                failedTasks: Array.from(ctx.taskResults.entries())
                     .filter(([, result]) => !result.success)
                     .map(([id]) => id)
             }
@@ -703,7 +954,7 @@ export class Orchestrator {
         task: Task,
         output: string,
         startTime: number,
-        usage?: { inputTokens?: number; outputTokens?: number }
+        usage?: TaskExecutionOutput['usage']
     ): TaskResult {
         return {
             taskId: task.id,
@@ -715,7 +966,12 @@ export class Orchestrator {
             insights: this.extractInsights(output, task.type),
             durationMs: Date.now() - startTime,
             tokenUsage: usage
-                ? { input: usage.inputTokens ?? 0, output: usage.outputTokens ?? 0 }
+                ? {
+                    input: usage.inputTokens ?? 0,
+                    output: usage.outputTokens ?? 0,
+                    reasoningTokens: usage.reasoningTokens,
+                    cachedTokens: usage.cachedTokens
+                }
                 : undefined
         };
     }
@@ -759,22 +1015,47 @@ export class Orchestrator {
 
     /**
      * Aggregate token usage from all executed tasks.
+     * Includes extended usage details (reasoning tokens, cached tokens) when available.
      * @returns Combined usage if any task has usage data, undefined otherwise
      */
-    private aggregateTaskUsage(): { inputTokens: number; outputTokens: number } | undefined {
+    private aggregateTaskUsage(ctx: ExecutionContext): {
+        inputTokens: number;
+        outputTokens: number;
+        reasoningTokens?: number;
+        cachedTokens?: number;
+    } | undefined {
         let totalInput = 0;
         let totalOutput = 0;
+        let totalReasoning = 0;
+        let totalCached = 0;
         let hasUsage = false;
+        let hasExtended = false;
 
-        for (const result of this.taskResults.values()) {
+        for (const result of ctx.taskResults.values()) {
             if (result.tokenUsage) {
                 totalInput += result.tokenUsage.input;
                 totalOutput += result.tokenUsage.output;
                 hasUsage = true;
+                // Aggregate extended usage if present
+                if (result.tokenUsage.reasoningTokens !== undefined) {
+                    totalReasoning += result.tokenUsage.reasoningTokens;
+                    hasExtended = true;
+                }
+                if (result.tokenUsage.cachedTokens !== undefined) {
+                    totalCached += result.tokenUsage.cachedTokens;
+                    hasExtended = true;
+                }
             }
         }
 
-        return hasUsage ? { inputTokens: totalInput, outputTokens: totalOutput } : undefined;
+        if (!hasUsage) return undefined;
+
+        return {
+            inputTokens: totalInput,
+            outputTokens: totalOutput,
+            ...(hasExtended && totalReasoning > 0 ? { reasoningTokens: totalReasoning } : {}),
+            ...(hasExtended && totalCached > 0 ? { cachedTokens: totalCached } : {})
+        };
     }
 
     private summarizeOutput(output: string, _taskType: string): string {
@@ -884,7 +1165,7 @@ export class Orchestrator {
         return { valid: true };
     }
 
-    private async requestPlanApprovalIfNeeded(plan: ExecutionPlan): Promise<void> {
+    private async requestPlanApprovalIfNeeded(ctx: ExecutionContext, plan: ExecutionPlan): Promise<void> {
         if (plan.confidence >= this.config.planConfidenceThreshold) {
             return;
         }
@@ -899,7 +1180,7 @@ export class Orchestrator {
             `tasks: ${taskSummary}${suffix}`
         ].join('\n');
 
-        this.thinkingChain.addCoordinationStep(
+        ctx.thinkingChain.addCoordinationStep(
             'Plan confidence low; requesting approval',
             { confidence: plan.confidence },
             0.6
@@ -915,10 +1196,12 @@ export class Orchestrator {
         }
     }
 
-    private getFailedDependencies(task: Task): string[] {
+    private getFailedDependencies(ctx: ExecutionContext, task: Task): string[] {
         const failed: string[] = [];
         for (const depId of task.dependencies) {
-            const result = this.taskResults.get(depId);
+            const result = ctx.taskResults.get(depId);
+            // !result should never occur due to level-based execution order,
+            // but treat as failed defensively. Skipped tasks have success=false.
             if (!result || !result.success) {
                 failed.push(depId);
             }
