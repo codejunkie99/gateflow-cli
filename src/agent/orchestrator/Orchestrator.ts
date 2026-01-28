@@ -191,16 +191,36 @@ interface CombinedSignalResult {
  * Returns the combined signal AND a cleanup function.
  * IMPORTANT: Always call cleanup() when done, even if no abort occurred.
  * Uses AbortSignal.any() if available (Node 20+), otherwise manual linking.
+ * Note: Both paths normalize abort reasons to Error objects for consistent consumer behavior.
  */
 function combineAbortSignals(...signals: AbortSignal[]): CombinedSignalResult {
     // Use native AbortSignal.any() if available (Node 20+)
     // Wrap in try-catch to handle broken polyfills or non-standard implementations
     if ('any' in AbortSignal && typeof AbortSignal.any === 'function') {
         try {
-            const combined = AbortSignal.any(signals);
+            const nativeCombined = AbortSignal.any(signals);
             // Verify it returned a valid AbortSignal
-            if (combined && typeof combined.aborted === 'boolean') {
-                return { signal: combined, cleanup: () => {} };
+            if (nativeCombined && typeof nativeCombined.aborted === 'boolean') {
+                // Wrap native signal to ensure consistent Error-wrapped reasons
+                // (AbortSignal.any passes through original reason, but consumers expect Error)
+                const controller = new AbortController();
+                const handler = () => {
+                    const reason = nativeCombined.reason;
+                    if (reason instanceof Error) {
+                        controller.abort(reason);
+                    } else {
+                        controller.abort(createAbortError(getAbortReason(nativeCombined)));
+                    }
+                };
+                if (nativeCombined.aborted) {
+                    handler();
+                } else {
+                    nativeCombined.addEventListener('abort', handler, { once: true });
+                }
+                return {
+                    signal: controller.signal,
+                    cleanup: () => nativeCombined.removeEventListener('abort', handler)
+                };
             }
         } catch {
             // Fall through to manual implementation
