@@ -386,11 +386,14 @@ export class Orchestrator {
                         }
                     }
                 } else {
+                    // Track start times for accurate duration in fallback error handling
+                    const taskStartTimes = new Map<string, number>();
                     const levelResults = await this.executeParallelWithLimit(
                         level.map(task => ({
                             id: task.id,
                             agent: task.agent,
                             fn: async (taskSignal: AbortSignal) => {
+                                taskStartTimes.set(task.id, Date.now());  // Record before any work
                                 if (signal?.aborted) {
                                     throw new OrchestratorAbortError(`Task ${task.id} aborted before start`);
                                 }
@@ -433,7 +436,7 @@ export class Orchestrator {
                                 ctx.taskResults.set(task.id, this.createFailedTaskResult(
                                     task,
                                     rejectionReason instanceof Error ? rejectionReason : new Error(errorMsg),
-                                    Date.now()
+                                    taskStartTimes.get(task.id) ?? Date.now()  // Use tracked time
                                 ));
                             }
                         }
