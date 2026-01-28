@@ -769,12 +769,18 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
                 const trimmedResult = orchestratorResult.result.trim();
 
                 // Capture aggregated token usage from orchestrated tasks
-                // Note: Orchestrator aggregates basic tokens; extended details not available
                 if (orchestratorResult.usage) {
+                    const { inputTokens, outputTokens, reasoningTokens, cachedTokens } = orchestratorResult.usage;
                     lastUsage = {
-                        inputTokens: orchestratorResult.usage.inputTokens,
-                        outputTokens: orchestratorResult.usage.outputTokens,
-                        extended: undefined  // Extended details not aggregated by orchestrator
+                        inputTokens,
+                        outputTokens,
+                        // Include extended details if available from aggregated tasks
+                        extended: (reasoningTokens || cachedTokens) ? {
+                            inputTokens,
+                            outputTokens,
+                            reasoningTokens,
+                            cachedTokens
+                        } : undefined
                     };
                 }
 

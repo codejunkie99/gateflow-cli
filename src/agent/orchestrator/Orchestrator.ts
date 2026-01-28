@@ -57,6 +57,9 @@ export interface OrchestratorResult {
     usage?: {
         inputTokens: number;
         outputTokens: number;
+        /** Extended usage details (reasoning models, caching, etc.) */
+        reasoningTokens?: number;
+        cachedTokens?: number;
     };
     /** Number of tasks executed */
     tasksExecuted: number;
@@ -952,22 +955,47 @@ export class Orchestrator {
 
     /**
      * Aggregate token usage from all executed tasks.
+     * Includes extended usage details (reasoning tokens, cached tokens) when available.
      * @returns Combined usage if any task has usage data, undefined otherwise
      */
-    private aggregateTaskUsage(ctx: ExecutionContext): { inputTokens: number; outputTokens: number } | undefined {
+    private aggregateTaskUsage(ctx: ExecutionContext): {
+        inputTokens: number;
+        outputTokens: number;
+        reasoningTokens?: number;
+        cachedTokens?: number;
+    } | undefined {
         let totalInput = 0;
         let totalOutput = 0;
+        let totalReasoning = 0;
+        let totalCached = 0;
         let hasUsage = false;
+        let hasExtended = false;
 
         for (const result of ctx.taskResults.values()) {
             if (result.tokenUsage) {
                 totalInput += result.tokenUsage.input;
                 totalOutput += result.tokenUsage.output;
                 hasUsage = true;
+                // Aggregate extended usage if present
+                if (result.tokenUsage.reasoningTokens !== undefined) {
+                    totalReasoning += result.tokenUsage.reasoningTokens;
+                    hasExtended = true;
+                }
+                if (result.tokenUsage.cachedTokens !== undefined) {
+                    totalCached += result.tokenUsage.cachedTokens;
+                    hasExtended = true;
+                }
             }
         }
 
-        return hasUsage ? { inputTokens: totalInput, outputTokens: totalOutput } : undefined;
+        if (!hasUsage) return undefined;
+
+        return {
+            inputTokens: totalInput,
+            outputTokens: totalOutput,
+            ...(hasExtended && totalReasoning > 0 ? { reasoningTokens: totalReasoning } : {}),
+            ...(hasExtended && totalCached > 0 ? { cachedTokens: totalCached } : {})
+        };
     }
 
     private summarizeOutput(output: string, _taskType: string): string {

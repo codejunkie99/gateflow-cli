@@ -219,7 +219,13 @@ export interface TaskResult {
     insights: string[];
     /** Execution timing */
     durationMs: number;
-    tokenUsage?: { input: number; output: number };
+    tokenUsage?: {
+        input: number;
+        output: number;
+        /** Extended usage details (reasoning models, caching, etc.) */
+        reasoningTokens?: number;
+        cachedTokens?: number;
+    };
 }
 
 /**
