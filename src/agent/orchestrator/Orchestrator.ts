@@ -421,7 +421,9 @@ export class Orchestrator {
                             type: 'error',
                             message: `Task ${task.id} failed: ${errorMsg}`
                         });
-                        // Ensure task is registered as failed for dependency/level checks
+                        // Defensive fallback: executeSingleTask normally writes to ctx.taskResults
+                        // in both success and failure cases. This guard handles edge cases where
+                        // executeSingleTask throws before its try-catch (first-write wins).
                         if (!ctx.taskResults.has(task.id)) {
                             ctx.taskResults.set(task.id, this.createFailedTaskResult(
                                 task,
@@ -480,12 +482,16 @@ export class Orchestrator {
                                 type: 'error',
                                 message: `Task ${task.id} failed: ${errorMsg}`
                             });
-                            // Ensure task is registered as failed so levelOutcomes check works
+                            // Defensive fallback: executeSingleTask normally writes to ctx.taskResults
+                            // in both success and failure cases. This guard handles edge cases where
+                            // executeSingleTask throws before reaching its try-catch (e.g., during
+                            // dependency validation). Note: timing may differ slightly from inner
+                            // startTime since taskStartTimes is recorded at fn() entry.
                             if (!ctx.taskResults.has(task.id)) {
                                 ctx.taskResults.set(task.id, this.createFailedTaskResult(
                                     task,
                                     rejectionReason instanceof Error ? rejectionReason : new Error(errorMsg),
-                                    taskStartTimes.get(task.id) ?? Date.now()  // Use tracked time
+                                    taskStartTimes.get(task.id) ?? Date.now()
                                 ));
                             }
                         }
