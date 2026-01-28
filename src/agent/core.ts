@@ -765,6 +765,7 @@ Return needsMultiAgent: true only for genuinely complex requests.`,
                 //   1. Have orchestrator populate session.messages with tool results, or
                 //   2. Implement a separate continuation mechanism for orchestrated tasks
                 // Pass abort signal to orchestrator for proper cancellation support
+                // Use same signal precedence as single-agent path: runtimeOptions.signal ?? options.signal
                 const orchestratorResult = await this.orchestrator.executeWithPlan(userMessage, options?.runtimeOptions?.signal ?? options?.signal);
                 const trimmedResult = orchestratorResult.result.trim();
 
