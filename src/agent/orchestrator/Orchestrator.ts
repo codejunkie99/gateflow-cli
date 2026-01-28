@@ -158,8 +158,15 @@ function getAbortReason(signal: AbortSignal): AbortReason {
         };
     }
     // Handle primitive reasons (strings like 'Timeout') - preserve in message
+    // Wrap in try-catch as String() throws on null-prototype objects
     if (reason !== undefined && reason !== null) {
-        return { type: 'unknown', message: String(reason) };
+        let message: string;
+        try {
+            message = String(reason);
+        } catch {
+            message = '[unserializable reason]';
+        }
+        return { type: 'unknown', message };
     }
     return { type: 'unknown' };
 }
