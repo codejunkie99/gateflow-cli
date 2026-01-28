@@ -125,16 +125,25 @@ function createAbortError(reason: AbortReason): Error {
     return error;
 }
 
+/** Valid abort reason types for runtime validation */
+const VALID_ABORT_TYPES = ['user', 'timeout', 'dependency_failed', 'task_failed', 'unknown'] as const;
+
 /**
  * Extract abort reason from signal, with fallback to 'unknown'.
  * Handles Error objects, plain objects with type property, and primitives.
+ * Validates type against allowed values to maintain type contract at runtime.
  */
 function getAbortReason(signal: AbortSignal): AbortReason {
     const reason = signal.reason;
     // Handle structured abort reasons (Error or plain object with type)
     if (reason && typeof reason === 'object' && 'type' in reason) {
+        const extractedType = (reason as AbortReason).type;
+        // Validate type against allowed values, fallback to 'unknown' if invalid
+        const type = VALID_ABORT_TYPES.includes(extractedType as typeof VALID_ABORT_TYPES[number])
+            ? extractedType
+            : 'unknown';
         return {
-            type: (reason as AbortReason).type,
+            type,
             taskId: (reason as AbortReason).taskId,
             message: reason instanceof Error ? reason.message : (reason as AbortReason).message
         };
