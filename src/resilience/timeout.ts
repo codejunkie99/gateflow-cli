@@ -165,9 +165,16 @@ export async function withAbortableTimeout<T>(
     let timeoutId: NodeJS.Timeout | undefined;
 
     // Link to external abort signal, propagating its reason
+    // If reason is already an Error, use it directly; otherwise wrap in Error
     const abortHandler = () => {
-        const reason = externalSignal?.reason ?? { type: 'unknown' };
-        controller.abort(reason);
+        const reason = externalSignal?.reason;
+        if (reason instanceof Error) {
+            controller.abort(reason);
+        } else {
+            const error = new Error('Operation aborted');
+            (error as Error & { type: string }).type = reason?.type ?? 'unknown';
+            controller.abort(error);
+        }
     };
 
     if (externalSignal) {
