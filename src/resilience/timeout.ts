@@ -180,6 +180,11 @@ export async function withAbortableTimeout<T>(
 
     if (externalSignal) {
         if (externalSignal.aborted) {
+            // Preserve original reason for consistency with abortHandler behavior
+            const reason = externalSignal.reason;
+            if (reason instanceof Error) {
+                throw reason;
+            }
             throw new DOMException('Operation aborted', 'AbortError');
         }
         externalSignal.addEventListener('abort', abortHandler);
