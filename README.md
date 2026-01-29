@@ -5,7 +5,7 @@
 **AI-Powered SystemVerilog Development Environment**
 
 [![Node.js Version](https://img.shields.io/badge/node-%3E%3D18.0.0-brightgreen)](https://nodejs.org/)
-[![License: BSL 1.1](https://img.shields.io/badge/License-BSL%201.1-orange.svg)](./LICENSE)
+[![License: BSL-1.1](https://img.shields.io/badge/License-BSL--1.1-orange.svg)](./LICENSE)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.3-blue)](https://www.typescriptlang.org/)
 [![Powered by Claude](https://img.shields.io/badge/Powered%20by-Claude%20AI-orange)](https://www.anthropic.com/)
 <img width="1619" height="787" alt="image" src="https://github.com/user-attachments/assets/f53240b4-5704-4c5a-8e0e-5d65546a0ad1" />
@@ -398,7 +398,7 @@ Contributions are welcome. Please follow these guidelines:
 
 ## License
 
-BSL 1.1 (Business Source License) - see [LICENSE](./LICENSE) for details.
+BSL-1.1 (Business Source License) - see [LICENSE](./LICENSE) for details.
 
 **You can:** Use, fork, contribute for non-commercial/personal/educational purposes.
 **Commercial use:** Contact us for a license.
