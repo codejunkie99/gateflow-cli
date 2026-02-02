@@ -12,11 +12,11 @@
 import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { exec } from 'node:child_process';
+import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { EventBus } from '../events/bus.js';
 
-const execAsync = promisify(exec);
+const execFileAsync = promisify(execFile);
 
 // ============================================================================
 // Types
@@ -449,12 +449,12 @@ export class DynamicContextManager {
 
         // Try system jq first
         try {
-            const { stdout } = await execAsync(`jq "${filter.replace(/"/g, '\\"')}" "${resolvedPath}"`);
-            return stdout;
+            const { stdout } = await execFileAsync('jq', ['--', filter, resolvedPath]);
+            return stdout ?? '';
         } catch (error: any) {
             // If jq command not found or invalid filter, fall back to simple JS
             // Only support basic property access fallback: .foo.bar or .[].foo
-            if (error.code === 127 || error.message.includes('not found') || error.message.includes('not recognized')) { // 127 is command not found
+            if (error.code === 'ENOENT' || error.code === 127 || error.message.includes('not found') || error.message.includes('not recognized')) { // 127 is command not found
                 try {
                     const content = await fs.readFile(resolvedPath, 'utf-8');
                     const data = JSON.parse(content);
@@ -719,8 +719,20 @@ export class DynamicContextManager {
     }
 
     private async resolvePath(filePath: string): Promise<string> {
+        const projectRoot = path.resolve(this.getProjectDir());
+        const isWithinProjectRoot = (candidate: string): boolean => {
+            const normalizedCandidate = path.resolve(candidate);
+            return normalizedCandidate === projectRoot
+                || normalizedCandidate.startsWith(projectRoot + path.sep);
+        };
+
         // If already absolute, use as-is
         if (path.isAbsolute(filePath)) {
+            if (!isWithinProjectRoot(filePath)) {
+                throw new Error(
+                    `Path traversal detected: "${filePath}" resolves outside project root`
+                );
+            }
             return filePath;
         }
 
@@ -728,6 +740,11 @@ export class DynamicContextManager {
         const contextPath = path.join(this.getContextDir(), filePath);
         try {
             await fs.access(contextPath);
+            if (!isWithinProjectRoot(contextPath)) {
+                throw new Error(
+                    `Path traversal detected: "${filePath}" resolves outside project root`
+                );
+            }
             return contextPath;
         } catch {
             // Not in context dir
@@ -739,6 +756,11 @@ export class DynamicContextManager {
             const sessionPath = path.join(this.getSessionDir(session), filePath);
             try {
                 await fs.access(sessionPath);
+                if (!isWithinProjectRoot(sessionPath)) {
+                    throw new Error(
+                        `Path traversal detected: "${filePath}" resolves outside project root`
+                    );
+                }
                 return sessionPath;
             } catch {
                 // Not in this session

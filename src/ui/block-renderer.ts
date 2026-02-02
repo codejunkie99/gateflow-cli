@@ -16,6 +16,23 @@ export interface BlockOptions {
     maxHeight?: number;
 }
 
+export interface BlockRendererOptions {
+    width?: number;
+    unicode?: boolean;
+    output?: (line: string) => void;
+}
+
+interface BlockGlyphs {
+    h: string;
+    v: string;
+    tl: string;
+    tr: string;
+    bl: string;
+    br: string;
+    teeL: string;
+    teeR: string;
+}
+
 // ============================================================================
 // Block Class
 // ============================================================================
@@ -26,12 +43,14 @@ export class Block {
     private endTime?: number;
     private options: BlockOptions;
     private width: number;
+    private glyphs: BlockGlyphs;
     public status: string = '';
     private success?: boolean;
 
-    constructor(options: BlockOptions, width: number) {
+    constructor(options: BlockOptions, width: number, glyphs: BlockGlyphs) {
         this.options = options;
         this.width = width;
+        this.glyphs = glyphs;
         this.startTime = Date.now();
     }
 
@@ -67,7 +86,7 @@ export class Block {
         const strippedDisplay = displayContent.replace(/\x1b\[[0-9;]*m/g, '');
         const padding = Math.max(0, innerWidth - strippedDisplay.length);
 
-        return chalk.gray('\u{2502} ') + displayContent + ' '.repeat(padding) + chalk.gray(' \u{2502}'); // │
+        return chalk.gray(`${this.glyphs.v} `) + displayContent + ' '.repeat(padding) + chalk.gray(` ${this.glyphs.v}`);
     }
 
     /**
@@ -84,14 +103,14 @@ export class Block {
         const leftBorderLen = Math.min(3, Math.max(1, Math.floor((innerWidth - titleLen - durationLen) / 2)));
         const rightBorderLen = Math.max(0, innerWidth - leftBorderLen - titleLen - durationLen);
 
-        const leftBorder = '\u{2500}'.repeat(leftBorderLen); // ─
-        const rightBorder = '\u{2500}'.repeat(rightBorderLen);
+        const leftBorder = this.glyphs.h.repeat(leftBorderLen);
+        const rightBorder = this.glyphs.h.repeat(rightBorderLen);
 
-        return chalk.cyan('\u{250C}' + leftBorder) + // ┌
+        return chalk.cyan(this.glyphs.tl + leftBorder) +
                chalk.bold(title) +
                chalk.cyan(rightBorder.slice(0, Math.max(0, rightBorder.length - durationLen))) +
                chalk.gray(duration) +
-               chalk.cyan('\u{2500}\u{2510}'); // ─┐
+               chalk.cyan(this.glyphs.h + this.glyphs.tr);
     }
 
     /**
@@ -99,7 +118,7 @@ export class Block {
      */
     renderFooter(): string {
         const innerWidth = this.width - 2;
-        return chalk.cyan('\u{2514}' + '\u{2500}'.repeat(innerWidth) + '\u{2518}'); // └───┘
+        return chalk.cyan(this.glyphs.bl + this.glyphs.h.repeat(innerWidth) + this.glyphs.br);
     }
 
     /**
@@ -107,7 +126,7 @@ export class Block {
      */
     renderEmptyLine(): string {
         const innerWidth = this.width - 4;
-        return chalk.gray('\u{2502}') + ' '.repeat(innerWidth + 2) + chalk.gray('\u{2502}');
+        return chalk.gray(this.glyphs.v) + ' '.repeat(innerWidth + 2) + chalk.gray(this.glyphs.v);
     }
 
     /**
@@ -140,9 +159,31 @@ export class BlockRenderer {
     private blocks: Block[] = [];
     private currentBlock: Block | null = null;
     private width: number;
+    private unicode: boolean;
+    private glyphs: BlockGlyphs;
+    private output: (line: string) => void;
 
-    constructor(width?: number) {
+    constructor(widthOrOptions?: number | BlockRendererOptions, options?: BlockRendererOptions) {
+        const width = typeof widthOrOptions === 'number'
+            ? widthOrOptions
+            : (widthOrOptions?.width ?? options?.width);
+        const unicode = typeof widthOrOptions === 'number'
+            ? (options?.unicode ?? true)
+            : (widthOrOptions?.unicode ?? true);
+        const output = typeof widthOrOptions === 'number'
+            ? options?.output
+            : widthOrOptions?.output;
+
         this.width = width || Math.min(80, (process.stdout.columns || 80) - 2);
+        this.unicode = unicode;
+        this.glyphs = unicode
+            ? { h: '\u{2500}', v: '\u{2502}', tl: '\u{250C}', tr: '\u{2510}', bl: '\u{2514}', br: '\u{2518}', teeL: '\u{251C}', teeR: '\u{2524}' }
+            : { h: '-', v: '|', tl: '+', tr: '+', bl: '+', br: '+', teeL: '+', teeR: '+' };
+        this.output = output ?? ((line: string) => console.log(line));
+    }
+
+    private write(line: string): void {
+        this.output(line);
     }
 
     /**
@@ -151,11 +192,11 @@ export class BlockRenderer {
     startBlock(options: BlockOptions): void {
         this.endBlock(); // Close any existing block
 
-        this.currentBlock = new Block(options, this.width);
+        this.currentBlock = new Block(options, this.width, this.glyphs);
         this.blocks.push(this.currentBlock);
 
         // Render header
-        console.log(this.currentBlock.renderHeader());
+        this.write(this.currentBlock.renderHeader());
     }
 
     /**
@@ -164,9 +205,9 @@ export class BlockRenderer {
     addLine(content: string): void {
         if (this.currentBlock) {
             this.currentBlock.addLine(content);
-            console.log(this.currentBlock.formatLine(content));
+            this.write(this.currentBlock.formatLine(content));
         } else {
-            console.log(content);
+            this.write(content);
         }
     }
 
@@ -176,9 +217,9 @@ export class BlockRenderer {
     addEmptyLine(): void {
         if (this.currentBlock) {
             this.currentBlock.addLine('');
-            console.log(this.currentBlock.renderEmptyLine());
+            this.write(this.currentBlock.renderEmptyLine());
         } else {
-            console.log('');
+            this.write('');
         }
     }
 
@@ -199,7 +240,7 @@ export class BlockRenderer {
     endBlock(success?: boolean): void {
         if (this.currentBlock) {
             this.currentBlock.end(success);
-            console.log(this.currentBlock.renderFooter());
+            this.write(this.currentBlock.renderFooter());
             this.currentBlock = null;
         }
     }
@@ -259,7 +300,7 @@ export class BlockRenderer {
      * Create a simple separator line
      */
     renderSeparator(): string {
-        return chalk.gray('\u{2500}'.repeat(this.width)); // ─
+        return chalk.gray(this.glyphs.h.repeat(this.width));
     }
 
     /**
@@ -270,30 +311,32 @@ export class BlockRenderer {
         const innerWidth = this.width - 2;
 
         // Status icon
-        const icon = success ? chalk.green('\u{2713}') : chalk.red('\u{2717}'); // ✓ or ✗
+        const icon = success
+            ? chalk.green(this.unicode ? '\u{2713}' : 'OK')
+            : chalk.red(this.unicode ? '\u{2717}' : 'X');
         const titleWithIcon = `${icon} ${title}`;
 
         // Top border
         const titleLen = title.length + 2; // +2 for icon and space
-        const leftBorder = '\u{2500}'.repeat(3);
+        const leftBorder = this.glyphs.h.repeat(3);
         const rightBorderLen = Math.max(0, innerWidth - 3 - titleLen - 1);
-        const rightBorder = '\u{2500}'.repeat(rightBorderLen);
+        const rightBorder = this.glyphs.h.repeat(rightBorderLen);
 
         output.push(
-            chalk.cyan('\u{250C}' + leftBorder + ' ') +
+            chalk.cyan(this.glyphs.tl + leftBorder + ' ') +
             titleWithIcon +
-            chalk.cyan(' ' + rightBorder + '\u{2510}')
+            chalk.cyan(' ' + rightBorder + this.glyphs.tr)
         );
 
         // Content
         for (const line of lines) {
             const stripped = line.replace(/\x1b\[[0-9;]*m/g, '');
             const padding = Math.max(0, innerWidth - stripped.length - 2);
-            output.push(chalk.cyan('\u{2502} ') + line + ' '.repeat(padding) + chalk.cyan(' \u{2502}'));
+            output.push(chalk.cyan(`${this.glyphs.v} `) + line + ' '.repeat(padding) + chalk.cyan(` ${this.glyphs.v}`));
         }
 
         // Bottom border
-        output.push(chalk.cyan('\u{2514}' + '\u{2500}'.repeat(innerWidth) + '\u{2518}'));
+        output.push(chalk.cyan(this.glyphs.bl + this.glyphs.h.repeat(innerWidth) + this.glyphs.br));
 
         return output.join('\n');
     }

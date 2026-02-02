@@ -168,6 +168,14 @@ export function isRetryableError(error: GateFlowError): boolean {
     return error.retryable;
 }
 
+export function isGateFlowError(error: unknown): error is GateFlowError {
+    if (!error || typeof error !== 'object') return false;
+    const err = error as Record<string, unknown>;
+    return typeof err.code === 'number'
+        && typeof err.message === 'string'
+        && typeof err.retryable === 'boolean';
+}
+
 export function getErrorCategory(code: GateFlowErrorCode): string {
     if (code >= 1000 && code < 2000) return 'tool';
     if (code >= 2000 && code < 3000) return 'file';

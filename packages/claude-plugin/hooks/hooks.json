@@ -1,0 +1,72 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": {
+          "toolName": "Write|Edit"
+        },
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "You are a SystemVerilog file approval hook.\n\nTool: {{tool.name}}\nFile: {{tool.input.file_path}}\n\nAuto-approve if ALL conditions are met:\n1. File extension is .sv, .svh, .v, or .vh\n2. Path does not contain '..' (no directory traversal)\n3. Path is relative or within current working directory\n\nRespond with exactly one word:\n- APPROVE - if all conditions met\n- BLOCK - if any condition fails\n\nDo not explain, just respond with one word."
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": {
+          "toolName": "Write|Edit"
+        },
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "A file was just written or edited.\n\nFile: {{tool.input.file_path}}\nTool: {{tool.name}}\n\nIf the file has a SystemVerilog extension (.sv, .svh, .v, .vh), add a note:\n\"I'll check this for errors.\"\n\nDo NOT mention any slash commands. If not a SystemVerilog file, say nothing.\n\nKeep response under 15 words or empty."
+          }
+        ]
+      },
+      {
+        "matcher": {
+          "toolName": "Write"
+        },
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "A file was just created.\n\nFile: {{tool.input.file_path}}\n\nCheck if this is a testbench file by examining the filename:\n- Matches *_tb.sv pattern (e.g., counter_tb.sv, fifo_tb.sv)\n- Matches tb_*.sv pattern (e.g., tb_counter.sv, tb_fifo.sv)\n\nIf this IS a testbench file, respond with:\n\"Testbench created. I'll run the simulation to verify it works.\"\n\nThen you should proceed to simulate this testbench using Verilator:\n1. Identify the DUT (module being tested) from the testbench\n2. Compile with: verilator --binary --trace -Wall <dut.sv> <testbench.sv>\n3. Run the simulation\n4. Report pass/fail status\n\nIf this is NOT a testbench file, respond with nothing (empty response).\n\nDo NOT mention slash commands. Keep response natural and brief."
+          }
+        ]
+      },
+      {
+        "matcher": {
+          "toolName": "Bash"
+        },
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "A bash command was just executed.\n\nCommand: {{tool.input.command}}\nOutput: {{tool.output}}\n\nCheck if this was a Verilator simulation that completed successfully and produced a VCD file.\n\nIndicators of completed simulation:\n- Command contains 'verilator' or runs a simulation binary (obj_dir/V*)\n- Output shows simulation completed ($finish or normal termination)\n- A .vcd file was generated or referenced\n\nIf a VCD file was produced from a successful simulation, respond with:\n\"Simulation complete. I'll show you the waveform analysis.\"\n\nThen analyze the VCD file to show:\n- Time range and signal count\n- Key signal transitions\n- Any detected issues or anomalies\n\nIf simulation failed OR no VCD was produced OR this wasn't a simulation, respond with nothing (empty response).\n\nDo NOT mention slash commands. Keep response natural."
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "GateFlow plugin loaded. Check if ~/.gateflow/.onboarded exists and if .sv files exist.\n\nIf first-time user: Say 'Welcome to GateFlow! Just describe what you want to do with your SystemVerilog code and I'll handle the rest.'\n\nIf onboarded SV project: Say nothing or briefly note 'GateFlow ready.'\n\nNEVER mention slash commands. NEVER say 'run /gf-anything'. Just welcome the user."
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "prompt",
+            "prompt": "Quality gate check before finishing.\n\nReview what happened in this conversation turn:\n1. Were any .sv/.svh/.v/.vh files created or modified?\n2. If yes, was lint run on those files?\n3. Did the user explicitly say to skip lint?\n\nDecision:\n- If no SV files were modified: say nothing\n- If SV files modified AND lint was run: say nothing\n- If user said 'skip lint' or 'don't lint': say nothing\n- If SV files modified but lint was NOT run: respond with a brief reminder like 'I should verify that code for errors.' and then run lint\n\nKeep any response under 20 words. Prefer saying nothing if quality gate passes."
+          }
+        ]
+      }
+    ]
+  }
+}

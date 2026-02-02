@@ -22,15 +22,47 @@ export interface DiffStats {
     changes: number;
 }
 
+export interface DiffDisplayOptions {
+    width?: number;
+    unicode?: boolean;
+}
+
+interface DiffGlyphs {
+    h: string;
+    v: string;
+    tl: string;
+    tr: string;
+    bl: string;
+    br: string;
+    teeL: string;
+    teeR: string;
+}
+
 // ============================================================================
 // DiffDisplay Class
 // ============================================================================
 
 export class DiffDisplay {
     private readonly boxWidth: number;
+    private readonly unicode: boolean;
+    private readonly glyphs: DiffGlyphs;
 
-    constructor(width: number = 70) {
+    constructor(
+        widthOrOptions: number | DiffDisplayOptions = 70,
+        options?: DiffDisplayOptions
+    ) {
+        const width = typeof widthOrOptions === 'number'
+            ? widthOrOptions
+            : (widthOrOptions.width ?? 70);
+        const unicode = typeof widthOrOptions === 'number'
+            ? (options?.unicode ?? true)
+            : (widthOrOptions.unicode ?? true);
+
         this.boxWidth = Math.min(width, (process.stdout.columns || 80) - 4);
+        this.unicode = unicode;
+        this.glyphs = unicode
+            ? { h: '\u{2500}', v: '\u{2502}', tl: '\u{250C}', tr: '\u{2510}', bl: '\u{2514}', br: '\u{2518}', teeL: '\u{251C}', teeR: '\u{2524}' }
+            : { h: '-', v: '|', tl: '+', tr: '+', bl: '+', br: '+', teeL: '+', teeR: '+' };
     }
 
     /**
@@ -169,7 +201,7 @@ export class DiffDisplay {
                 return line.content;
         }
 
-        return `${prefix}${lineNum} \u{2502} ${content}`; // │
+        return `${prefix}${lineNum} ${this.glyphs.v} ${content}`;
     }
 
     /**
@@ -183,38 +215,54 @@ export class DiffDisplay {
         const titlePadded = ` ${title} `;
         const leftBorderLen = Math.max(1, Math.floor((innerWidth - titlePadded.length) / 2));
         const rightBorderLen = Math.max(0, innerWidth - leftBorderLen - titlePadded.length);
-        const topBorder = '\u{2500}'.repeat(leftBorderLen); // '─'
-        const topBorderRight = '\u{2500}'.repeat(rightBorderLen);
-        lines.push(chalk.cyan('\u{250C}' + topBorder + titlePadded + topBorderRight + '\u{2510}')); // ┌ ... ┐
+        const topBorder = this.glyphs.h.repeat(leftBorderLen);
+        const topBorderRight = this.glyphs.h.repeat(rightBorderLen);
+        lines.push(chalk.cyan(this.glyphs.tl + topBorder + titlePadded + topBorderRight + this.glyphs.tr));
 
         // Empty line
-        lines.push(chalk.cyan('\u{2502}') + ' '.repeat(innerWidth) + chalk.cyan('\u{2502}')); // │ ... │
+        lines.push(chalk.cyan(this.glyphs.v) + ' '.repeat(innerWidth) + chalk.cyan(this.glyphs.v));
 
         // Content
         for (const line of content) {
             // Strip ANSI for length calculation
             const stripped = line.replace(/\x1b\[[0-9;]*m/g, '');
             const padding = Math.max(0, innerWidth - stripped.length - 1);
-            lines.push(chalk.cyan('\u{2502}') + ' ' + line + ' '.repeat(padding) + chalk.cyan('\u{2502}'));
+            lines.push(chalk.cyan(this.glyphs.v) + ' ' + line + ' '.repeat(padding) + chalk.cyan(this.glyphs.v));
         }
 
         // Empty line
-        lines.push(chalk.cyan('\u{2502}') + ' '.repeat(innerWidth) + chalk.cyan('\u{2502}'));
+        lines.push(chalk.cyan(this.glyphs.v) + ' '.repeat(innerWidth) + chalk.cyan(this.glyphs.v));
 
         // Separator
-        lines.push(chalk.cyan('\u{251C}' + '\u{2500}'.repeat(innerWidth) + '\u{2524}')); // ├ ... ┤
+        lines.push(
+            chalk.cyan(
+                this.glyphs.teeL +
+                this.glyphs.h.repeat(innerWidth) +
+                this.glyphs.teeR
+            )
+        );
 
         // Footer
         const footerStripped = footer.replace(/\x1b\[[0-9;]*m/g, '');
         const footerPadding = Math.max(0, Math.floor((innerWidth - footerStripped.length) / 2));
-        lines.push(chalk.cyan('\u{2502}') + ' '.repeat(footerPadding) + footer + ' '.repeat(innerWidth - footerPadding - footerStripped.length) + chalk.cyan('\u{2502}'));
+        lines.push(
+            chalk.cyan(this.glyphs.v) +
+            ' '.repeat(footerPadding) +
+            footer +
+            ' '.repeat(innerWidth - footerPadding - footerStripped.length) +
+            chalk.cyan(this.glyphs.v)
+        );
 
         // Bottom border with actions
         const actions = '[y]es / [n]o / [e]dit / [d]iff';
         const actionsLen = actions.length;
         const bottomLeftLen = Math.max(1, Math.floor((innerWidth - actionsLen) / 2));
         const bottomRightLen = Math.max(0, innerWidth - bottomLeftLen - actionsLen);
-        lines.push(chalk.cyan('\u{2514}' + '\u{2500}'.repeat(bottomLeftLen)) + chalk.yellow(actions) + chalk.cyan('\u{2500}'.repeat(bottomRightLen) + '\u{2518}')); // └ ... ┘
+        lines.push(
+            chalk.cyan(this.glyphs.bl + this.glyphs.h.repeat(bottomLeftLen)) +
+            chalk.yellow(actions) +
+            chalk.cyan(this.glyphs.h.repeat(bottomRightLen) + this.glyphs.br)
+        );
 
         return lines.join('\n');
     }
@@ -222,9 +270,19 @@ export class DiffDisplay {
     /**
      * Render a diff for display
      */
-    render(filePath: string, unifiedDiff: string): string {
+    render(
+        filePath: string,
+        unifiedDiff: string,
+        statsOverride?: { added: number; removed: number }
+    ): string {
         const lines = this.parseDiff(unifiedDiff);
-        const stats = this.getStats(lines);
+        const stats = statsOverride
+            ? {
+                additions: statsOverride.added,
+                deletions: statsOverride.removed,
+                changes: Math.max(statsOverride.added, statsOverride.removed)
+            }
+            : this.getStats(lines);
 
         // Find max line number for padding
         const lineNumbers = lines
@@ -248,12 +306,22 @@ export class DiffDisplay {
     /**
      * Render a compact inline diff (for smaller changes)
      */
-    renderInline(filePath: string, unifiedDiff: string): string {
+    renderInline(
+        filePath: string,
+        unifiedDiff: string,
+        statsOverride?: { added: number; removed: number }
+    ): string {
         const lines = this.parseDiff(unifiedDiff);
-        const stats = this.getStats(lines);
+        const stats = statsOverride
+            ? {
+                additions: statsOverride.added,
+                deletions: statsOverride.removed,
+                changes: Math.max(statsOverride.added, statsOverride.removed)
+            }
+            : this.getStats(lines);
 
         const output: string[] = [
-            chalk.cyan('\u{2500}\u{2500}\u{2500} ') + chalk.bold(filePath) + chalk.cyan(' \u{2500}\u{2500}\u{2500}') // ─── file ───
+            chalk.cyan(this.glyphs.h.repeat(3) + ' ') + chalk.bold(filePath) + chalk.cyan(' ' + this.glyphs.h.repeat(3))
         ];
 
         for (const line of lines) {
@@ -263,22 +331,22 @@ export class DiffDisplay {
 
             switch (line.type) {
                 case 'add':
-                    output.push(chalk.green(`+${lineNum} \u{2502} ${line.content}`));
+                    output.push(chalk.green(`+${lineNum} ${this.glyphs.v} ${line.content}`));
                     break;
                 case 'remove':
-                    output.push(chalk.red(`-${lineNum} \u{2502} ${line.content}`));
+                    output.push(chalk.red(`-${lineNum} ${this.glyphs.v} ${line.content}`));
                     break;
                 case 'context':
-                    output.push(chalk.gray(` ${lineNum} \u{2502} ${line.content}`));
+                    output.push(chalk.gray(` ${lineNum} ${this.glyphs.v} ${line.content}`));
                     break;
             }
         }
 
         output.push(
-            chalk.cyan('\u{2500}\u{2500}\u{2500} ') +
+            chalk.cyan(this.glyphs.h.repeat(3) + ' ') +
             chalk.green(`+${stats.additions}`) + ' / ' +
             chalk.red(`-${stats.deletions}`) +
-            chalk.cyan(' \u{2500}\u{2500}\u{2500}')
+            chalk.cyan(' ' + this.glyphs.h.repeat(3))
         );
 
         return output.join('\n');
@@ -288,7 +356,7 @@ export class DiffDisplay {
      * Render a minimal one-line summary
      */
     renderSummary(filePath: string, stats: DiffStats): string {
-        return chalk.cyan('\u{2500} ') + // ─
+        return chalk.cyan(this.glyphs.h + ' ') +
             chalk.bold(filePath) +
             chalk.gray(` (+${stats.additions}/-${stats.deletions})`);
     }

@@ -18,6 +18,7 @@ import readline from 'readline';
 import chalk from 'chalk';
 import type { EventBus } from '../events/index.js';
 import { InlineChatbox, type ChatboxOptions } from './BlessedChatbox.js';
+import { getPromptController, type LinePromptOptions } from './prompt-controller.js';
 
 export type ApprovalScope = 'once' | 'session' | 'all';
 
@@ -26,6 +27,8 @@ export interface InputManagerOptions {
     useChatbox?: boolean;
     /** Chatbox configuration */
     chatboxOptions?: ChatboxOptions;
+    /** Use Ink prompt controller instead of readline/chatbox */
+    useInk?: boolean;
 }
 
 export interface ApprovalResult {
@@ -60,6 +63,7 @@ export class InputManager {
     private approveAll = false;
     private onPromptStart?: () => void;
     private onPromptEnd?: () => void;
+    private useInk = false;
 
     // Chatbox support
     private useChatbox: boolean = false;
@@ -67,6 +71,7 @@ export class InputManager {
     private chatboxOptions: ChatboxOptions = {};
 
     constructor(private bus?: EventBus, options?: InputManagerOptions) {
+        this.useInk = options?.useInk ?? false;
         if (options?.useChatbox) {
             this.useChatbox = true;
             this.chatboxOptions = options.chatboxOptions || {};
@@ -113,6 +118,7 @@ export class InputManager {
      * Call this once at startup
      */
     initialize(): void {
+        if (this.useInk) return;
         if (this.rl) return;
 
         this.rl = readline.createInterface({
@@ -141,6 +147,18 @@ export class InputManager {
      * Returns a promise that resolves with the user's answer
      */
     async prompt(options: PromptOptions): Promise<string> {
+        if (this.useInk) {
+            this.onPromptStart?.();
+            try {
+                const controller = getPromptController();
+                const answer = await controller.requestLine(options as LinePromptOptions);
+                const result = answer.trim() || options.defaultAnswer || '';
+                return result;
+            } finally {
+                this.onPromptEnd?.();
+            }
+        }
+
         return new Promise((resolve, reject) => {
             this.promptQueue.push({ options, resolve, reject });
             this.processQueue();
@@ -224,6 +242,17 @@ export class InputManager {
      * Uses chatbox if enabled, otherwise standard readline
      */
     async getLine(promptStr: string = '> '): Promise<string> {
+        if (this.useInk) {
+            this.onPromptStart?.();
+            try {
+                const controller = getPromptController();
+                const answer = await controller.requestLine({ question: promptStr });
+                return answer || '';
+            } finally {
+                this.onPromptEnd?.();
+            }
+        }
+
         // Use chatbox mode if enabled
         if (this.useChatbox && this.chatbox) {
             this.onPromptStart?.();
@@ -242,6 +271,7 @@ export class InputManager {
      * Process the prompt queue
      */
     private async processQueue(): Promise<void> {
+        if (this.useInk) return;
         if (this.isPrompting || this.promptQueue.length === 0) {
             return;
         }
@@ -355,6 +385,11 @@ export class InputManager {
      * Close the input manager
      */
     close(): void {
+        if (this.useInk) {
+            this.promptQueue = [];
+            this.isPrompting = false;
+            return;
+        }
         if (this.rl) {
             this.rl.close();
             this.rl = null;

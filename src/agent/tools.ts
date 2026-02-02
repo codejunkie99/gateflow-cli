@@ -200,13 +200,16 @@ export const readContextOutputSchema = z.object({
 // Search History - Search archived conversation history
 export const searchHistorySchema = z.object({
     query: z.string().describe('What to search for in conversation history'),
-    sessionOnly: z.boolean().optional().default(true).describe('Search only current session (default: true)')
+    sessionOnly: z.boolean().optional().default(true).describe('Search only current session (default: true)'),
+    maxResults: z.number().optional().default(20).describe('Maximum results to return (default: 20)')
 });
 
 // Search Terminal - Search terminal output for patterns
 export const searchTerminalSchema = z.object({
-    pattern: z.string().describe('Regex pattern to search for'),
-    context: z.number().optional().default(2).describe('Lines of context around matches (default: 2)')
+    pattern: z.string().optional().describe('Regex pattern to search for'),
+    query: z.string().optional().describe('Alias for pattern'),
+    context: z.number().optional().default(2).describe('Lines of context around matches (default: 2)'),
+    maxResults: z.number().optional().default(20).describe('Maximum results to return (default: 20)')
 });
 
 // Get Terminal File Path - Get path to terminal session file for grep access
@@ -225,20 +228,25 @@ export const getSkillSchema = z.object({
 
 // Run Skill Script - Execute a bundled script from a skill
 export const runSkillScriptSchema = z.object({
-    skillName: z.string().describe('Name of the skill'),
-    scriptPath: z.string().describe('Path to the script within the skill'),
-    env: z.record(z.string()).optional().describe('Additional environment variables')
+    skillName: z.string().optional().describe('Name of the skill'),
+    name: z.string().optional().describe('Alias for skillName'),
+    scriptPath: z.string().optional().describe('Path to the script within the skill'),
+    script: z.string().optional().describe('Alias for scriptPath'),
+    env: z.record(z.string(), z.string()).optional().describe('Additional environment variables')
 });
 
 // Check MCP Status - Check status of MCP servers and tools
 export const checkMcpStatusSchema = z.object({
-    serverName: z.string().optional().describe('Specific server to check (default: all servers)')
+    serverName: z.string().optional().describe('Specific server to check (default: all servers)'),
+    server: z.string().optional().describe('Alias for serverName')
 });
 
 // Get MCP Tool - Get full definition of an MCP tool
 export const getMcpToolSchema = z.object({
-    serverName: z.string().describe('Name of the MCP server'),
-    toolName: z.string().describe('Name of the tool')
+    serverName: z.string().optional().describe('Name of the MCP server'),
+    toolName: z.string().optional().describe('Name of the tool'),
+    server: z.string().optional().describe('Alias for serverName'),
+    tool: z.string().optional().describe('Alias for toolName')
 });
 
 // ============================================================================
@@ -247,38 +255,45 @@ export const getMcpToolSchema = z.object({
 
 // Grep Context - Search through context files (tool outputs, history)
 export const grepContextSchema = z.object({
-    filePattern: z.string().describe('File pattern to search (e.g., "tool_*.txt", "history.jsonl", or full path)'),
-    pattern: z.string().describe('Regex pattern to search for'),
-    context: z.number().optional().default(2).describe('Lines of context around matches (default: 2)')
+    filePattern: z.string().optional().default('**/*')
+        .describe('File pattern to search (default: "**/*")'),
+    pattern: z.string().optional().describe('Regex pattern to search for'),
+    query: z.string().optional().describe('Alias for pattern'),
+    context: z.number().optional().default(2).describe('Lines of context around matches (default: 2)'),
+    maxResults: z.number().optional().default(50).describe('Maximum results to return (default: 50)')
 });
 
 // JQ Context - Filter JSON context files using jq
 export const jqContextSchema = z.object({
-    filePath: z.string().describe('Path to the JSON context file'),
+    filePath: z.string().optional().describe('Path to the JSON context file'),
+    ref: z.string().optional().describe('Alias for filePath'),
     filter: z.string().describe('JQ filter string (e.g. ".messages[] | select(.role==\\"user\\")")')
 });
 
 // Tail Context - Read last N lines of a context file
 export const tailContextSchema = z.object({
-    filePath: z.string().describe('Path to the context file'),
+    filePath: z.string().optional().describe('Path to the context file'),
+    ref: z.string().optional().describe('Alias for filePath'),
     lines: z.number().optional().default(50).describe('Number of lines to read from end (default: 50)')
 });
 
 // Head Context - Read first N lines of a context file
 export const headContextSchema = z.object({
-    filePath: z.string().describe('Path to the context file'),
+    filePath: z.string().optional().describe('Path to the context file'),
+    ref: z.string().optional().describe('Alias for filePath'),
     lines: z.number().optional().default(50).describe('Number of lines to read from start (default: 50)')
 });
 
 // List Context - List available context files for current session
 export const listContextSchema = z.object({
-    type: z.enum(['all', 'tool_output', 'history', 'terminal']).optional().default('all')
+    type: z.enum(['all', 'tool_output', 'tool', 'history', 'terminal']).optional().default('all')
         .describe('Type of context files to list (default: all)')
 });
 
 // Get File Chunk - Get semantically meaningful chunk of a large HDL file
 export const getFileChunkSchema = z.object({
-    filePath: z.string().describe('Path to the HDL file'),
+    filePath: z.string().optional().describe('Path to the HDL file'),
+    path: z.string().optional().describe('Alias for filePath'),
     lineNumber: z.number().optional().describe('Get chunk containing this line'),
     chunkName: z.string().optional().describe('Get chunk by name (module, function name)'),
     chunkType: z.enum(['module', 'interface', 'package', 'class', 'function', 'task', 'always_block'])
@@ -287,7 +302,8 @@ export const getFileChunkSchema = z.object({
 
 // Select Relevant Chunks - Select file chunks relevant to a query
 export const selectChunksSchema = z.object({
-    filePath: z.string().describe('Path to the HDL file'),
+    filePath: z.string().optional().describe('Path to the HDL file'),
+    path: z.string().optional().describe('Alias for filePath'),
     query: z.string().describe('Query describing what you need (e.g., "clock reset logic", "state machine")'),
     maxTokens: z.number().optional().default(2000).describe('Maximum tokens to return (default: 2000)')
 });
@@ -1426,11 +1442,12 @@ export function createToolExecutors(ctx: ToolContext): Record<string, (args: any
                     };
                 }
 
+                const limitedResults = results.slice(0, args.maxResults);
                 return {
-                    count: results.length,
+                    count: limitedResults.length,
                     query: args.query,
                     sessionOnly: args.sessionOnly,
-                    results: results.map(r => ({
+                    results: limitedResults.map(r => ({
                         turn: r.turnNumber,
                         role: r.role,
                         excerpt: r.content,
@@ -1448,23 +1465,28 @@ export function createToolExecutors(ctx: ToolContext): Record<string, (args: any
             }
 
             try {
+                const pattern = args.pattern ?? args.query;
+                if (!pattern) {
+                    return { error: 'Missing pattern for search_terminal' };
+                }
                 const hits = await ctx.terminalSessionManager.searchOutput(
                     ctx.sessionId,
-                    args.pattern,
+                    pattern,
                     args.context
                 );
 
                 if (hits.length === 0) {
                     return {
                         count: 0,
-                        message: `No matches found for pattern: ${args.pattern}`
+                        message: `No matches found for pattern: ${pattern}`
                     };
                 }
 
+                const limitedHits = hits.slice(0, args.maxResults);
                 return {
-                    count: hits.length,
-                    pattern: args.pattern,
-                    hits: hits.slice(0, 20).map(hit => ({
+                    count: limitedHits.length,
+                    pattern,
+                    hits: limitedHits.map(hit => ({
                         line: hit.line,
                         content: hit.content,
                         context: {
@@ -1563,24 +1585,30 @@ export function createToolExecutors(ctx: ToolContext): Record<string, (args: any
                 return { error: 'Skill registry not configured' };
             }
 
+            const skillName = args.skillName ?? args.name;
+            const scriptPath = args.scriptPath ?? args.script;
+            if (!skillName || !scriptPath) {
+                return { error: 'skillName and scriptPath are required' };
+            }
+
             // Check skill exists
-            const skill = ctx.skillRegistry.getSkill(args.skillName);
+            const skill = ctx.skillRegistry.getSkill(skillName);
             if (!skill) {
-                return { error: `Skill not found: ${args.skillName}` };
+                return { error: `Skill not found: ${skillName}` };
             }
 
             // Check script is in skill's executables list
             const executables = skill.executables ?? [];
-            if (!executables.includes(args.scriptPath)) {
+            if (!executables.includes(scriptPath)) {
                 return {
-                    error: `Script not found in skill: ${args.scriptPath}`,
+                    error: `Script not found in skill: ${scriptPath}`,
                     availableScripts: executables
                 };
             }
 
             const approval = await requestToolApproval('run_skill_script', {
-                skillName: args.skillName,
-                scriptPath: args.scriptPath
+                skillName,
+                scriptPath
             });
             if (!approval.approved) {
                 return { error: approval.reason ?? 'User denied run_skill_script' };
@@ -1588,8 +1616,8 @@ export function createToolExecutors(ctx: ToolContext): Record<string, (args: any
 
             try {
                 const result = await ctx.skillRegistry.executeScript(
-                    args.skillName,
-                    args.scriptPath,
+                    skillName,
+                    scriptPath,
                     {
                         sessionId: ctx.sessionId ?? 'unknown',
                         projectRoot: ctx.projectRoot,
@@ -1619,19 +1647,21 @@ export function createToolExecutors(ctx: ToolContext): Record<string, (args: any
                 };
             }
 
-            if (args.serverName) {
+            const serverName = args.serverName ?? args.server;
+
+            if (serverName) {
                 // Check specific server
                 const servers = ctx.mcpToolSync.getAllServers();
-                const server = servers.find(s => s.name === args.serverName);
+                const server = servers.find(s => s.name === serverName);
 
                 if (!server) {
                     return {
-                        error: `Server not found: ${args.serverName}`,
+                        error: `Server not found: ${serverName}`,
                         availableServers: servers.map(s => s.name)
                     };
                 }
 
-                const tools = ctx.mcpToolSync.getServerTools(args.serverName);
+                const tools = ctx.mcpToolSync.getServerTools(serverName);
 
                 return {
                     server: {
@@ -1669,19 +1699,25 @@ export function createToolExecutors(ctx: ToolContext): Record<string, (args: any
                 return { error: 'MCP tool sync not configured' };
             }
 
+            const serverName = args.serverName ?? args.server;
+            const toolName = args.toolName ?? args.tool;
+            if (!serverName || !toolName) {
+                return { error: 'serverName and toolName are required' };
+            }
+
             // Check availability first
-            const availability = ctx.mcpToolSync.isToolAvailable(args.serverName, args.toolName);
+            const availability = ctx.mcpToolSync.isToolAvailable(serverName, toolName);
             if (!availability.available) {
                 return {
                     error: `Tool not available: ${availability.reason}`,
-                    serverName: args.serverName,
-                    toolName: args.toolName
+                    serverName,
+                    toolName
                 };
             }
 
-            const tool = ctx.mcpToolSync.getTool(args.serverName, args.toolName);
+            const tool = ctx.mcpToolSync.getTool(serverName, toolName);
             if (!tool) {
-                return { error: `Tool not found: ${args.toolName} on server ${args.serverName}` };
+                return { error: `Tool not found: ${toolName} on server ${serverName}` };
             }
 
             return {
@@ -2047,24 +2083,29 @@ export function createToolExecutors(ctx: ToolContext): Record<string, (args: any
             }
 
             try {
+                const pattern = args.pattern ?? args.query;
+                if (!pattern) {
+                    return { error: 'Missing pattern for grep_context' };
+                }
                 const results = await ctx.dynamicContextManager.grep(
                     args.filePattern,
-                    args.pattern,
+                    pattern,
                     { context: args.context }
                 );
 
                 if (results.length === 0) {
                     return {
                         count: 0,
-                        message: `No matches found for pattern: ${args.pattern} in ${args.filePattern}`
+                        message: `No matches found for pattern: ${pattern} in ${args.filePattern}`
                     };
                 }
 
+                const limitedResults = results.slice(0, args.maxResults);
                 return {
-                    count: results.length,
-                    pattern: args.pattern,
+                    count: limitedResults.length,
+                    pattern,
                     filePattern: args.filePattern,
-                    results: results.slice(0, 50).map(r => ({
+                    results: limitedResults.map(r => ({
                         file: r.file,
                         lineNumber: r.lineNumber,
                         line: r.line,
@@ -2084,9 +2125,13 @@ export function createToolExecutors(ctx: ToolContext): Record<string, (args: any
             }
 
             try {
-                const result = await ctx.dynamicContextManager.jq(args.filePath, args.filter);
+                const filePath = args.filePath ?? args.ref;
+                if (!filePath) {
+                    return { error: 'Missing filePath for jq_context' };
+                }
+                const result = await ctx.dynamicContextManager.jq(filePath, args.filter);
                 return {
-                    filePath: args.filePath,
+                    filePath,
                     filter: args.filter,
                     result
                 };
@@ -2102,11 +2147,15 @@ export function createToolExecutors(ctx: ToolContext): Record<string, (args: any
             }
 
             try {
-                const content = await ctx.dynamicContextManager.tail(args.filePath, args.lines);
+                const filePath = args.filePath ?? args.ref;
+                if (!filePath) {
+                    return { error: 'Missing filePath for tail_context' };
+                }
+                const content = await ctx.dynamicContextManager.tail(filePath, args.lines);
                 const lineCount = content.split('\n').length;
 
                 return {
-                    filePath: args.filePath,
+                    filePath,
                     lines: lineCount,
                     requestedLines: args.lines,
                     content
@@ -2123,11 +2172,15 @@ export function createToolExecutors(ctx: ToolContext): Record<string, (args: any
             }
 
             try {
-                const content = await ctx.dynamicContextManager.head(args.filePath, args.lines);
+                const filePath = args.filePath ?? args.ref;
+                if (!filePath) {
+                    return { error: 'Missing filePath for head_context' };
+                }
+                const content = await ctx.dynamicContextManager.head(filePath, args.lines);
                 const lineCount = content.split('\n').length;
 
                 return {
-                    filePath: args.filePath,
+                    filePath,
                     lines: lineCount,
                     requestedLines: args.lines,
                     content
@@ -2146,15 +2199,16 @@ export function createToolExecutors(ctx: ToolContext): Record<string, (args: any
             try {
                 const index = await ctx.dynamicContextManager.getContextIndex(ctx.sessionId);
 
+                const requestedType = args.type === 'tool' ? 'tool_output' : args.type;
                 // Filter by type if specified
                 let entries = index.entries;
-                if (args.type !== 'all') {
-                    entries = entries.filter(e => e.type === args.type);
+                if (requestedType !== 'all') {
+                    entries = entries.filter(e => e.type === requestedType);
                 }
 
                 return {
                     sessionId: ctx.sessionId,
-                    type: args.type,
+                    type: requestedType,
                     count: entries.length,
                     files: entries.map(e => ({
                         path: e.path,
@@ -2177,7 +2231,11 @@ export function createToolExecutors(ctx: ToolContext): Record<string, (args: any
             }
 
             try {
-                const index = await ctx.fileChunker.chunkFile(args.filePath);
+                const filePath = args.filePath ?? args.path;
+                if (!filePath) {
+                    return { error: 'Missing filePath for get_file_chunk' };
+                }
+                const index = await ctx.fileChunker.chunkFile(filePath);
 
                 // By line number
                 if (args.lineNumber !== undefined) {
@@ -2259,7 +2317,11 @@ export function createToolExecutors(ctx: ToolContext): Record<string, (args: any
             }
 
             try {
-                const index = await ctx.fileChunker.chunkFile(args.filePath);
+                const filePath = args.filePath ?? args.path;
+                if (!filePath) {
+                    return { error: 'Missing filePath for select_chunks' };
+                }
+                const index = await ctx.fileChunker.chunkFile(filePath);
                 const selection = ctx.fileChunker.selectRelevantChunks(
                     index.chunks,
                     args.query,
@@ -2267,7 +2329,7 @@ export function createToolExecutors(ctx: ToolContext): Record<string, (args: any
                 );
 
                 return {
-                    filePath: args.filePath,
+                    filePath,
                     query: args.query,
                     maxTokens: args.maxTokens,
                     selectedChunks: selection.chunks.length,
@@ -2684,4 +2746,3 @@ export function getToolSpecs(): Record<string, ToolSpec> {
         }
     };
 }
-

@@ -1,0 +1,19 @@
+{
+  "name": "gateflow",
+  "description": "AI-powered SystemVerilog development toolkit with verification engineer and RTL developer personas, parallel codebase mapping, ASCII waveform visualization, and automated lint workflows",
+  "version": "1.0.0",
+  "author": {
+    "name": "GateFlow Team"
+  },
+  "homepage": "https://github.com/codejunkie99/gateflow-cli",
+  "repository": "https://github.com/codejunkie99/gateflow-cli",
+  "license": "MIT",
+  "keywords": [
+    "systemverilog", "verilog", "hdl", "verification", "rtl",
+    "fpga", "asic", "testbench", "simulation", "waveform", "hardware"
+  ],
+  "commands": "./commands",
+  "agents": "./agents",
+  "skills": "./skills",
+  "hooks": "./hooks/hooks.json"
+}

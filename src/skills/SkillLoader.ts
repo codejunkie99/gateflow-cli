@@ -304,10 +304,16 @@ export class SkillLoader {
      * Resolve an executable path relative to a skill file
      */
     resolveExecutablePath(skillRef: SkillFileRef, executablePath: string): string {
-        if (path.isAbsolute(executablePath)) {
-            return executablePath;
+        const baseDir = path.resolve(skillRef.baseDir);
+        const resolved = path.isAbsolute(executablePath)
+            ? path.resolve(executablePath)
+            : path.resolve(baseDir, executablePath);
+
+        if (resolved !== baseDir && !resolved.startsWith(baseDir + path.sep)) {
+            throw new Error(`Executable path escapes skill directory: "${executablePath}"`);
         }
-        return path.join(skillRef.baseDir, executablePath);
+
+        return resolved;
     }
 
     /**
@@ -320,8 +326,8 @@ export class SkillLoader {
         const missing: string[] = [];
 
         for (const exec of skillRef.skill.executables ?? []) {
-            const fullPath = this.resolveExecutablePath(skillRef, exec);
             try {
+                const fullPath = this.resolveExecutablePath(skillRef, exec);
                 await fs.access(fullPath, fs.constants.X_OK);
             } catch {
                 missing.push(exec);

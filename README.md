@@ -133,6 +133,8 @@ Executes a one-off query and returns the result.
 | `gateflow gen <type> <name>` | Generate code artifacts | `gateflow gen testbench uart_rx` |
 | `gateflow wave <vcd>` | View waveforms (terminal) | `gateflow wave sim/out.vcd` |
 | `gateflow wave-web <vcd>` | View waveforms (browser) | `gateflow wave-web sim/out.vcd` |
+| `gateflow mcp` | Start MCP waveform server | `gateflow mcp` |
+| `gateflow mcp-tools` | Start MCP tools server | `gateflow mcp-tools` |
 | `gateflow doctor` | Validate environment | `gateflow doctor` |
 
 ### Global Options
@@ -143,6 +145,17 @@ Executes a one-off query and returns the result.
 | `-n, --dry-run` | Preview changes without applying |
 | `--json` | Output in JSON format |
 | `-v, --verbose` | Enable verbose logging |
+
+---
+
+### MCP Tool Servers (Claude Code / Codex / OpenCode)
+
+GateFlow can run MCP servers over stdio so coding agents can call real tools instead of guessing:
+
+- **Tools server:** `gateflow mcp-tools` (or `gateflow-mcp`)
+- **Waveform server:** `gateflow mcp`
+
+Set `GATEFLOW_PROJECT_ROOT` to point at your project root (defaults to current directory).
 
 ---
 
