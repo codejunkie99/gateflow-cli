@@ -69,9 +69,9 @@ export class TerminalRenderer {
     // Enhanced UI components
     private spinner: Ora | null = null;
     private spinnerActive: boolean = false;
-    private toolTree: ToolTree = new ToolTree();
-    private diffDisplay: DiffDisplay = new DiffDisplay();
-    private blockRenderer: BlockRenderer = new BlockRenderer();
+    private toolTree: ToolTree;
+    private diffDisplay: DiffDisplay;
+    private blockRenderer: BlockRenderer;
 
     // Token tracking
     private tokenUsage: TokenUsage = { input: 0, output: 0, cached: 0 };
@@ -100,6 +100,10 @@ export class TerminalRenderer {
             useToolTree: options?.useToolTree ?? true,
             showTokens: options?.showTokens ?? true
         };
+
+        this.toolTree = new ToolTree({ unicode: this.options.unicode });
+        this.diffDisplay = new DiffDisplay({ unicode: this.options.unicode });
+        this.blockRenderer = new BlockRenderer({ unicode: this.options.unicode });
 
         this.diffPreview = new DiffPreview({
             colorize: this.options.colors,
@@ -264,11 +268,19 @@ export class TerminalRenderer {
      */
     private buildStatusSuffix(): string {
         const parts: string[] = [];
+        const unicode = this.options.unicode;
+        const sep = unicode ? '\u{2502}' : '|';
 
         // Token counts
         if (this.tokenUsage.input > 0 || this.tokenUsage.output > 0) {
-            const inputStr = chalk.blue(`\u{2191}${this.formatTokens(this.tokenUsage.input)}`); // ↑
-            const outputStr = chalk.green(`\u{2193}${this.formatTokens(this.tokenUsage.output)}`); // ↓
+            const inputLabel = unicode
+                ? `\u{2191}${this.formatTokens(this.tokenUsage.input)}`
+                : `in:${this.formatTokens(this.tokenUsage.input)}`;
+            const outputLabel = unicode
+                ? `\u{2193}${this.formatTokens(this.tokenUsage.output)}`
+                : `out:${this.formatTokens(this.tokenUsage.output)}`;
+            const inputStr = chalk.blue(inputLabel);
+            const outputStr = chalk.green(outputLabel);
             parts.push(`${inputStr} ${outputStr}`);
         }
 
@@ -285,7 +297,7 @@ export class TerminalRenderer {
 
         if (parts.length === 0) return '';
 
-        return chalk.gray(' \u{2502} ') + parts.join(chalk.gray(' \u{2502} ')); // │
+        return chalk.gray(` ${sep} `) + parts.join(chalk.gray(` ${sep} `));
     }
 
     /**
@@ -452,7 +464,8 @@ export class TerminalRenderer {
         if (this.options.useSpinner) {
             this.startSpinner(label, symbol);
         } else {
-            this.writeStatus(`${chalk.cyan('\u{2022}')} ${label}`); // •
+            const bullet = this.options.unicode ? '\u{2022}' : '*';
+            this.writeStatus(`${chalk.cyan(bullet)} ${label}`);
         }
     }
 
@@ -487,8 +500,9 @@ export class TerminalRenderer {
                 console.log(toolLine);
             }
         } else {
+            const bullet = this.options.unicode ? '\u{2022}' : '*';
             this.log(
-                chalk.cyan('\u{2022}') + ' ' + // •
+                chalk.cyan(bullet) + ' ' +
                 chalk.blue.bold(tool) +
                 chalk.gray(` ${argsSummary}`)
             );
@@ -511,10 +525,13 @@ export class TerminalRenderer {
                 console.log(resultLine);
             }
         } else {
-            const icon = ok ? '\u{2713}' : '\u{2717}'; // ✓ or ✗
+            const icon = ok
+                ? (this.options.unicode ? '\u{2713}' : 'OK')
+                : (this.options.unicode ? '\u{2717}' : 'X');
             const color = ok ? chalk.gray : chalk.red;
             const durationStr = duration ? chalk.gray(` (${duration}ms)`) : '';
-            this.log(chalk.gray('  \u{2502} ') + color(`${icon} ${summary}`) + durationStr); // │
+            const pipe = this.options.unicode ? '\u{2502}' : '|';
+            this.log(chalk.gray(`  ${pipe} `) + color(`${icon} ${summary}`) + durationStr);
         }
     }
 
@@ -532,7 +549,7 @@ export class TerminalRenderer {
 
         console.log('');
         // Use the enhanced diff display for boxed rendering
-        console.log(this.diffDisplay.render(path, unifiedDiff));
+        console.log(this.diffDisplay.render(path, unifiedDiff, stats));
     }
 
     // ========================================================================

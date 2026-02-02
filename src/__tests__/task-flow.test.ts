@@ -60,12 +60,15 @@ describe('Orchestrator task flow', () => {
             confidence: 0.9
         };
 
-        (orchestrator as any).taskResults = new Map<string, TaskResult>([
-            ['A', buildResult('A', 'understanding')],
-            ['C', buildResult('C', 'debug')]
-        ]);
+        const ctx = {
+            taskResults: new Map<string, TaskResult>([
+                ['A', buildResult('A', 'understanding')],
+                ['C', buildResult('C', 'debug')]
+            ])
+        } as any;
 
         const context = (orchestrator as any).buildTaskContext(
+            ctx,
             taskB,
             projectContext,
             plan

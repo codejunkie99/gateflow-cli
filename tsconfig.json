@@ -3,6 +3,7 @@
         "target": "ES2022",
         "module": "NodeNext",
         "moduleResolution": "NodeNext",
+        "jsx": "react-jsx",
         "outDir": "./dist",
         "rootDir": "./src",
         "strict": true,
@@ -26,6 +27,8 @@
     "exclude": [
         "node_modules",
         "dist",
-        "src/context/_deprecated"
+        "src/context/_deprecated",
+        "src/__tests__",
+        "**/*.test.ts"
     ]
 }

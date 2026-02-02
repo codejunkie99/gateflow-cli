@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "gateflow": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/servers/gateflow-mcp/dist/index.js"],
+      "env": {
+        "GATEFLOW_PROJECT_ROOT": "${PWD}",
+        "VERILATOR_PATH": "${VERILATOR_PATH:-verilator}"
+      }
+    },
+    "gateflow-waveform": {
+      "command": "node",
+      "args": ["/Users/arnavdas/.gateflow/cli/dist/waveform/mcp-entry.js"],
+      "env": {
+        "GATEFLOW_PROJECT_ROOT": "${PWD}"
+      }
+    }
+  }
+}

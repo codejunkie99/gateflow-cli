@@ -20,6 +20,21 @@ export interface ToolCallNode {
     };
 }
 
+export interface ToolTreeOptions {
+    unicode?: boolean;
+}
+
+interface ToolTreeGlyphs {
+    branch: string;
+    last: string;
+    vert: string;
+    child: string;
+    resultPrefix: string;
+    running: string;
+    check: string;
+    cross: string;
+}
+
 // ============================================================================
 // ToolTree Class
 // ============================================================================
@@ -27,6 +42,7 @@ export interface ToolCallNode {
 export class ToolTree {
     private nodes: ToolCallNode[] = [];
     private currentNode: ToolCallNode | null = null;
+    private glyphs: ToolTreeGlyphs;
 
     // Tool icons mapping (ASCII symbols for compatibility)
     private readonly toolIcons: Record<string, string> = {
@@ -47,6 +63,31 @@ export class ToolTree {
         'store_knowledge': '[K]',
         'default': '[>]'
     };
+
+    constructor(options: ToolTreeOptions = {}) {
+        const unicode = options.unicode ?? true;
+        this.glyphs = unicode
+            ? {
+                branch: '\u{251C}\u{2500}',
+                last: '\u{2514}\u{2500}',
+                vert: '\u{2502}  ',
+                child: '   ',
+                resultPrefix: '\u{2514}\u{2500}',
+                running: '\u{2819}',
+                check: '\u{2713}',
+                cross: '\u{2717}'
+            }
+            : {
+                branch: '|-',
+                last: '`-',
+                vert: '|  ',
+                child: '   ',
+                resultPrefix: '`-',
+                running: '.',
+                check: 'OK',
+                cross: 'X'
+            };
+    }
 
     /**
      * Add a new tool call to the tree
@@ -91,8 +132,8 @@ export class ToolTree {
      */
     private renderNode(node: ToolCallNode, isLast: boolean): string[] {
         const lines: string[] = [];
-        const prefix = isLast ? '\u{2514}\u{2500}' : '\u{251C}\u{2500}'; // '└─' or '├─'
-        const childPrefix = isLast ? '   ' : '\u{2502}  '; // '   ' or '│  '
+        const prefix = isLast ? this.glyphs.last : this.glyphs.branch;
+        const childPrefix = isLast ? this.glyphs.child : this.glyphs.vert;
 
         const icon = this.getIcon(node.tool);
 
@@ -112,15 +153,15 @@ export class ToolTree {
 
             if (node.result.ok) {
                 lines.push(
-                    chalk.cyan(childPrefix) + '   \u{2514}\u{2500} ' + // '   └─ '
-                    chalk.green('\u{2713}') + ' ' + // '✓'
+                    chalk.cyan(childPrefix) + '   ' + this.glyphs.resultPrefix + ' ' +
+                    chalk.green(this.glyphs.check) + ' ' +
                     chalk.gray(node.result.summary) +
                     duration
                 );
             } else {
                 lines.push(
-                    chalk.cyan(childPrefix) + '   \u{2514}\u{2500} ' +
-                    chalk.red('\u{2717}') + ' ' + // '✗'
+                    chalk.cyan(childPrefix) + '   ' + this.glyphs.resultPrefix + ' ' +
+                    chalk.red(this.glyphs.cross) + ' ' +
                     chalk.red(node.result.summary) +
                     duration
                 );
@@ -128,8 +169,8 @@ export class ToolTree {
         } else {
             // In progress
             lines.push(
-                chalk.cyan(childPrefix) + '   \u{2514}\u{2500} ' +
-                chalk.yellow('\u{2819}') + ' ' + // spinner dot
+                chalk.cyan(childPrefix) + '   ' + this.glyphs.resultPrefix + ' ' +
+                chalk.yellow(this.glyphs.running) + ' ' +
                 chalk.gray('Running...')
             );
         }
@@ -175,7 +216,7 @@ export class ToolTree {
     renderToolCallLine(isLast: boolean = true): string | null {
         if (!this.currentNode) return null;
 
-        const prefix = isLast ? '\u{2514}\u{2500}' : '\u{251C}\u{2500}';
+        const prefix = isLast ? this.glyphs.last : this.glyphs.branch;
         const icon = this.getIcon(this.currentNode.tool);
 
         return (
@@ -195,22 +236,22 @@ export class ToolTree {
         if (completedNodes.length === 0) return null;
 
         const node = completedNodes[completedNodes.length - 1];
-        const childPrefix = isLast ? '   ' : '\u{2502}  ';
+        const childPrefix = isLast ? this.glyphs.child : this.glyphs.vert;
         const duration = node.endTime
             ? chalk.gray(` (${this.formatDuration(node.endTime - node.startTime)})`)
             : '';
 
         if (node.result!.ok) {
             return (
-                chalk.cyan(childPrefix) + '   \u{2514}\u{2500} ' +
-                chalk.green('\u{2713}') + ' ' +
+                chalk.cyan(childPrefix) + '   ' + this.glyphs.resultPrefix + ' ' +
+                chalk.green(this.glyphs.check) + ' ' +
                 chalk.gray(node.result!.summary) +
                 duration
             );
         } else {
             return (
-                chalk.cyan(childPrefix) + '   \u{2514}\u{2500} ' +
-                chalk.red('\u{2717}') + ' ' +
+                chalk.cyan(childPrefix) + '   ' + this.glyphs.resultPrefix + ' ' +
+                chalk.red(this.glyphs.cross) + ' ' +
                 chalk.red(node.result!.summary) +
                 duration
             );

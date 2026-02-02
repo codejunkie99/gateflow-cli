@@ -440,7 +440,17 @@ export class FileTools {
             includeHidden?: boolean;
         }
     ): Promise<FileListResult> {
-        const absolutePath = path.resolve(dirPath);
+        const resolved = this.safeResolvePath(dirPath);
+        if (resolved.error) {
+            return {
+                success: false,
+                directory: dirPath,
+                files: [],
+                count: 0,
+                error: resolved.error
+            };
+        }
+        const absolutePath = resolved.path;
 
         this.bus.emit({
             type: 'tool_call',
@@ -452,6 +462,7 @@ export class FileTools {
         const startTime = Date.now();
 
         try {
+            await this.checkSymlink(absolutePath);
             const entries = await fs.readdir(absolutePath, { withFileTypes: true });
             const files: FileEntry[] = [];
 
@@ -588,7 +599,23 @@ export class FileTools {
             excludePatterns?: string[];
         }
     ): Promise<ProjectScanResult> {
-        const absolutePath = path.resolve(rootPath);
+        const resolved = this.safeResolvePath(rootPath);
+        if (resolved.error) {
+            return {
+                success: false,
+                rootPath,
+                summary: {
+                    totalFiles: 0,
+                    modules: 0,
+                    testbenches: 0,
+                    packages: 0,
+                    includes: 0,
+                },
+                files: [],
+                error: resolved.error
+            };
+        }
+        const absolutePath = resolved.path;
         const maxDepth = options?.maxDepth ?? 10;
         const excludePatterns = options?.excludePatterns ?? [
             '**/node_modules/**',
@@ -613,6 +640,7 @@ export class FileTools {
         const startTime = Date.now();
 
         try {
+            await this.checkSymlink(absolutePath);
             // Find all SV files
             const pattern = '**/*.{sv,svh,v,vh}';
             const files = await glob(pattern, {
@@ -727,7 +755,18 @@ export class FileTools {
             caseSensitive?: boolean;
         }
     ): Promise<SearchResult> {
-        const rootPath = path.resolve(options?.rootPath ?? this.policy.getProjectRoot());
+        const requestedRoot = options?.rootPath ?? this.policy.getProjectRoot();
+        const resolved = this.safeResolvePath(requestedRoot);
+        if (resolved.error) {
+            return {
+                success: false,
+                pattern,
+                matches: [],
+                totalMatches: 0,
+                error: resolved.error
+            };
+        }
+        const rootPath = resolved.path;
         const filePattern = options?.filePattern ?? '**/*.{sv,svh,v,vh}';
         const maxResults = options?.maxResults ?? 100;
         const contextLines = options?.contextLines ?? 2;
@@ -743,6 +782,7 @@ export class FileTools {
         const startTime = Date.now();
 
         try {
+            await this.checkSymlink(rootPath);
             // Validate pattern length to prevent ReDoS attacks
             const MAX_PATTERN_LENGTH = 500;
             if (pattern.length > MAX_PATTERN_LENGTH) {
@@ -891,4 +931,3 @@ export class FileTools {
         }
     }
 }
-

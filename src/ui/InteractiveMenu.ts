@@ -14,6 +14,7 @@
 
 import readline from 'readline';
 import chalk from 'chalk';
+import { getPromptController } from './prompt-controller.js';
 
 // ============================================================================
 // Types
@@ -518,11 +519,16 @@ export async function showMenu<T>(
     items: MenuItem<T>[],
     options?: InteractiveMenuOptions
 ): Promise<MenuResult<T>> {
-    const menu = new InteractiveMenu<T>(
-        [{ title: '', items }],
-        options
-    );
-    return menu.show();
+    const controller = getPromptController();
+    options?.onPromptStart?.();
+    try {
+        return await controller.requestMenu<T>({
+            sections: [{ title: '', items }],
+            options
+        });
+    } finally {
+        options?.onPromptEnd?.();
+    }
 }
 
 /**
@@ -532,8 +538,13 @@ export async function showSectionedMenu<T>(
     sections: MenuSection<T>[],
     options?: InteractiveMenuOptions
 ): Promise<MenuResult<T>> {
-    const menu = new InteractiveMenu<T>(sections, options);
-    return menu.show();
+    const controller = getPromptController();
+    options?.onPromptStart?.();
+    try {
+        return await controller.requestMenu<T>({ sections, options });
+    } finally {
+        options?.onPromptEnd?.();
+    }
 }
 
 // ============================================================================
@@ -566,92 +577,11 @@ export interface TextInputResult {
  * Show a text input prompt
  */
 export async function showTextInput(options: TextInputOptions): Promise<TextInputResult> {
-    return new Promise((resolve) => {
-        options.onPromptStart?.();
-
-        const rl = readline.createInterface({
-            input: process.stdin,
-            output: process.stdout,
-            terminal: true
-        });
-
-        const prompt = options.mask
-            ? `${options.prompt} ${chalk.dim('(input hidden)')} `
-            : `${options.prompt} `;
-
-        console.log('');
-
-        // For masked input, we need raw mode
-        if (options.mask && process.stdin.isTTY) {
-            let input = '';
-
-            readline.emitKeypressEvents(process.stdin);
-            process.stdin.setRawMode(true);
-
-            process.stdout.write(prompt);
-
-            const handleKeypress = (_str: string | undefined, key: readline.Key) => {
-                if (!key) return;
-
-                if (key.name === 'return') {
-                    cleanup();
-                    console.log('');
-                    if (options.validate) {
-                        const validationResult = options.validate(input);
-                        if (validationResult !== true) {
-                            console.log(chalk.red(`  ${validationResult}`));
-                            resolve({ submitted: false });
-                            return;
-                        }
-                    }
-                    resolve({ submitted: true, value: input });
-                } else if (key.name === 'escape' || (key.name === 'c' && key.ctrl)) {
-                    cleanup();
-                    console.log('');
-                    resolve({ submitted: false });
-                } else if (key.name === 'backspace') {
-                    if (input.length > 0) {
-                        input = input.slice(0, -1);
-                        process.stdout.write('\b \b');
-                    }
-                } else if (key.sequence && !key.ctrl && !key.meta) {
-                    input += key.sequence;
-                    process.stdout.write('*');
-                }
-            };
-
-            const cleanup = () => {
-                process.stdin.removeListener('keypress', handleKeypress);
-                if (process.stdin.isTTY) {
-                    process.stdin.setRawMode(false);
-                }
-                rl.close();
-                options.onPromptEnd?.();
-            };
-
-            process.stdin.on('keypress', handleKeypress);
-        } else {
-            // Normal input
-            rl.question(prompt, (answer) => {
-                rl.close();
-                options.onPromptEnd?.();
-
-                if (!answer || answer.trim() === '') {
-                    resolve({ submitted: false });
-                    return;
-                }
-
-                if (options.validate) {
-                    const validationResult = options.validate(answer);
-                    if (validationResult !== true) {
-                        console.log(chalk.red(`  ${validationResult}`));
-                        resolve({ submitted: false });
-                        return;
-                    }
-                }
-
-                resolve({ submitted: true, value: answer.trim() });
-            });
-        }
-    });
+    options.onPromptStart?.();
+    try {
+        const controller = getPromptController();
+        return await controller.requestText(options);
+    } finally {
+        options.onPromptEnd?.();
+    }
 }

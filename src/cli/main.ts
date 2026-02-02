@@ -6,6 +6,10 @@
  */
 
 import '../env/bootstrap-env.js';
+import path from 'node:path';
+import { existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { spawn } from 'node:child_process';
 import { Command } from 'commander';
 import { ExitCodes } from '../events/index.js';
 import {
@@ -101,7 +105,7 @@ async function gracefulShutdown(options: ShutdownOptions | number = {}): Promise
 }
 
 // Register global signal handlers (skip for MCP mode - it has its own shutdown path)
-const isMcpMode = process.argv.includes('mcp');
+const isMcpMode = process.argv.includes('mcp') || process.argv.includes('mcp-tools');
 
 if (!isMcpMode) {
     process.on('SIGINT', () => {
@@ -174,6 +178,27 @@ ${chalk.cyan('             Founding Contributor - Manas (Menace_thakur) ')}
 ${chalk.cyan('                AI-powered SystemVerilog Assistant')}
 `;
 
+// ========================================================================
+// MCP Tool Server Path Resolver
+// ========================================================================
+
+function resolveToolMcpServerPath(): string | null {
+    const currentFile = fileURLToPath(import.meta.url);
+    const currentDir = path.dirname(currentFile);
+    const repoRoot = path.resolve(currentDir, '..', '..');
+    const candidate = path.join(
+        repoRoot,
+        'packages',
+        'claude-plugin',
+        'servers',
+        'gateflow-mcp',
+        'dist',
+        'index.js'
+    );
+
+    return existsSync(candidate) ? candidate : null;
+}
+
 // ============================================================================
 // CLI Program
 // ============================================================================
@@ -196,7 +221,10 @@ program
         // MCP command needs clean stdin/stdout for JSON-RPC protocol
         // Check both the command name and raw args (for when preAction fires with program)
         const commandName = thisCommand.name();
-        const isMcpCommand = commandName === 'mcp' || process.argv[2] === 'mcp';
+        const isMcpCommand = commandName === 'mcp'
+            || commandName === 'mcp-tools'
+            || process.argv[2] === 'mcp'
+            || process.argv[2] === 'mcp-tools';
 
         // Show banner unless JSON mode or MCP mode
         if (!opts.json && !isMcpCommand) {
@@ -413,6 +441,31 @@ program
         await startMCPServer();
     });
 
+program
+    .command('mcp-tools')
+    .description('Start MCP tools server for Claude/Codex/OpenCode integrations')
+    .action(async () => {
+        const opts = program.opts() as GlobalOptions;
+        const serverPath = resolveToolMcpServerPath();
+
+        if (!serverPath) {
+            console.error('MCP tools server not found. Reinstall or rebuild the package.');
+            process.exit(ExitCodes.CONFIG_ERROR);
+        }
+
+        const env = {
+            ...process.env,
+            GATEFLOW_PROJECT_ROOT: process.env.GATEFLOW_PROJECT_ROOT ?? opts.cwd
+        };
+
+        const child = spawn(process.execPath, [serverPath], {
+            stdio: 'inherit',
+            env
+        });
+
+        child.on('exit', (code) => process.exit(code ?? 0));
+    });
+
 // ============================================================================
 // Version Command
 // ============================================================================
@@ -429,4 +482,3 @@ program
 // ============================================================================
 
 program.parse();
-

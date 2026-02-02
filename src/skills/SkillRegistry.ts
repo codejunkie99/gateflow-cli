@@ -220,7 +220,18 @@ export class SkillRegistry {
         }
 
         // Resolve script path
-        const fullScriptPath = this.loader.resolveExecutablePath(ref, scriptPath);
+        let fullScriptPath: string;
+        try {
+            fullScriptPath = this.loader.resolveExecutablePath(ref, scriptPath);
+        } catch (error) {
+            return {
+                success: false,
+                exitCode: 1,
+                stdout: '',
+                stderr: error instanceof Error ? error.message : 'Invalid script path',
+                duration: 0
+            };
+        }
 
         // Check script exists
         try {
@@ -245,7 +256,24 @@ export class SkillRegistry {
 
         return new Promise((resolve) => {
             const timeout = context.timeout ?? this.config.defaultScriptTimeout;
-            const cwd = context.cwd ?? context.projectRoot;
+            let cwd: string;
+            try {
+                const resolvedRoot = path.resolve(context.projectRoot);
+                const resolvedCwd = path.resolve(context.cwd ?? context.projectRoot);
+                if (resolvedCwd !== resolvedRoot && !resolvedCwd.startsWith(resolvedRoot + path.sep)) {
+                    throw new Error(`Working directory escapes project root: "${context.cwd}"`);
+                }
+                cwd = resolvedCwd;
+            } catch (error) {
+                resolve({
+                    success: false,
+                    exitCode: 1,
+                    stdout: '',
+                    stderr: error instanceof Error ? error.message : 'Invalid working directory',
+                    duration: Date.now() - startTime
+                });
+                return;
+            }
 
             // Prepare environment
             const env = {
@@ -263,7 +291,7 @@ export class SkillRegistry {
             const proc = spawn(fullScriptPath, [], {
                 cwd,
                 env,
-                shell: true
+                shell: false
             });
 
             const timer = setTimeout(() => {

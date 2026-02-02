@@ -16,7 +16,7 @@ import { GateFlowAgent, type ToolContext, type PromptMode, UIAgentCoordinator, t
 import { Verilator } from '../verification/index.js';
 import { FixLoop } from '../verification/fix-loop.js';
 import { WatchManager } from '../watch/index.js';
-import { TerminalRenderer, createRenderer, InputManager, initInputManager } from '../ui/index.js';
+import { type Renderer, createRenderer, InputManager, initInputManager } from '../ui/index.js';
 import { getConfigManager } from '../config/index.js';
 import {
     getToolRegistry,
@@ -91,7 +91,7 @@ export interface CommandContext {
     diffEngine: DiffEngine;
     indexer: SVIndexerAdapter;
     verilator: Verilator;
-    renderer: TerminalRenderer;
+    renderer: Renderer;
     inputManager: InputManager;
     options: GlobalOptions;
     projectRoot: string;
@@ -165,7 +165,9 @@ export async function setupContext(options: GlobalOptions): Promise<CommandConte
     // Create event bus
     const bus = new EventBus();
 
-    // Create renderer (unless JSON mode)
+    const useInk = !options.json && process.stdout.isTTY && process.stdin.isTTY;
+
+    // Create renderer (Ink by default)
     const renderer = createRenderer(bus, {
         jsonMode: options.json,
         verbose: options.verbose
@@ -239,7 +241,8 @@ export async function setupContext(options: GlobalOptions): Promise<CommandConte
 
     // Initialize centralized input manager with chatbox UI
     const inputManager = initInputManager(bus, {
-        useChatbox: true,
+        useInk,
+        useChatbox: !useInk,
         chatboxOptions: {
             width: '100%',
             height: 3,
@@ -1210,7 +1213,7 @@ interface ModelMenuItem {
 async function showInteractiveModelSelector(
     agent: GateFlowAgent,
     uiCoordinator: UIAgentCoordinator,
-    renderer: TerminalRenderer
+    renderer: Renderer
 ): Promise<ModelSelectorResult> {
     const currentConfig = agent.getModelConfig();
     const availableProviders = detectAvailableProviders();
@@ -1675,4 +1678,3 @@ async function showInteractiveModelSelector(
         return { switched: false, cancelled: false };
     }
 }
-
