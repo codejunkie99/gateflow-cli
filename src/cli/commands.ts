@@ -150,6 +150,17 @@ export async function setupContext(options: GlobalOptions): Promise<CommandConte
         throw error;
     }
 
+    // Create event bus
+    const bus = new EventBus();
+
+    const interactiveUI = !options.json && process.stdout.isTTY && process.stdin.isTTY;
+
+    // Create renderer (Ink by default)
+    const renderer = createRenderer(bus, {
+        jsonMode: options.json,
+        verbose: options.verbose
+    });
+
     // Warn if no HDL files found (non-blocking)
     if (!options.json) {
         const hdlFiles = await glob('**/*.{sv,svh,v,vh}', {
@@ -158,20 +169,12 @@ export async function setupContext(options: GlobalOptions): Promise<CommandConte
             nodir: true
         });
         if (hdlFiles.length === 0) {
-            console.log(chalk.yellow('  Warning: No SystemVerilog files found in project root'));
+            bus.emit({
+                type: 'log',
+                message: chalk.yellow('  Warning: No SystemVerilog files found in project root')
+            });
         }
     }
-
-    // Create event bus
-    const bus = new EventBus();
-
-    const useInk = !options.json && process.stdout.isTTY && process.stdin.isTTY;
-
-    // Create renderer (Ink by default)
-    const renderer = createRenderer(bus, {
-        jsonMode: options.json,
-        verbose: options.verbose
-    });
 
     // Initialize policy engine
     const policy = initPolicyEngine({ projectRoot });
@@ -239,16 +242,9 @@ export async function setupContext(options: GlobalOptions): Promise<CommandConte
     // FileChunker always uses indexer for accurate AST-based boundaries
     const fileChunker = createFileChunker({}, indexer);
 
-    // Initialize centralized input manager with chatbox UI
+    // Initialize centralized input manager
     const inputManager = initInputManager(bus, {
-        useInk,
-        useChatbox: !useInk,
-        chatboxOptions: {
-            width: '100%',
-            height: 3,
-            label: '',  // No label for cleaner look
-            prompt: '> '
-        }
+        interactive: interactiveUI
     });
 
     // Connect input manager to renderer for pause/resume coordination
@@ -325,18 +321,41 @@ function buildToolContext(ctx: CommandContext): ToolContext {
     };
 }
 
-function resolveModelConfig(modelSpec?: string): { modelConfig?: ModelConfig; error?: string } {
+function emitLogLines(bus: EventBus, message: string): void {
+    // Keep the store log line-based. Ink's <Text> doesn't always behave well with embedded newlines.
+    const lines = message.split('\n');
+    for (const line of lines) {
+        bus.emit({ type: 'log', message: line });
+    }
+}
+
+function uiLog(ctx: CommandContext, message: string): void {
+    if (ctx.options.json) return;
+    emitLogLines(ctx.bus, message);
+}
+
+function uiWarn(ctx: CommandContext, message: string): void {
+    if (ctx.options.json) return;
+    emitLogLines(ctx.bus, chalk.yellow(message));
+}
+
+function uiError(ctx: CommandContext, message: string): void {
+    if (ctx.options.json) return;
+    ctx.bus.emit({ type: 'error', message });
+}
+
+function resolveModelConfig(ctx: CommandContext, modelSpec?: string): { modelConfig?: ModelConfig; error?: string } {
     if (!modelSpec) {
         return {};
     }
 
     try {
         const modelConfig = parseModelString(modelSpec);
-        console.log(chalk.dim(`Using model: ${modelConfig.provider}/${modelConfig.model}`));
+        uiLog(ctx, chalk.dim(`Using model: ${modelConfig.provider}/${modelConfig.model}`));
         return { modelConfig };
     } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        console.log(chalk.red(`Invalid model: ${message}`));
+        uiError(ctx, `Invalid model: ${message}`);
         return { error: message };
     }
 }
@@ -352,10 +371,14 @@ export async function chatCommand(
 ): Promise<ExitCode> {
     const toolContext = buildToolContext(ctx);
 
-    const { modelConfig, error } = resolveModelConfig(modelSpec);
+    const { modelConfig, error } = resolveModelConfig(ctx, modelSpec);
     if (error) {
         return ExitCodes.CONFIG_ERROR;
     }
+
+    // Full-screen TUI for chat (Ink renderer only).
+    // This mimics "take over the terminal" behavior like other Ink CLIs.
+    (ctx.renderer as any).enableAltScreen?.();
 
     // Create agent with optional model config
     const agent = new GateFlowAgent(ctx.bus, toolContext, { modelConfig });
@@ -368,15 +391,9 @@ export async function chatCommand(
     });
 
     // Build project index first (blocking)
-    ctx.bus.emit({
-        type: 'status',
-        phase: 'indexing',
-        label: 'Building project index...'
-    });
-
     let indexingFailed = false;
     try {
-        await ctx.indexer.buildIndex();
+        await ctx.indexer.buildIndex({ emitStatus: false });
     } catch (error) {
         indexingFailed = true;
         ctx.bus.emit({
@@ -392,19 +409,11 @@ export async function chatCommand(
         agent.addContext(`Project indexed: ${stats.modules} modules, ${stats.packages} packages in ${stats.files} files.`);
     }
 
-    // Stop status
-    ctx.bus.emit({ type: 'token_done' });
-
-    console.log('\n' + chalk.blue.bold('GateFlow') + ' - AI-powered SystemVerilog Assistant');
-    if (indexingFailed) {
-        console.log(chalk.yellow('   Warning: Indexing failed. Some features may be limited.'));
-    } else {
-        console.log(`   Indexed ${stats.modules} modules in ${stats.files} files.`);
-    }
-
     // Handle initial query if provided, then continue to REPL
     if (initialQuery) {
-        console.log(chalk.dim(`\n> ${initialQuery}\n`));
+        uiLog(ctx, '');
+        uiLog(ctx, chalk.dim(`> ${initialQuery}`));
+        uiLog(ctx, '');
         try {
             // Use runWithContinuation with dynamic segments (progress-based)
             await agent.runWithContinuation(initialQuery, { dynamicSegments: true });
@@ -414,9 +423,8 @@ export async function chatCommand(
                 message: String(error)
             });
         }
-        console.log('');
+        uiLog(ctx, '');
     }
-    console.log('   Type your questions or commands. Type "exit" to quit.\n');
 
     // Use centralized InputManager for REPL
     const { inputManager } = ctx;
@@ -425,13 +433,15 @@ export async function chatCommand(
     while (running) {
         try {
             const input = await inputManager.getLine(chalk.blue('> '));
-            console.log('');  // Space after input
             
             const trimmed = input.trim();
 
             if (!trimmed) {
                 continue;
             }
+
+            uiLog(ctx, chalk.dim(`> ${trimmed}`));
+            uiLog(ctx, '');
 
             if (trimmed.toLowerCase() === 'exit' || trimmed.toLowerCase() === 'quit') {
                 running = false;
@@ -440,16 +450,19 @@ export async function chatCommand(
 
             if (trimmed.toLowerCase() === '/clear') {
                 agent.resetSession();
-                console.log('Session cleared.\n');
+                uiLog(ctx, 'Session cleared.');
+                uiLog(ctx, '');
                 continue;
             }
 
             if (trimmed.toLowerCase() === '/stats') {
                 const sessionStats = agent.getSessionStats();
                 const indexStats = ctx.indexer.getStats();
-                console.log('\nSession:', sessionStats);
-                console.log('Index:', indexStats);
-                console.log('');
+                uiLog(ctx, 'Session:');
+                uiLog(ctx, JSON.stringify(sessionStats, null, 2));
+                uiLog(ctx, 'Index:');
+                uiLog(ctx, JSON.stringify(indexStats, null, 2));
+                uiLog(ctx, '');
                 continue;
             }
 
@@ -460,16 +473,18 @@ export async function chatCommand(
                 if (parts.length === 1) {
                     // Interactive model selection menu
                     const result = await showInteractiveModelSelector(
+                        ctx,
                         agent,
-                        uiCoordinator,
-                        ctx.renderer
+                        uiCoordinator
                     );
                     if (result.switched) {
-                        console.log(chalk.green(`\nSwitched to ${result.model}`));
+                        uiLog(ctx, '');
+                        uiLog(ctx, chalk.green(`Switched to ${result.model}`));
                     } else if (result.cancelled) {
-                        console.log(chalk.dim('\nModel selection cancelled.'));
+                        uiLog(ctx, '');
+                        uiLog(ctx, chalk.dim('Model selection cancelled.'));
                     }
-                    console.log('');
+                    uiLog(ctx, '');
                 } else {
                     // Switch to specified model (direct command)
                     const spec = parts.slice(1).join(' ');
@@ -480,11 +495,11 @@ export async function chatCommand(
                         agent.setModelConfig(newConfig);
                         // Also update the UI coordinator
                         uiCoordinator.setModel(`${newConfig.provider}/${newConfig.model}`);
-                        console.log(chalk.green(`Switched to ${newConfig.provider}/${newConfig.model}`));
-                        console.log('');
+                        uiLog(ctx, chalk.green(`Switched to ${newConfig.provider}/${newConfig.model}`));
+                        uiLog(ctx, '');
                     } catch (error) {
-                        console.log(chalk.red(`Failed: ${error instanceof Error ? error.message : error}`));
-                        console.log('');
+                        uiError(ctx, `Failed: ${error instanceof Error ? error.message : error}`);
+                        uiLog(ctx, '');
                     }
                 }
                 continue;
@@ -494,21 +509,21 @@ export async function chatCommand(
             if (trimmed.toLowerCase().startsWith('/mode')) {
                 const parts = trimmed.split(/\s+/);
                 if (parts.length === 1) {
-                    console.log(chalk.cyan(`Current mode: ${uiCoordinator.currentMode}`));
-                    console.log(chalk.dim('Available modes: planning, execution, review, chat'));
-                    console.log(chalk.dim('Usage: /mode <mode>'));
-                    console.log('');
+                    uiLog(ctx, chalk.cyan(`Current mode: ${uiCoordinator.currentMode}`));
+                    uiLog(ctx, chalk.dim('Available modes: planning, execution, review, chat'));
+                    uiLog(ctx, chalk.dim('Usage: /mode <mode>'));
+                    uiLog(ctx, '');
                 } else {
                     const targetMode = parts[1].toLowerCase() as UIMode;
                     const validModes: UIMode[] = ['planning', 'execution', 'review', 'chat'];
                     if (validModes.includes(targetMode)) {
                         uiCoordinator.setMode(targetMode);
-                        console.log(chalk.green(`Switched to ${targetMode} mode`));
-                        console.log('');
+                        uiLog(ctx, chalk.green(`Switched to ${targetMode} mode`));
+                        uiLog(ctx, '');
                     } else {
-                        console.log(chalk.red(`Invalid mode: ${parts[1]}`));
-                        console.log(chalk.dim('Valid modes: planning, execution, review, chat'));
-                        console.log('');
+                        uiError(ctx, `Invalid mode: ${parts[1]}`);
+                        uiLog(ctx, chalk.dim('Valid modes: planning, execution, review, chat'));
+                        uiLog(ctx, '');
                     }
                 }
                 continue;
@@ -522,7 +537,7 @@ export async function chatCommand(
 
             // Use runWithContinuation with dynamic segments (progress-based)
             await agent.runWithContinuation(trimmed, { dynamicSegments: true });
-            console.log('');
+            uiLog(ctx, '');
         } catch (error) {
             ctx.bus.emit({
                 type: 'error',
@@ -547,12 +562,13 @@ export async function scanCommand(ctx: CommandContext): Promise<ExitCode> {
         if (ctx.options.json) {
             console.log(JSON.stringify(ctx.indexer.export()));
         } else {
-            console.log('\n' + chalk.blue.bold('Project Index Summary'));
-            console.log(`   Files: ${stats.files}`);
-            console.log(`   Modules: ${stats.modules}`);
-            console.log(`   Packages: ${stats.packages}`);
-            console.log(`   Interfaces: ${stats.interfaces}`);
-            console.log('');
+            uiLog(ctx, '');
+            uiLog(ctx, chalk.blue.bold('Project Index Summary'));
+            uiLog(ctx, `   Files: ${stats.files}`);
+            uiLog(ctx, `   Modules: ${stats.modules}`);
+            uiLog(ctx, `   Packages: ${stats.packages}`);
+            uiLog(ctx, `   Interfaces: ${stats.interfaces}`);
+            uiLog(ctx, '');
         }
 
         return ExitCodes.SUCCESS;
@@ -596,11 +612,11 @@ export async function lintCommand(
         if (!ctx.options.json) {
             // Display errors
             for (const err of result.errors) {
-                console.log(chalk.red(`${err.file}:${err.line}: error: ${err.message}`));
+                uiLog(ctx, chalk.red(`${err.file}:${err.line}: error: ${err.message}`));
             }
             // Display warnings
             for (const warn of result.warnings) {
-                console.log(chalk.yellow(`${warn.file}:${warn.line}: warning: ${warn.message}`));
+                uiLog(ctx, chalk.yellow(`${warn.file}:${warn.line}: warning: ${warn.message}`));
             }
         }
 
@@ -626,7 +642,7 @@ export async function fixCommand(
     modelSpec?: string
 ): Promise<ExitCode> {
     const toolContext = buildToolContext(ctx);
-    const { modelConfig, error } = resolveModelConfig(modelSpec);
+    const { modelConfig, error } = resolveModelConfig(ctx, modelSpec);
     if (error) {
         return ExitCodes.CONFIG_ERROR;
     }
@@ -706,11 +722,13 @@ function setupKnowledgeUpdateCallback(
             });
 
         } catch (error) {
-            // Non-fatal - just log
-            console.warn(
-                '[watchCommand] Context update failed:',
-                error instanceof Error ? error.message : error
-            );
+            // Non-fatal - log in verbose mode to avoid spamming the UI.
+            if (ctx.options.verbose) {
+                uiWarn(
+                    ctx,
+                    `[watch] Context update failed: ${error instanceof Error ? error.message : String(error)}`
+                );
+            }
         }
     });
 }
@@ -738,12 +756,15 @@ export async function watchCommand(
 
     watcher.start();
 
-    console.log('\n' + chalk.blue.bold('Watching for changes. Press Ctrl+C to stop.\n'));
+    uiLog(ctx, '');
+    uiLog(ctx, chalk.blue.bold('Watching for changes. Press Ctrl+C to stop.'));
+    uiLog(ctx, '');
 
     // Keep running until interrupted
     return new Promise((resolve) => {
         const cleanup = async () => {
-            console.log('\n\nStopping watch...');
+            uiLog(ctx, '');
+            uiLog(ctx, 'Stopping watch...');
             await watcher.stop();
             resolve(ExitCodes.SUCCESS);
         };
@@ -766,7 +787,7 @@ export async function generateCommand(
     modelSpec?: string
 ): Promise<ExitCode> {
     const toolContext = buildToolContext(ctx);
-    const { modelConfig, error } = resolveModelConfig(modelSpec);
+    const { modelConfig, error } = resolveModelConfig(ctx, modelSpec);
     if (error) {
         return ExitCodes.CONFIG_ERROR;
     }
@@ -847,14 +868,16 @@ export async function setupCommand(ctx: CommandContext, tools?: string[]): Promi
             if (tool === 'verible' || tool === 'slang') {
                 toolsToSetup.push(tool);
             } else {
-                console.error(chalk.red(`Unknown tool: ${tool}. Valid options: verible, slang`));
+                uiError(ctx, `Unknown tool: ${tool}. Valid options: verible, slang`);
                 return ExitCodes.CONFIG_ERROR;
             }
         }
     }
 
-    console.log('\n' + chalk.blue.bold('SystemVerilog Tool Setup'));
-    console.log(chalk.dim('   Setting up: ' + toolsToSetup.join(', ') + '\n'));
+    uiLog(ctx, '');
+    uiLog(ctx, chalk.blue.bold('SystemVerilog Tool Setup'));
+    uiLog(ctx, chalk.dim('   Setting up: ' + toolsToSetup.join(', ')));
+    uiLog(ctx, '');
 
     try {
         const result = await runToolSetupFlow(
@@ -865,30 +888,31 @@ export async function setupCommand(ctx: CommandContext, tools?: string[]): Promi
         );
 
         if (result.success) {
-            console.log('\n' + chalk.green.bold('Setup Complete'));
+            uiLog(ctx, '');
+            uiLog(ctx, chalk.green.bold('Setup Complete'));
 
             if (result.tools.verible) {
                 const v = result.tools.verible;
                 const status = v.action === 'installed' || v.action === 'existing'
                     ? chalk.green('✓') : chalk.yellow('○');
-                console.log(`   ${status} Verible: ${v.action}${v.version ? ` (${v.version})` : ''}`);
+                uiLog(ctx, `   ${status} Verible: ${v.action}${v.version ? ` (${v.version})` : ''}`);
             }
 
             if (result.tools.slang) {
                 const s = result.tools.slang;
                 const status = s.action === 'built' || s.action === 'existing'
                     ? chalk.green('✓') : chalk.yellow('○');
-                console.log(`   ${status} Slang: ${s.action}${s.version ? ` (${s.version})` : ''}`);
+                uiLog(ctx, `   ${status} Slang: ${s.action}${s.version ? ` (${s.version})` : ''}`);
             }
 
-            console.log('');
+            uiLog(ctx, '');
             return ExitCodes.SUCCESS;
         } else {
-            console.error(chalk.red('\nSetup failed: ' + (result.error || 'Unknown error')));
+            uiError(ctx, `Setup failed: ${result.error || 'Unknown error'}`);
             return ExitCodes.TOOL_ERROR;
         }
     } catch (error) {
-        console.error(chalk.red('\nSetup error: ' + String(error)));
+        uiError(ctx, `Setup error: ${String(error)}`);
         return ExitCodes.TOOL_ERROR;
     }
 }
@@ -898,7 +922,9 @@ export async function setupCommand(ctx: CommandContext, tools?: string[]): Promi
 // ============================================================================
 
 export async function doctorCommand(ctx: CommandContext): Promise<ExitCode> {
-    console.log('\n' + chalk.blue.bold('GateFlow Environment Check\n'));
+    uiLog(ctx, '');
+    uiLog(ctx, chalk.blue.bold('GateFlow Environment Check'));
+    uiLog(ctx, '');
 
     const checks: { name: string; status: 'ok' | 'warn' | 'fail'; message: string }[] = [];
 
@@ -947,10 +973,10 @@ export async function doctorCommand(ctx: CommandContext): Promise<ExitCode> {
     // Output results
     for (const check of checks) {
         const statusIcon = check.status === 'ok' ? chalk.blue('✓') : check.status === 'warn' ? chalk.yellow('!') : chalk.red('✗');
-        console.log(`${statusIcon} ${check.name}: ${check.message}`);
+        uiLog(ctx, `${statusIcon} ${check.name}: ${check.message}`);
     }
 
-    console.log('');
+    uiLog(ctx, '');
 
     const hasFails = checks.some(c => c.status === 'fail');
     return hasFails ? ExitCodes.CONFIG_ERROR : ExitCodes.SUCCESS;
@@ -991,17 +1017,18 @@ export async function waveCommand(ctx: CommandContext, vcdPath: string): Promise
     try {
         await fs.access(resolvedPath);
     } catch {
-        console.error(chalk.red(`File not found: ${resolvedPath}`));
+        uiError(ctx, `File not found: ${resolvedPath}`);
         return ExitCodes.TOOL_ERROR;
     }
 
     // Check file extension
     if (!resolvedPath.endsWith('.vcd')) {
-        console.log(chalk.yellow('Warning: File does not have .vcd extension'));
+        uiWarn(ctx, 'Warning: File does not have .vcd extension');
     }
 
-    console.log(chalk.cyan(`Opening waveform viewer: ${resolvedPath}`));
-    console.log(chalk.dim('Press q to quit\n'));
+    uiLog(ctx, chalk.cyan(`Opening waveform viewer: ${resolvedPath}`));
+    uiLog(ctx, chalk.dim('Press q to quit'));
+    uiLog(ctx, '');
 
     // Check if we're in an interactive terminal
     if (process.stdin.isTTY) {
@@ -1013,7 +1040,7 @@ export async function waveCommand(ctx: CommandContext, vcdPath: string): Promise
             await viewer.open(resolvedPath);
             return ExitCodes.SUCCESS;
         } catch (error) {
-            console.error(chalk.red(`Failed to open waveform: ${error}`));
+            uiError(ctx, `Failed to open waveform: ${error}`);
             return ExitCodes.TOOL_ERROR;
         }
     } else {
@@ -1023,7 +1050,7 @@ export async function waveCommand(ctx: CommandContext, vcdPath: string): Promise
             'main.js'
         );
 
-        console.log(chalk.yellow('Not in interactive terminal - opening in new window...'));
+        uiWarn(ctx, 'Not in interactive terminal - opening in new window...');
 
         return new Promise((resolve) => {
             (async () => {
@@ -1045,7 +1072,7 @@ export async function waveCommand(ctx: CommandContext, vcdPath: string): Promise
                     // Only allow safe characters in paths
                     const safePathRegex = /^[a-zA-Z0-9\-_./\\: ]+$/;
                     if (!safePathRegex.test(cliPath) || !safePathRegex.test(resolvedPath)) {
-                        console.error(chalk.red('Invalid characters in file path.'));
+                        uiError(ctx, 'Invalid characters in file path.');
                         resolve(ExitCodes.TOOL_ERROR);
                         return;
                     }
@@ -1086,11 +1113,11 @@ export async function waveCommand(ctx: CommandContext, vcdPath: string): Promise
 
                 if (child) {
                     child.unref();
-                    console.log(chalk.green('Waveform viewer opened in new terminal window.'));
+                    uiLog(ctx, chalk.green('Waveform viewer opened in new terminal window.'));
                     resolve(ExitCodes.SUCCESS);
                 } else {
-                    console.error(chalk.red('Could not open terminal window.'));
-                    console.log(chalk.dim(`Run manually: node "${cliPath}" wave "${resolvedPath}"`));
+                    uiError(ctx, 'Could not open terminal window.');
+                    uiLog(ctx, chalk.dim(`Run manually: node "${cliPath}" wave "${resolvedPath}"`));
                     resolve(ExitCodes.TOOL_ERROR);
                 }
             })();
@@ -1114,12 +1141,13 @@ export async function waveWebCommand(ctx: CommandContext, vcdPath: string, port:
     try {
         await fs.access(resolvedPath);
     } catch {
-        console.error(chalk.red(`File not found: ${resolvedPath}`));
+        uiError(ctx, `File not found: ${resolvedPath}`);
         return ExitCodes.TOOL_ERROR;
     }
 
-    console.log(chalk.cyan(`Starting waveform web viewer...`));
-    console.log(chalk.dim(`Loading: ${resolvedPath}\n`));
+    uiLog(ctx, chalk.cyan('Starting waveform web viewer...'));
+    uiLog(ctx, chalk.dim(`Loading: ${resolvedPath}`));
+    uiLog(ctx, '');
 
     try {
         const { startStandaloneServer } = await import('../waveform/web/index.js');
@@ -1134,12 +1162,14 @@ export async function waveWebCommand(ctx: CommandContext, vcdPath: string, port:
 
         // SECURITY: Validate URL format before passing to shell
         if (!/^https?:\/\/localhost:\d+$/.test(url)) {
-            console.error(chalk.red('Invalid URL generated'));
+            uiError(ctx, 'Invalid URL generated');
             return ExitCodes.TOOL_ERROR;
         }
 
-        console.log(chalk.green(`\nViewer running at: ${chalk.bold(url)}`));
-        console.log(chalk.dim('Press Ctrl+C to stop\n'));
+        uiLog(ctx, '');
+        uiLog(ctx, chalk.green(`Viewer running at: ${chalk.bold(url)}`));
+        uiLog(ctx, chalk.dim('Press Ctrl+C to stop'));
+        uiLog(ctx, '');
 
         // Open browser
         let openCmd: string;
@@ -1162,8 +1192,8 @@ export async function waveWebCommand(ctx: CommandContext, vcdPath: string, port:
         });
 
         child.once('error', (err) => {
-            console.error(chalk.yellow(`Failed to open browser: ${err.message}`));
-            console.log(chalk.dim(`Open manually: ${url}`));
+            uiWarn(ctx, `Failed to open browser: ${err.message}`);
+            uiLog(ctx, chalk.dim(`Open manually: ${url}`));
         });
 
         // Small delay before unref to catch immediate spawn errors
@@ -1172,7 +1202,8 @@ export async function waveWebCommand(ctx: CommandContext, vcdPath: string, port:
         // Keep process running until interrupted
         await new Promise<void>((resolve) => {
             process.once('SIGINT', () => {
-                console.log('\nShutting down...');
+                uiLog(ctx, '');
+                uiLog(ctx, 'Shutting down...');
                 resolve();
             });
             process.once('SIGTERM', () => {
@@ -1183,7 +1214,7 @@ export async function waveWebCommand(ctx: CommandContext, vcdPath: string, port:
         return ExitCodes.SUCCESS;
 
     } catch (error) {
-        console.error(chalk.red(`Failed to start viewer: ${error}`));
+        uiError(ctx, `Failed to start viewer: ${error}`);
         return ExitCodes.TOOL_ERROR;
     }
 }
@@ -1211,10 +1242,11 @@ interface ModelMenuItem {
  * - Supported: Providers without API keys (need setup)
  */
 async function showInteractiveModelSelector(
+    ctx: CommandContext,
     agent: GateFlowAgent,
-    uiCoordinator: UIAgentCoordinator,
-    renderer: Renderer
+    uiCoordinator: UIAgentCoordinator
 ): Promise<ModelSelectorResult> {
+    const renderer = ctx.renderer;
     const currentConfig = agent.getModelConfig();
     const availableProviders = detectAvailableProviders();
 
@@ -1286,15 +1318,15 @@ async function showInteractiveModelSelector(
         openRouterModels = await fetchOpenRouterModels();
         // fetchOpenRouterModels() should always return a Map (either from API or fallback)
         if (!openRouterModels || openRouterModels.size === 0) {
-            console.log(chalk.yellow(`⚠️  No OpenRouter models available`));
+            uiWarn(ctx, '⚠ No OpenRouter models available');
         }
     } catch (error) {
-        console.log(chalk.yellow(`⚠️  Error fetching OpenRouter models: ${error}`));
+        uiWarn(ctx, `⚠ Error fetching OpenRouter models: ${error}`);
         // Try to get from cache as fallback
         openRouterModels = cachedModels;
         // If still null, fetchOpenRouterModels() should have returned fallback, so this is unexpected
         if (!openRouterModels) {
-            console.log(chalk.yellow(`⚠️  OpenRouter models not available`));
+            uiWarn(ctx, '⚠ OpenRouter models not available');
         }
     }
 
@@ -1408,8 +1440,9 @@ async function showInteractiveModelSelector(
     }
 
     if (sections.length === 0) {
-        console.log(chalk.red('\nNo AI providers available.'));
-        console.log(chalk.dim('Configure at least one API key to use AI features.'));
+        uiLog(ctx, '');
+        uiLog(ctx, chalk.red('No AI providers available.'));
+        uiLog(ctx, chalk.dim('Configure at least one API key to use AI features.'));
         return { switched: false, cancelled: true };
     }
 
@@ -1459,7 +1492,6 @@ async function showInteractiveModelSelector(
 
             renderer.pauseForInput();
 
-            console.log('');
             const variantResult = await showSectionedMenu<VariantName | null>(
                 [{
                     title: 'Select Reasoning Mode',
@@ -1485,12 +1517,12 @@ async function showInteractiveModelSelector(
         }
 
         // Step 2: Ask for API key (if not already configured)
-        if (selectedItem.needsApiKey) {
-            const providerInfo = PROVIDERS.openrouter;
+            if (selectedItem.needsApiKey) {
+                const providerInfo = PROVIDERS.openrouter;
 
-            console.log('');
-            console.log(chalk.cyan(`Setting up ${providerInfo.name}`));
-            console.log(chalk.dim(`Get your API key at: ${providerInfo.docUrl}`));
+            uiLog(ctx, '');
+            uiLog(ctx, chalk.cyan(`Setting up ${providerInfo.name}`));
+            uiLog(ctx, chalk.dim(`Get your API key at: ${providerInfo.docUrl}`));
 
             // Prompt for API key
             const apiKeyResult = await showTextInput({
@@ -1507,21 +1539,24 @@ async function showInteractiveModelSelector(
             const apiKey = apiKeyResult.value.trim();
 
             // Test the API key
-            console.log(chalk.dim('\nValidating API key...'));
-            console.log(chalk.dim(`Key length: ${apiKey.length} chars`));
+            uiLog(ctx, '');
+            uiLog(ctx, chalk.dim('Validating API key...'));
+            uiLog(ctx, chalk.dim(`Key length: ${apiKey.length} chars`));
 
             const validationResult = await testApiKey('openrouter', apiKey);
 
             if (!validationResult.valid) {
-                console.log(chalk.red(`\n✗ ${validationResult.error}`));
+                uiLog(ctx, '');
+                uiLog(ctx, chalk.red(`✗ ${validationResult.error}`));
                 if (validationResult.hint) {
-                    console.log(chalk.yellow(`  Hint: ${validationResult.hint}`));
+                    uiLog(ctx, chalk.yellow(`  Hint: ${validationResult.hint}`));
                 }
-                console.log(chalk.dim(`\n  Get your API key at: ${providerInfo.docUrl}`));
+                uiLog(ctx, '');
+                uiLog(ctx, chalk.dim(`  Get your API key at: ${providerInfo.docUrl}`));
                 return { switched: false, cancelled: false };
             }
 
-            console.log(chalk.green('API key validated successfully!'));
+            uiLog(ctx, chalk.green('API key validated successfully!'));
 
             // Save the API key to process.env
             setProviderApiKey('openrouter', apiKey);
@@ -1552,7 +1587,8 @@ async function showInteractiveModelSelector(
                 variant: selectedVariant
             };
         } catch (error) {
-            console.log(chalk.red(`\nFailed to switch model: ${error instanceof Error ? error.message : error}`));
+            uiLog(ctx, '');
+            uiLog(ctx, chalk.red(`Failed to switch model: ${error instanceof Error ? error.message : error}`));
             return { switched: false, cancelled: false };
         }
     }
@@ -1562,9 +1598,9 @@ async function showInteractiveModelSelector(
     if (selectedItem.needsApiKey) {
         const providerInfo = PROVIDERS[selectedItem.provider];
 
-        console.log('');
-        console.log(chalk.cyan(`Setting up ${providerInfo.name}`));
-        console.log(chalk.dim(`Get your API key at: ${providerInfo.docUrl}`));
+        uiLog(ctx, '');
+        uiLog(ctx, chalk.cyan(`Setting up ${providerInfo.name}`));
+        uiLog(ctx, chalk.dim(`Get your API key at: ${providerInfo.docUrl}`));
 
         // Prompt for API key
         const apiKeyResult = await showTextInput({
@@ -1581,21 +1617,24 @@ async function showInteractiveModelSelector(
         const apiKey = apiKeyResult.value.trim();
 
         // Test the API key
-        console.log(chalk.dim('\nValidating API key...'));
-        console.log(chalk.dim(`Key length: ${apiKey.length} chars`));
+        uiLog(ctx, '');
+        uiLog(ctx, chalk.dim('Validating API key...'));
+        uiLog(ctx, chalk.dim(`Key length: ${apiKey.length} chars`));
 
         const validationResult = await testApiKey(selectedItem.provider, apiKey);
 
         if (!validationResult.valid) {
-            console.log(chalk.red(`\n✗ ${validationResult.error}`));
+            uiLog(ctx, '');
+            uiLog(ctx, chalk.red(`✗ ${validationResult.error}`));
             if (validationResult.hint) {
-                console.log(chalk.yellow(`  Hint: ${validationResult.hint}`));
+                uiLog(ctx, chalk.yellow(`  Hint: ${validationResult.hint}`));
             }
-            console.log(chalk.dim(`\n  Get your API key at: ${PROVIDERS[selectedItem.provider].docUrl}`));
+            uiLog(ctx, '');
+            uiLog(ctx, chalk.dim(`  Get your API key at: ${PROVIDERS[selectedItem.provider].docUrl}`));
             return { switched: false, cancelled: false };
         }
 
-        console.log(chalk.green('API key validated successfully!'));
+        uiLog(ctx, chalk.green('API key validated successfully!'));
 
         // Save the API key to process.env
         setProviderApiKey(selectedItem.provider, apiKey);
@@ -1623,7 +1662,6 @@ async function showInteractiveModelSelector(
         // Pause renderer for variant selection
         renderer.pauseForInput();
 
-        console.log('');
         const variantResult = await showSectionedMenu<VariantName | null>(
             [{
                 title: 'Select Reasoning Mode',
@@ -1674,7 +1712,8 @@ async function showInteractiveModelSelector(
             variant: selectedVariant
         };
     } catch (error) {
-        console.log(chalk.red(`\nFailed to switch model: ${error instanceof Error ? error.message : error}`));
+        uiLog(ctx, '');
+        uiLog(ctx, chalk.red(`Failed to switch model: ${error instanceof Error ? error.message : error}`));
         return { switched: false, cancelled: false };
     }
 }

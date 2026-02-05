@@ -78,12 +78,16 @@ export class InkStore {
     }
 
     appendLog(text: string): void {
-        const entry: LogEntry = { id: ++this.logId, text };
-        const logs = [...this.state.logs, entry];
-        if (logs.length > this.maxLogs) {
-            logs.splice(0, logs.length - this.maxLogs);
+        // Keep logs line-based. Ink's <Text> can behave unexpectedly with embedded newlines.
+        const nextLogs = [...this.state.logs];
+        const lines = text.split('\n');
+        for (const line of lines) {
+            nextLogs.push({ id: ++this.logId, text: line });
         }
-        this.state = { ...this.state, logs };
+        if (nextLogs.length > this.maxLogs) {
+            nextLogs.splice(0, nextLogs.length - this.maxLogs);
+        }
+        this.state = { ...this.state, logs: nextLogs };
         this.notify();
     }
 }

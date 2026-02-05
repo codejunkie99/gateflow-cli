@@ -81,6 +81,7 @@ export class SVIndexerAdapter {
     patterns?: string[];
     exclude?: string[];
     skipCache?: boolean;
+    emitStatus?: boolean;
   }): Promise<ProjectIndex> {
     const patterns = options?.patterns ?? ["**/*.{sv,svh,v,vh}"];
     const exclude = options?.exclude ?? [
@@ -90,11 +91,13 @@ export class SVIndexerAdapter {
       "**/dist/**",
     ];
 
-    this.bus.emit({
-      type: "status",
-      phase: "indexing",
-      label: "Building project index...",
-    });
+    if (options?.emitStatus !== false) {
+      this.bus.emit({
+        type: "status",
+        phase: "indexing",
+        label: "Building project index...",
+      });
+    }
 
     const startTime = Date.now();
 

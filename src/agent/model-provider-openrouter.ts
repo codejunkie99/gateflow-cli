@@ -101,7 +101,7 @@ export async function fetchOpenRouterModels(): Promise<Map<string, OpenRouterMod
         headers['Authorization'] = `Bearer ${apiKey}`;
     }
 
-    console.log('Fetching OpenRouter model catalog...');
+    // Avoid console output here: Ink manages stdout, and stray logs will corrupt the TUI.
 
     try {
         const response = await fetch(OPENROUTER_MODELS_API, {
@@ -150,13 +150,14 @@ export async function fetchOpenRouterModels(): Promise<Map<string, OpenRouterMod
             return hasTools && hasStructured;
         }).length;
 
-        console.log(`Loaded ${compatibleCount} compatible models from OpenRouter`);
-
         return cachedModels;
     } catch (error) {
-        console.error('Failed to fetch OpenRouter models:', error);
-        console.log('Falling back to default models...');
-        return getFallbackModels();
+        // Silent fallback (model discovery is an optimization). Callers can decide
+        // whether to surface an error via the UI.
+        const fallbackModels = getFallbackModels();
+        cachedModels = fallbackModels;
+        lastFetchTime = Date.now();
+        return fallbackModels;
     }
 }
 
@@ -314,7 +315,6 @@ export function getModelsByProvider(): Map<string, OpenRouterModel[]> {
     const grouped = new Map<string, OpenRouterModel[]>();
 
     if (!cachedModels) {
-        console.warn('OpenRouter models not cached yet');
         return grouped;
     }
 
@@ -391,7 +391,6 @@ export function getModelPricing(modelId: string): { prompt: string; completion: 
 export function clearCache(): void {
     cachedModels = null;
     lastFetchTime = null;
-    console.log('OpenRouter model cache cleared');
 }
 
 /**
@@ -399,10 +398,9 @@ export function clearCache(): void {
  */
 export async function prefetchOpenRouterModels(): Promise<void> {
     try {
-        console.log('Prefetching OpenRouter models in background...');
         await fetchOpenRouterModels();
-    } catch (error) {
-        console.warn('Failed to prefetch OpenRouter models:', error);
+    } catch {
+        // Silently fail - this is just an optimization.
     }
 }
 
@@ -596,9 +594,8 @@ export async function ensurePricingLoaded(): Promise<void> {
     if (cachedModels) return;
     try {
         await fetchOpenRouterModels();
-    } catch (error) {
-        console.warn('Could not fetch pricing data:', error);
-        console.log('Using hardcoded fallback pricing');
+    } catch {
+        // Silent fallback (pricing is best-effort).
     }
 }
 
@@ -742,4 +739,3 @@ export function getAllModelCapabilities(): Map<string, ModelCapabilities> {
 
     return result;
 }
-

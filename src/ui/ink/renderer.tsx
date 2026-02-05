@@ -8,8 +8,8 @@ import { ToolTree } from '../tool-tree.js';
 import { InkStore } from './store.js';
 import { InkApp } from './InkApp.js';
 import { getPromptController } from '../prompt-controller.js';
-import { TerminalRenderer } from '../renderer.js';
 import { BlockRenderer } from '../block-renderer.js';
+import { getStartupLines, clearStartupLines } from '../startup-messages.js';
 
 export interface RendererOptions {
     colors?: boolean;
@@ -24,7 +24,16 @@ export interface RendererOptions {
     showTokens?: boolean;
 }
 
-export type Renderer = InkRenderer | TerminalRenderer;
+export interface Renderer {
+    start(): void;
+    stop(): void;
+    pauseForInput(): void;
+    resumeAfterInput(): void;
+    isWaitingForApproval(): boolean;
+    processApprovalInput(input: string): boolean;
+    enableAltScreen?(): void;
+    clearScreen?(): void;
+}
 
 interface PendingApproval {
     id: string;
@@ -32,6 +41,12 @@ interface PendingApproval {
     details: string;
     diff?: string;
 }
+
+// ANSI escape codes for alternate screen buffer
+const ENTER_ALT_SCREEN = '\x1b[?1049h';
+const LEAVE_ALT_SCREEN = '\x1b[?1049l';
+const CLEAR_SCREEN = '\x1b[2J';
+const CURSOR_HOME = '\x1b[H';
 
 export class InkRenderer {
     private options: Required<RendererOptions>;
@@ -45,6 +60,8 @@ export class InkRenderer {
     private blockRenderer: BlockRenderer;
     private store: InkStore;
     private inkInstance: ReturnType<typeof render> | null = null;
+    private useAltScreen: boolean = false;
+    private resizeHandler: (() => void) | null = null;
 
     private tokenUsage = { input: 0, output: 0, cached: 0 };
     private toolCallCount = 0;
@@ -85,8 +102,38 @@ export class InkRenderer {
         });
     }
 
+    /**
+     * Enable alternate screen mode (like vim/htop)
+     * This prevents resize artifacts by using a separate screen buffer
+     */
+    enableAltScreen(): void {
+        if (!process.stdout.isTTY) return;
+        if (!this.useAltScreen) {
+            this.useAltScreen = true;
+            process.stdout.write(ENTER_ALT_SCREEN + CLEAR_SCREEN + CURSOR_HOME);
+            // Force a redraw in the alternate buffer so the UI appears immediately.
+            this.store.setState({});
+        }
+    }
+
+    /**
+     * Clear the screen (useful after resize)
+     */
+    clearScreen(): void {
+        if (!process.stdout.isTTY) return;
+        process.stdout.write(CLEAR_SCREEN + CURSOR_HOME);
+    }
+
     start(): void {
         const promptController = getPromptController();
+        const startupLines = getStartupLines();
+        if (startupLines.length > 0) {
+            for (const line of startupLines) {
+                this.store.appendLog(line);
+            }
+            clearStartupLines();
+        }
+
         this.inkInstance = render(
             <InkApp
                 store={this.store}
@@ -96,6 +143,16 @@ export class InkRenderer {
                 unicode={this.options.unicode}
             />
         );
+
+        // Set up resize handler - just trigger re-render, let Ink handle it
+        this.resizeHandler = () => {
+            if (this.inkInstance) {
+                // Trigger re-render with new dimensions - Ink handles the rest
+                this.store.setState({});
+            }
+        };
+        process.stdout.on('resize', this.resizeHandler);
+
         this.subscription = this.bus.subscribe(this.handleEvent.bind(this));
     }
 
@@ -104,6 +161,13 @@ export class InkRenderer {
             this.subscription.unsubscribe();
             this.subscription = null;
         }
+
+        // Remove resize handler
+        if (this.resizeHandler) {
+            process.stdout.off('resize', this.resizeHandler);
+            this.resizeHandler = null;
+        }
+
         this.flushBuffer();
         const currentStream = this.store.getState().stream;
         if (currentStream) {
@@ -118,6 +182,12 @@ export class InkRenderer {
         if (this.inkInstance) {
             this.inkInstance.unmount();
             this.inkInstance = null;
+
+            // Leave alternate screen if we were using it
+            if (this.useAltScreen) {
+                process.stdout.write(LEAVE_ALT_SCREEN);
+                this.useAltScreen = false;
+            }
         }
     }
 
@@ -207,6 +277,9 @@ export class InkRenderer {
                 break;
             case 'error':
                 this.log(chalk.red(`ERROR: ${event.message}`));
+                break;
+            case 'log':
+                this.appendRaw(event.message);
                 break;
             case 'timeout':
                 this.log(chalk.yellow(`TIMEOUT: ${event.message}`));
@@ -454,16 +527,56 @@ export class InkRenderer {
     }
 }
 
+class JsonRenderer implements Renderer {
+    private subscription: { unsubscribe: () => void } | null = null;
+
+    constructor(private bus: EventBus) {}
+
+    start(): void {
+        this.subscription = this.bus.subscribe(this.handleEvent.bind(this));
+    }
+
+    stop(): void {
+        if (this.subscription) {
+            this.subscription.unsubscribe();
+            this.subscription = null;
+        }
+    }
+
+    pauseForInput(): void {
+        // No-op in JSON mode.
+    }
+
+    resumeAfterInput(): void {
+        // No-op in JSON mode.
+    }
+
+    isWaitingForApproval(): boolean {
+        return false;
+    }
+
+    processApprovalInput(_input: string): boolean {
+        return false;
+    }
+
+    private handleEvent(event: UiEvent): void {
+        const json = JSON.stringify(event, (_, value) =>
+            typeof value === 'bigint' ? value.toString() : value
+        );
+        process.stdout.write(json + '\n');
+    }
+}
+
 export function createRenderer(
     bus: EventBus,
     options?: RendererOptions
 ): Renderer {
-    const useInk = !options?.jsonMode && process.stdout.isTTY && process.stdin.isTTY;
-    if (!useInk) {
-        const legacy = new TerminalRenderer(bus, options);
-        legacy.start();
-        return legacy;
+    if (options?.jsonMode) {
+        const renderer = new JsonRenderer(bus);
+        renderer.start();
+        return renderer;
     }
+
     const renderer = new InkRenderer(bus, options);
     renderer.start();
     return renderer;
