@@ -26,6 +26,3 @@ export * from './prompt-controller.js';
 
 // Interactive menus
 export * from './InteractiveMenu.js';
-
-// Blessed chatbox
-export * from './BlessedChatbox.js';

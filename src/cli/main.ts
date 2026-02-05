@@ -11,6 +11,7 @@ import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { spawn } from 'node:child_process';
 import { Command } from 'commander';
+import chalk from 'chalk';
 import { ExitCodes } from '../events/index.js';
 import {
     setupContext,
@@ -29,6 +30,8 @@ import {
     type GlobalOptions
 } from './commands.js';
 import { startMCPServer } from '../waveform/mcp-server.js';
+import { getBannerLines } from '../ui/banner.js';
+import { setStartupLines } from '../ui/startup-messages.js';
 
 import { hasAnyProvider, PROVIDERS } from '../agent/model-provider.js';
 
@@ -149,34 +152,11 @@ function validateEnvVars(): { missing: string[]; warnings: string[] } {
         missing.push(`At least one AI provider API key:\n${providerList}`);
     }
 
-    // Optional but recommended
-    if (!process.env.VERILATOR_PATH) {
-        warnings.push('VERILATOR_PATH not set - will use system PATH');
-    }
-
     return { missing, warnings };
 }
 
 // Validate env vars early
 const envValidation = validateEnvVars();
-
-// ============================================================================
-// Banner
-// ============================================================================
-
-import chalk from 'chalk';
-
-const BANNER = `
-${chalk.blue.bold('  ██████╗  █████╗ ████████╗███████╗███████╗██╗      ██████╗ ██╗    ██╗')}
-${chalk.blue.bold(' ██╔════╝ ██╔══██╗╚══██╔══╝██╔════╝██╔════╝██║     ██╔═══██╗██║    ██║')}
-${chalk.blue.bold(' ██║  ███╗███████║   ██║   █████╗  █████╗  ██║     ██║   ██║██║ █╗ ██║')}
-${chalk.blue.bold(' ██║   ██║██╔══██║   ██║   ██╔══╝  ██╔══╝  ██║     ██║   ██║██║███╗██║')}
-${chalk.blue.bold(' ╚██████╔╝██║  ██║   ██║   ███████╗██║     ███████╗╚██████╔╝╚███╔███╔╝')}
-${chalk.blue.bold('  ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚══════╝╚═╝     ╚══════╝ ╚═════╝  ╚══╝╚══╝')}
-${chalk.cyan('                Founded & Built by Avidlive (Av1dlive) ')}
-${chalk.cyan('             Founding Contributor - Manas (Menace_thakur) ')}
-${chalk.cyan('                AI-powered SystemVerilog Assistant')}
-`;
 
 // ========================================================================
 // MCP Tool Server Path Resolver
@@ -225,17 +205,33 @@ program
             || commandName === 'mcp-tools'
             || process.argv[2] === 'mcp'
             || process.argv[2] === 'mcp-tools';
+        const hasInteractiveTty = process.stdout.isTTY && process.stdin.isTTY;
+
+        const startupLines: string[] = [];
+
+        // Hard guard: interactive UI requires a TTY.
+        // In CI/piped contexts, require machine-readable JSON output.
+        if (!opts.json && !isMcpCommand && !hasInteractiveTty) {
+            console.error(chalk.red('\n✖ Interactive mode requires a TTY terminal.'));
+            console.error(chalk.dim('Use --json when running in CI, pipes, or redirected output.\n'));
+            process.exit(ExitCodes.CONFIG_ERROR);
+        }
 
         // Show banner unless JSON mode or MCP mode
         if (!opts.json && !isMcpCommand) {
-            console.log(BANNER);
+            startupLines.push(...getBannerLines());
         }
 
         // Show env var warnings (unless JSON mode or MCP mode)
         if (!opts.json && !isMcpCommand && envValidation.warnings.length > 0) {
             for (const warning of envValidation.warnings) {
-                console.log(chalk.yellow(`⚠ ${warning}`));
+                const line = chalk.yellow(`⚠ ${warning}`);
+                startupLines.push(line);
             }
+        }
+
+        if (startupLines.length > 0) {
+            setStartupLines(startupLines);
         }
 
         // Check for missing required env vars (skip for non-AI commands)

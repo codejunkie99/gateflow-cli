@@ -12,9 +12,9 @@ import { fileURLToPath } from 'url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 // Script-relative (lowest priority)
-dotenv.config({ path: path.resolve(__dirname, '../../.env') });
-dotenv.config({ path: path.resolve(__dirname, '../.env') });
+dotenv.config({ path: path.resolve(__dirname, '../../.env'), quiet: true });
+dotenv.config({ path: path.resolve(__dirname, '../.env'), quiet: true });
 
 // CWD and parent (higher priority)
-dotenv.config({ path: path.resolve(process.cwd(), '../.env') });
-dotenv.config({ path: path.resolve(process.cwd(), '.env') });
+dotenv.config({ path: path.resolve(process.cwd(), '../.env'), quiet: true });
+dotenv.config({ path: path.resolve(process.cwd(), '.env'), quiet: true });

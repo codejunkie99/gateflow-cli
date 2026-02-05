@@ -17,6 +17,7 @@ export interface LinePromptOptions {
     defaultAnswer?: string;
     isApproval?: boolean;
     diff?: string;
+    useBox?: boolean;
 }
 
 export interface MenuPromptOptions<T = unknown> {

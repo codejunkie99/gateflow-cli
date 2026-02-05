@@ -165,6 +165,15 @@ export interface ErrorEvent {
     recoverable?: boolean;
 }
 
+/**
+ * Log events - arbitrary informational lines for the UI.
+ * Prefer this over console.log so output stays within the renderer.
+ */
+export interface LogEvent {
+    type: 'log';
+    message: string;
+}
+
 export interface FinalEvent {
     type: 'final';
     summary: string;
@@ -341,6 +350,7 @@ export type UiEvent =
     | TimeoutEvent
     // Completion
     | ErrorEvent
+    | LogEvent
     | FinalEvent
     // Memory
     | IndexUpdateEvent
@@ -414,4 +424,3 @@ export const ExitCodes = {
 } as const;
 
 export type ExitCode = typeof ExitCodes[keyof typeof ExitCodes];
-
