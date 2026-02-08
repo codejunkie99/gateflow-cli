@@ -144,10 +144,15 @@ export class InkRenderer {
             />
         );
 
-        // Set up resize handler - just trigger re-render, let Ink handle it
+        // Set up resize handler: clear Ink's tracked output then re-render.
+        // Ink internally tracks how many lines it last rendered and overwrites
+        // them on each render cycle.  When the terminal resizes, text reflows to
+        // a different line count, so the tracked count is stale and Ink either
+        // clears too few lines (leaving ghosts) or too many (eating history).
+        // Calling clear() resets that counter so the next render starts fresh.
         this.resizeHandler = () => {
             if (this.inkInstance) {
-                // Trigger re-render with new dimensions - Ink handles the rest
+                this.inkInstance.clear();
                 this.store.setState({});
             }
         };

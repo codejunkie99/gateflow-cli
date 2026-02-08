@@ -3,6 +3,6 @@
  * Diff creation, application, and preview
  */
 
-export * from './engine.js';
-export * from './preview.js';
+export { DiffEngine } from './engine.js';
+export { colorizeDiff } from './preview.js';
 

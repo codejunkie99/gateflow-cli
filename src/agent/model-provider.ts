@@ -8,7 +8,7 @@
  * 2. Backward compatible - existing code works unchanged
  * 3. Provider detection via environment variables
  * 4. OpenAI-compatible API for providers without dedicated SDK
- * 5. Only models with tools + structured output support
+ * 5. Prefer models with tools + strict structured output support
  *
  * @module agent/model-provider
  */
@@ -63,10 +63,43 @@ export interface ProviderInfo {
   description?: string;
 }
 
+/**
+ * Providers that support only `json_object` (no strict `json_schema` validation).
+ * GateFlow requires strict schema validation for structured output workflows.
+ */
+export const STRICT_SCHEMA_UNSUPPORTED_PROVIDERS: ReadonlySet<ProviderName> =
+  new Set<ProviderName>(["deepseek", "zhipu"]);
+
+/**
+ * Check whether a provider supports strict JSON schema structured output.
+ */
+export function supportsStrictStructuredOutputs(
+  provider: ProviderName,
+): boolean {
+  return !STRICT_SCHEMA_UNSUPPORTED_PROVIDERS.has(provider);
+}
+
+/**
+ * Return a human-readable compatibility error if provider/model is not supported.
+ */
+export function getStructuredOutputCompatibilityError(
+  config: Pick<ModelConfig, "provider" | "model">,
+): string | null {
+  if (supportsStrictStructuredOutputs(config.provider)) {
+    return null;
+  }
+
+  return (
+    `Model "${config.provider}/${config.model}" is not compatible with GateFlow structured output.\n` +
+    `Reason: provider currently supports json_object mode only (no strict json_schema validation).\n` +
+    `Use Anthropic, OpenAI, Google, Mistral, Ollama, or compatible OpenRouter models.`
+  );
+}
+
 // ============================================================================
-// Provider Registry (January 2026 - Tools + Structured Output Models Only)
-// Only models with BOTH tools AND native structured output are listed.
-// This ensures thinking/reasoning modes work with structured calls.
+// Provider Registry (January 2026)
+// Models are listed per provider, with strict-structured-output compatibility
+// enforced via supportsStrictStructuredOutputs() and runtime checks.
 //
 // Sources:
 // - Anthropic: https://platform.claude.com/docs/en/build-with-claude/structured-outputs
@@ -1071,7 +1104,8 @@ async function nativeStructuredOutput<T>(
 
 /**
  * Check if modelId belongs to a direct provider (not OpenRouter).
- * Direct providers in our curated PROVIDERS list are pre-verified compatible.
+ * Direct providers in our curated PROVIDERS list are pre-verified compatible,
+ * EXCEPT providers that only support `json_object` (no strict schema validation).
  *
  * @param modelId - Model identifier (e.g., "anthropic/claude-opus-4-5-20251101")
  * @returns True if direct provider, false if OpenRouter
@@ -1088,11 +1122,16 @@ function isDirectProvider(modelId: string): boolean {
   // Check for provider/model format
   const slashIndex = modelId.indexOf("/");
   if (slashIndex > 0) {
-    const provider = modelId.slice(0, slashIndex).toLowerCase();
-    // If it's a known direct provider, return true
-    if (provider in PROVIDERS && provider !== "openrouter") {
+    const provider = modelId.slice(0, slashIndex).toLowerCase() as ProviderName;
+    // If it's a known direct provider with strict schema support, return true.
+    if (
+      provider in PROVIDERS &&
+      provider !== "openrouter" &&
+      supportsStrictStructuredOutputs(provider)
+    ) {
       return true;
     }
+    return false;
   }
 
   // Check for model name patterns from direct providers
@@ -1105,8 +1144,8 @@ function isDirectProvider(modelId: string): boolean {
   )
     return true; // OpenAI
   if (lower.startsWith("gemini-")) return true; // Google
-  if (lower.startsWith("deepseek")) return true; // DeepSeek
-  if (lower.startsWith("glm-")) return true; // Zhipu
+  if (lower.startsWith("deepseek")) return false; // DeepSeek (json_object only)
+  if (lower.startsWith("glm-")) return false; // Zhipu (json_object only)
   if (
     lower.startsWith("mistral-") ||
     lower.startsWith("codestral") ||

@@ -173,7 +173,7 @@ Use \`ask_user\` tool for confirmations:
     setOutputFormat(format: {
         format: 'json' | 'text' | 'markdown';
         description: string;
-        schema?: any;
+        schema?: Record<string, unknown>;
     }): this {
         let content = `Output Format: ${format.format}\n${format.description}`;
         if (format.schema) {
@@ -194,7 +194,7 @@ Use \`ask_user\` tool for confirmations:
         files?: Array<{ path: string; summary: string }>;
         code?: string;
         previousErrors?: string[];
-        projectStats?: any;
+        projectStats?: Record<string, unknown>;
     }): this {
         const parts: string[] = [];
         

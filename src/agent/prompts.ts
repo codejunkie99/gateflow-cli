@@ -87,11 +87,11 @@ export interface SystemPromptOptions {
     /** Enable minimal tool list optimization (default: true) */
     enableToolOptimization?: boolean;
     /** Lint errors for lint_fix mode */
-    errors?: any[];
+    errors?: Array<{ file: string; line: number; message: string }>;
     /** Previous fix attempts for lint_fix mode */
     previousFixes?: string[];
     /** Module specification for testbench mode */
-    moduleSpec?: any;
+    moduleSpec?: Record<string, unknown>;
 }
 
 /**

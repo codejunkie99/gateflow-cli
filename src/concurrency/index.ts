@@ -5,11 +5,4 @@
 
 export {
     AsyncMutex,
-    ReadWriteLock,
-    Semaphore,
-    MutexRegistry,
-    mutexRegistry,
-    toolExecutionSemaphore,
-    apiRequestSemaphore,
-    fileOperationSemaphore,
 } from './mutex.js';

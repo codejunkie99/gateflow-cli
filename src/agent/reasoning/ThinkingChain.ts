@@ -103,8 +103,8 @@ export class ThinkingChain {
     /**
      * Extract structured data from step
      */
-    private extractStepData(step: StepResult<any>): any {
-        const data: any = {};
+    private extractStepData(step: StepResult<any>): Record<string, unknown> | undefined {
+        const data: Record<string, unknown> = {};
         
         if (step.toolCalls) {
             data.toolCalls = step.toolCalls.map(call => ({

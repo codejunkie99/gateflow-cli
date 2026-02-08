@@ -80,8 +80,9 @@ export class FileLockManager {
                 );
                 this.lockAcquired = true;
                 return true;
-            } catch (error: any) {
-                if (error.code === 'EEXIST') {
+            } catch (error: unknown) {
+                const errCode = error instanceof Error && 'code' in error ? (error as NodeJS.ErrnoException).code : undefined;
+                if (errCode === 'EEXIST') {
                     // Lock exists - check if stale and get lock info for verification
                     const staleInfo = await this.getStaleInfo();
                     if (staleInfo.isStale) {
@@ -156,9 +157,10 @@ export class FileLockManager {
             const processAlive = await this.isProcessAlive(lock.pid);
             return { isStale: !processAlive, content };
 
-        } catch (error: any) {
+        } catch (error: unknown) {
             // Only consider stale if file doesn't exist (already deleted)
-            if (error.code === 'ENOENT') {
+            const errCode = error instanceof Error && 'code' in error ? (error as NodeJS.ErrnoException).code : undefined;
+            if (errCode === 'ENOENT') {
                 return { isStale: true, content: '' };
             }
             // For permission issues, etc., be conservative
@@ -195,9 +197,10 @@ export class FileLockManager {
             }
             // Lock changed - another process replaced it
             return false;
-        } catch (error: any) {
+        } catch (error: unknown) {
             // Another process got it first
-            if (error.code !== 'EEXIST' && error.code !== 'ENOENT') {
+            const errCode = error instanceof Error && 'code' in error ? (error as NodeJS.ErrnoException).code : undefined;
+            if (errCode !== 'EEXIST' && errCode !== 'ENOENT') {
                 throw error;
             }
             return false;
@@ -254,9 +257,10 @@ export class FileLockManager {
         try {
             process.kill(pid, 0);
             return true; // Process exists
-        } catch (error: any) {
+        } catch (error: unknown) {
             // EPERM means process exists but we can't signal it (different user)
-            if (error.code === 'EPERM') {
+            const errCode = error instanceof Error && 'code' in error ? (error as NodeJS.ErrnoException).code : undefined;
+            if (errCode === 'EPERM') {
                 return true;
             }
             // ESRCH means process doesn't exist

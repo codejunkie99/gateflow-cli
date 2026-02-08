@@ -85,7 +85,7 @@ export async function runToolSetupFlow(
   const executors = createToolSetupExecutors(bus, projectRoot);
 
   // Wrap tools with approval checking using the AI SDK tool helper
-  const tools: Record<string, any> = {};
+  const tools: Record<string, unknown> = {};
   const approvalRequired: ToolName[] = ['run_command', 'download_file', 'extract_archive', 'set_env_var', 'install_prerequisite', 'open_install_url'];
 
   for (const [name, executor] of Object.entries(executors)) {
@@ -314,7 +314,7 @@ function isExitCommand(input: string): boolean {
 /**
  * Request approval from the user via the event bus.
  */
-async function requestApproval(bus: EventBus, tool: string, args: any): Promise<boolean> {
+async function requestApproval(bus: EventBus, tool: string, args: Record<string, unknown>): Promise<boolean> {
   return new Promise((resolve) => {
     const id = crypto.randomUUID();
 

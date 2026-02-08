@@ -623,16 +623,18 @@ export function InkApp({
                 />
             ) : null}
 
-            {/* Status bar - fixed at bottom */}
-            <StatusBar
-                status={state.status}
-                tokens={state.tokens}
-                cost={state.cost}
-                toolCallCount={state.toolCallCount}
-                showTokens={showTokens}
-                useSpinner={useSpinner && !state.inputPaused}
-                unicode={unicode}
-            />
+            {/* Status bar - fixed at bottom (hidden while input is active) */}
+            {!state.inputPaused ? (
+                <StatusBar
+                    status={state.status}
+                    tokens={state.tokens}
+                    cost={state.cost}
+                    toolCallCount={state.toolCallCount}
+                    showTokens={showTokens}
+                    useSpinner={useSpinner}
+                    unicode={unicode}
+                />
+            ) : null}
 
             {/* Input prompt - fixed at bottom */}
             {promptState.current ? (

@@ -142,9 +142,9 @@ export type EmitFn = (event: Omit<AgentStartEvent | AgentCompleteEvent | Delegat
 
 export interface AgentContext {
     files: Map<string, string>;
-    errors: any[];
+    errors: unknown[];
     plan?: ExecutionPlan;
-    previousResults: any[];
+    previousResults: unknown[];
     projectRoot: string;
 }
 
