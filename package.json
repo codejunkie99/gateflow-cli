@@ -37,7 +37,7 @@
         "@ai-sdk/google": "^3.0.10",
         "@ai-sdk/mistral": "^3.0.9",
         "@ai-sdk/openai": "^3.0.12",
-        "@modelcontextprotocol/sdk": "^1.25.1",
+        "@modelcontextprotocol/sdk": "^1.26.0",
         "@openrouter/ai-sdk-provider": "^2.0.2",
         "@types/blessed": "^0.1.27",
         "ai": "^6.0.0",
