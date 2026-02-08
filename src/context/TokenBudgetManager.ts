@@ -8,6 +8,7 @@
  */
 
 import type { EventBus } from '../events/bus.js';
+import { estimateTokensSimple } from '../memory/token-estimator.js';
 
 // ============================================================================
 // Types
@@ -136,14 +137,6 @@ async function loadTokenizer(): Promise<Tokenizer | null> {
     }
 }
 
-/**
- * Estimate tokens using char/4 approximation
- */
-function estimateTokens(text: string): number {
-    // Claude tokenizer averages ~4 characters per token
-    // Add small overhead for special tokens
-    return Math.ceil(text.length / 4) + 3;
-}
 
 // ============================================================================
 // TokenBudgetManager Implementation
@@ -215,7 +208,7 @@ export class TokenBudgetManager {
             tokens = this.tokenizer.countTokens(text);
             accurate = true;
         } else {
-            tokens = estimateTokens(text);
+            tokens = estimateTokensSimple(text);
             accurate = false;
         }
 

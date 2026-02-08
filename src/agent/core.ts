@@ -42,9 +42,9 @@ import {
 import {
     createAgentBundle,
     toolNeedsApproval,
-    shouldAutoApprovePath,
     type AgentBundle
 } from './agent-factory.js';
+import { shouldAutoApprove } from '../fileops/approval.js';
 import {
     stopWhenAny,
     continuationRequested,
@@ -553,7 +553,7 @@ export class GateFlowAgent {
         // Auto-approve SystemVerilog files for write operations
         if (['write_file', 'edit_lines', 'search_replace'].includes(toolName)) {
             const filePath = args.path as string | undefined;
-            if (filePath && shouldAutoApprovePath(filePath)) {
+            if (filePath && shouldAutoApprove(filePath)) {
                 return { approved: true };
             }
         }

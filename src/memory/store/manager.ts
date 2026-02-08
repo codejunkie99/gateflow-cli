@@ -88,8 +88,9 @@ export class MemoryManager {
                 this.memory.lastAccess = Date.now();
                 this.memory = this.migrate(this.memory);
                 return this.memory;
-            } catch (error: any) {
-                if (error?.code !== 'ENOENT') {
+            } catch (error: unknown) {
+                const errCode = error instanceof Error && 'code' in error ? (error as NodeJS.ErrnoException).code : undefined;
+                if (errCode !== 'ENOENT') {
                     console.warn('[MemoryManager] Failed to load memory, using defaults:', error);
                 }
                 this.memory = this.createDefaultMemory();

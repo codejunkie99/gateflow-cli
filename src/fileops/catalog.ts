@@ -31,7 +31,7 @@ export interface ToolDefinition {
  * Create tool catalog from existing tool executors
  * Wraps tools with AI SDK 6's tool() helper
  */
-export function createToolCatalog(context: ToolContext): Record<string, any> {
+export function createToolCatalog(context: ToolContext): Record<string, unknown> {
     const { fileTools, editTools, indexer, verilator } = context;
 
     return {

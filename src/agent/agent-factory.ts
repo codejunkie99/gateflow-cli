@@ -293,21 +293,6 @@ export function toolNeedsApproval(toolName: string, autoApprove: boolean = false
     return TOOL_APPROVAL_CONFIG[toolName] ?? false;
 }
 
-/**
- * Check if a file path should be auto-approved for write operations.
- * SystemVerilog files in safe directories are auto-approved.
- *
- * @param path - File path being written
- * @returns Whether the path should be auto-approved
- */
-export function shouldAutoApprovePath(path: string): boolean {
-    // Auto-approve SystemVerilog files
-    const ext = path.split('.').pop()?.toLowerCase();
-    if (['sv', 'svh', 'v', 'vh'].includes(ext || '')) {
-        return true;
-    }
-    return false;
-}
 
 /**
  * Get list of all tools that require approval.

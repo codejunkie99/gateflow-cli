@@ -38,6 +38,8 @@ import {
     createModel,
     detectAvailableProviders,
     PROVIDERS,
+    supportsStrictStructuredOutputs,
+    getStructuredOutputCompatibilityError,
     testApiKey,
     setProviderApiKey,
     hasApiKey,
@@ -351,6 +353,11 @@ function resolveModelConfig(ctx: CommandContext, modelSpec?: string): { modelCon
 
     try {
         const modelConfig = parseModelString(modelSpec);
+        const compatibilityError = getStructuredOutputCompatibilityError(modelConfig);
+        if (compatibilityError) {
+            uiError(ctx, compatibilityError);
+            return { error: compatibilityError };
+        }
         uiLog(ctx, chalk.dim(`Using model: ${modelConfig.provider}/${modelConfig.model}`));
         return { modelConfig };
     } catch (error) {
@@ -490,6 +497,12 @@ export async function chatCommand(
                     const spec = parts.slice(1).join(' ');
                     try {
                         const newConfig = parseModelString(spec);
+                        const compatibilityError = getStructuredOutputCompatibilityError(newConfig);
+                        if (compatibilityError) {
+                            uiError(ctx, compatibilityError);
+                            uiLog(ctx, '');
+                            continue;
+                        }
                         // Validate the model can be created
                         createModel(newConfig); // Throws if API key missing
                         agent.setModelConfig(newConfig);
@@ -1288,6 +1301,9 @@ async function showInteractiveModelSelector(
         const [provider, ...modelParts] = rec.id.split('/');
         const model = modelParts.join('/');
         const providerName = provider as ProviderName;
+        if (!supportsStrictStructuredOutputs(providerName)) {
+            continue;
+        }
 
         // Check if this provider has an API key configured
         const isConfigured = availableProviders.includes(providerName);
@@ -1375,6 +1391,10 @@ async function showInteractiveModelSelector(
         
         // Skip OpenRouter - it has its own section
         if (provider === 'openrouter') {
+            continue;
+        }
+        // Skip providers that do not support strict schema output.
+        if (!supportsStrictStructuredOutputs(provider)) {
             continue;
         }
         

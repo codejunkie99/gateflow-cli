@@ -4,7 +4,7 @@
 
 import { PromptBuilder } from '../PromptBuilder.js';
 
-export function buildLintFixPrompt(errors: any[], previousFixes?: string[]): string {
+export function buildLintFixPrompt(errors: Array<{ file: string; line: number; message: string }>, previousFixes?: string[]): string {
     const builder = new PromptBuilder();
     
     builder
@@ -21,7 +21,7 @@ export function buildLintFixPrompt(errors: any[], previousFixes?: string[]): str
     // Add error context
     const errorSummary = errors
         .slice(0, 10)
-        .map((e: any) => `  - ${e.file}:${e.line} - ${e.message}`)
+        .map((e) => `  - ${e.file}:${e.line} - ${e.message}`)
         .join('\n');
     
     builder.addContext({

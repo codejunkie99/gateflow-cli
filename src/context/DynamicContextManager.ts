@@ -451,10 +451,12 @@ export class DynamicContextManager {
         try {
             const { stdout } = await execFileAsync('jq', ['--', filter, resolvedPath]);
             return stdout ?? '';
-        } catch (error: any) {
+        } catch (error: unknown) {
             // If jq command not found or invalid filter, fall back to simple JS
             // Only support basic property access fallback: .foo.bar or .[].foo
-            if (error.code === 'ENOENT' || error.code === 127 || error.message.includes('not found') || error.message.includes('not recognized')) { // 127 is command not found
+            const errCode = error instanceof Error && 'code' in error ? (error as NodeJS.ErrnoException).code : undefined;
+            const errMessage = error instanceof Error ? error.message : String(error);
+            if (errCode === 'ENOENT' || errCode === '127' || errMessage.includes('not found') || errMessage.includes('not recognized')) { // 127 is command not found
                 try {
                     const content = await fs.readFile(resolvedPath, 'utf-8');
                     const data = JSON.parse(content);
@@ -472,7 +474,7 @@ export class DynamicContextManager {
                     return "Error: Failed to parse file as JSON for fallback.";
                 }
             }
-            throw new Error(`jq failed: ${error.message}`);
+            throw new Error(`jq failed: ${errMessage}`);
         }
     }
 
