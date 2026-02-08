@@ -10,7 +10,7 @@
     "start": "node dist/index.js"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0",
+    "@modelcontextprotocol/sdk": "^1.26.0",
     "glob": "^10.3.0",
     "zod": "^3.22.0",
     "zod-to-json-schema": "^3.22.0"
