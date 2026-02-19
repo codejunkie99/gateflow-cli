@@ -28,21 +28,21 @@
 export {
   FileResultCache,
   getFileResultCache,
-  createFileResultPersistentCache,
+  
   type FileResultCacheOptions,
-  type FileResultCacheEntry,
-  type FileResultCacheStats,
+  
+  
 } from './file-result-cache.js';
 
 // Project index cache
 export {
   ProjectIndexCache,
   getProjectIndexCache,
-  createProjectIndexCache,
-  type ProjectIndexCacheOptions,
-  type ProjectIndexCacheEntry,
-  type ProjectIndexCacheStats,
-  type InvalidationResult,
-  type FileMetadata,
-  type SerializedResolvedProject,
+  
+  
+  
+  
+  
+  
+  
 } from './project-index-cache.js';

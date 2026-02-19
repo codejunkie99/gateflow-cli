@@ -50,7 +50,7 @@ export function getKnowledgeStore(): KnowledgeStore | null {
  * @param bus - EventBus for emitting knowledge events
  * @param config - Optional configuration overrides
  */
-export function createKnowledgeStore(
+function createKnowledgeStore(
     projectRoot: string,
     bus: EventBus,
     config?: Partial<KnowledgeStoreConfig>
@@ -64,7 +64,7 @@ export function createKnowledgeStore(
  *
  * @param store - The initialized KnowledgeStore instance
  */
-export function setGlobalKnowledgeStore(store: KnowledgeStore): void {
+function setGlobalKnowledgeStore(store: KnowledgeStore): void {
     globalStore = store;
 }
 
@@ -72,7 +72,7 @@ export function setGlobalKnowledgeStore(store: KnowledgeStore): void {
  * Clear the global KnowledgeStore singleton.
  * Useful for testing or when switching projects.
  */
-export function clearGlobalKnowledgeStore(): void {
+function clearGlobalKnowledgeStore(): void {
     globalStore = null;
 }
 

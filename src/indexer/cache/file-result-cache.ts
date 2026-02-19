@@ -28,7 +28,7 @@ import type { FileUnderstanderResult } from '../types/index.js';
 /**
  * Cache entry containing the FileUnderstanderResult.
  */
-export interface FileResultCacheEntry {
+interface FileResultCacheEntry {
   /** SHA-256 hash of file content */
   contentHash: string;
 
@@ -77,7 +77,7 @@ export interface FileResultCacheOptions {
 /**
  * Cache statistics.
  */
-export interface FileResultCacheStats {
+interface FileResultCacheStats {
   /** Number of entries in memory */
   memoryEntries: number;
 
@@ -511,7 +511,7 @@ export function getFileResultCache(): FileResultCache {
 /**
  * Create a persistent cache instance with custom options.
  */
-export function createFileResultPersistentCache(
+function createFileResultPersistentCache(
   cacheDir?: string,
   slangVersion?: string,
   veribleVersion?: string

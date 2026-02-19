@@ -49,14 +49,14 @@ export {
 
   // Utilities
   combineFileResults,
-  buildHierarchy,
-  buildDependencies,
+  
+  
   toResolvedProject,
 
   // Types
-  type LayerAResult,
+  
   type MergedIndex,
-  type MergeMeta,
+  
 } from './index-merger.js';
 
 // ============================================================================
@@ -65,16 +65,16 @@ export {
 
 export {
   // Class
-  QueryAPI,
+  
 
   // Factory
-  createQueryAPI,
+  
 
   // Types
-  type IndexQuery,
-  type DefinitionResult,
-  type ReferencesResult,
-  type HoverInfo,
-  type SymbolMatch,
-  type SearchOptions,
+  
+  
+  
+  
+  
+  
 } from './query-api.js';

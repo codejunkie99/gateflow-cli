@@ -52,7 +52,7 @@ export type ContentType = 'code' | 'text' | 'mixed';
 // Constants
 // ============================================================================
 
-export const DEFAULT_TOKEN_CONFIG: TokenConfig = {
+const DEFAULT_TOKEN_CONFIG: TokenConfig = {
     textMultiplier: 1.3,
     codeMultiplier: 1.7,     // Higher for HDL due to symbol density
     symbolPenalty: 0.05,     // 5% extra for dense symbols
@@ -219,7 +219,7 @@ export function estimateTokensSimple(text: string): number {
  * @param config Optional configuration
  * @returns Total token estimate
  */
-export function estimateTokensTotal(
+function estimateTokensTotal(
     texts: string[],
     config: Partial<TokenConfig> = {}
 ): number {

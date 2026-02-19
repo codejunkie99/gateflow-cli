@@ -16,6 +16,6 @@ export function getBannerLines(): string[] {
     return [...BANNER_LINES];
 }
 
-export function getBanner(): string {
+function getBanner(): string {
     return `\n${BANNER_LINES.join('\n')}\n`;
 }

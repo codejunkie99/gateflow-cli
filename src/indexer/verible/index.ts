@@ -35,63 +35,34 @@
 // Core adapter
 export {
   VeribleAdapter,
-  createVeribleAdapter,
-  parseWithVerible,
-  formatWithVerible,
-  lintWithVerible,
-  type VeribleAdapterOptions,
-  type VeribleParseFileResult,
+  
+  
+  
+  
+  
+  
 } from './verible-adapter.js';
 
 // Binary management
 export {
-  VeribleBinaryManager,
-  binaryManager,
-  findVeribleBinary,
+  
+  
+  
   isVeribleAvailable,
-  type Platform,
-  type Architecture,
-  type VeribleBinary,
-  type BinaryLocation,
+  
+  
+  
+  
 } from './binary-manager.js';
 
 // Subprocess execution
-export {
-  parseFile,
-  parseFiles,
-  lintFile,
-  formatContent,
-  type VeribleExecOptions,
-} from './subprocess.js';
+;
 
 // CST mapping
-export {
-  CSTMapper,
-  createCSTMapper,
-  type CSTMapperResult,
-} from './cst-mapper.js';
+;
 
 // Types
-export {
-  isNode,
-  isToken,
-  NODE_TAGS,
-  TOKEN_TAGS,
-  type VeribleNode,
-  type VeribleToken,
-  type VeribleParseResult,
-  type VeribleError,
-  type VeribleLintResult,
-  type VeribleLintViolation,
-} from './types.js';
+;
 
 // Cache
-export {
-  VeribleCache,
-  getVeribleCache,
-  createVeriblePersistentCache,
-  type VeribleCacheOptions,
-  type VeribleCacheEntry,
-  type VeribleMappedResult,
-  type VeribleCacheStats,
-} from './verible-cache.js';
+;

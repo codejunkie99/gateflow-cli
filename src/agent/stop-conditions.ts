@@ -182,7 +182,7 @@ function getLastToolResult(context: any, toolName: string): ToolResult | undefin
  * @example
  * stopWhen: maxSteps(25)
  */
-export function maxSteps(limit: number): StopCondition {
+function maxSteps(limit: number): StopCondition {
     return (context: StopConditionContext) => (context.steps?.length ?? 0) >= limit;
 }
 
@@ -244,7 +244,7 @@ export function completionTokensExceeded(maxTokens: number): StopCondition {
  * @param maxTokens - Maximum input tokens
  * @returns Stop condition
  */
-export function inputTokensExceeded(maxTokens: number): StopCondition {
+function inputTokensExceeded(maxTokens: number): StopCondition {
     return (context: any) => {
         const steps = context.steps ?? [];
         const accumulated = accumulateUsage(steps);
@@ -453,7 +453,7 @@ export function durationExceeded(ms: number, startTime: number = Date.now()): St
  *   maxCost: 1.00
  * });
  */
-export function budgetExceeded(config: {
+function budgetExceeded(config: {
     maxInputTokens?: number;
     maxOutputTokens?: number;
     maxTotalTokens?: number;
@@ -521,7 +521,7 @@ export function budgetExceeded(config: {
  * @example
  * stopWhen: budgetExceededForModel('anthropic/claude-haiku-3-5', 0.10)
  */
-export function budgetExceededForModel(modelId: string, maxCost: number): StopCondition {
+function budgetExceededForModel(modelId: string, maxCost: number): StopCondition {
     return budgetExceeded({ modelId, maxCost });
 }
 
@@ -532,7 +532,7 @@ export function budgetExceededForModel(modelId: string, maxCost: number): StopCo
 /**
  * Configuration for mode-based stop conditions.
  */
-export interface ModeStopConfig {
+interface ModeStopConfig {
     /** Agent execution mode */
     mode: PromptMode;
     /** Maximum steps before forced stop (default: 25) */

@@ -81,7 +81,7 @@ export interface Recipe {
 /**
  * Options for parsing a filelist.
  */
-export interface ParseFilelistOptions {
+interface ParseFilelistOptions {
   /**
    * Whether to recursively parse nested filelists.
    * Default: true
@@ -417,7 +417,7 @@ export class FilelistParser {
  *
  * @returns New FilelistParser instance
  */
-export function createFilelistParser(): FilelistParser {
+function createFilelistParser(): FilelistParser {
   return new FilelistParser();
 }
 
@@ -430,7 +430,7 @@ export function createFilelistParser(): FilelistParser {
  * @param options - Parse options
  * @returns Parsed recipe
  */
-export async function parseFilelist(
+async function parseFilelist(
   filelistPath: string,
   options: ParseFilelistOptions = {}
 ): Promise<Recipe> {
@@ -451,7 +451,7 @@ export async function parseFilelist(
  * @param recipe - Parsed recipe
  * @returns Array of file paths in compile order
  */
-export function getCompileOrder(recipe: Recipe): string[] {
+function getCompileOrder(recipe: Recipe): string[] {
   return [...recipe.files];
 }
 
@@ -462,7 +462,7 @@ export function getCompileOrder(recipe: Recipe): string[] {
  * @param filename - File to find (can be relative)
  * @returns Absolute path to file, or null if not found
  */
-export async function resolveInclude(
+async function resolveInclude(
   recipe: Recipe,
   filename: string
 ): Promise<string | null> {
@@ -487,7 +487,7 @@ export async function resolveInclude(
  * @param macroName - Macro name to check
  * @returns True if macro is defined
  */
-export function hasMacro(recipe: Recipe, macroName: string): boolean {
+function hasMacro(recipe: Recipe, macroName: string): boolean {
   return macroName in recipe.defines;
 }
 
@@ -498,7 +498,7 @@ export function hasMacro(recipe: Recipe, macroName: string): boolean {
  * @param macroName - Macro name
  * @returns Macro value, or undefined if not defined
  */
-export function getMacroValue(
+function getMacroValue(
   recipe: Recipe,
   macroName: string
 ): string | undefined {

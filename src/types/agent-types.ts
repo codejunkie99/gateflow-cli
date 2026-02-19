@@ -14,19 +14,19 @@ import type { ModelConfig, ModelConfigWithVariant } from '../agent/model-provide
 /**
  * Tool approval categories for declarative configuration
  */
-export type ToolApprovalCategory = 'always_allow' | 'needs_approval' | 'always_deny';
+type ToolApprovalCategory = 'always_allow' | 'needs_approval' | 'always_deny';
 
 /**
  * Map of tool names to their approval requirements
  */
-export interface ToolApprovalConfig {
+interface ToolApprovalConfig {
     [toolName: string]: ToolApprovalCategory;
 }
 
 /**
  * Result of checking tool approval
  */
-export interface ToolApprovalDecision {
+interface ToolApprovalDecision {
     allowed: boolean;
     needsApproval: boolean;
     reason?: string;
@@ -40,7 +40,7 @@ export interface ToolApprovalDecision {
  * Type-safe call options for agent invocation
  * Used with ToolLoopAgent's callOptionsSchema
  */
-export const AgentCallOptionsSchema = z.object({
+const AgentCallOptionsSchema = z.object({
     /** Project root directory */
     projectRoot: z.string(),
     /** Session ID for memory/context management */
@@ -53,7 +53,7 @@ export const AgentCallOptionsSchema = z.object({
     userId: z.string().optional(),
 });
 
-export type AgentCallOptions = z.infer<typeof AgentCallOptionsSchema>;
+type AgentCallOptions = z.infer<typeof AgentCallOptionsSchema>;
 
 // ============================================================================
 // Tool Spec Extension for needsApproval
@@ -62,7 +62,7 @@ export type AgentCallOptions = z.infer<typeof AgentCallOptionsSchema>;
 /**
  * Extended tool specification with approval metadata
  */
-export interface ToolSpecWithApproval {
+interface ToolSpecWithApproval {
     description: string;
     parameters: z.ZodType<unknown>;
     /** Whether this tool requires human approval before execution */
@@ -77,7 +77,7 @@ export interface ToolSpecWithApproval {
  * Tool approval request part from AI SDK 6
  * Emitted when a tool with needsApproval is called
  */
-export interface ToolApprovalRequestPart {
+interface ToolApprovalRequestPart {
     type: 'tool-approval-request';
     toolCallId: string;
     toolName: string;
@@ -87,7 +87,7 @@ export interface ToolApprovalRequestPart {
 /**
  * Union of stream part types we handle
  */
-export type StreamPartType =
+type StreamPartType =
     | 'text-delta'
     | 'tool-call'
     | 'tool-result'
@@ -200,7 +200,7 @@ export interface RuntimeCallOptions {
  * Base interface for UI messages
  * Can be extended with InferAgentUIMessage<typeof agent> when available
  */
-export interface GateFlowUIMessageBase {
+interface GateFlowUIMessageBase {
     role: 'user' | 'assistant' | 'system';
     content: string;
     metadata?: {
@@ -278,7 +278,7 @@ export interface CategorizedIssue {
 /**
  * Quality assessment result with categorized issues
  */
-export interface QualityAssessment {
+interface QualityAssessment {
     /** Overall quality score (0-10) */
     score: number;
     /** All issues found */
@@ -290,28 +290,28 @@ export interface QualityAssessment {
 /**
  * Helper to check if any issues exist in a category
  */
-export function hasIssuesInCategory(issues: CategorizedIssue[], category: IssueCategory): boolean {
+function hasIssuesInCategory(issues: CategorizedIssue[], category: IssueCategory): boolean {
     return issues.some(issue => issue.category === category);
 }
 
 /**
  * Helper to filter issues by category
  */
-export function getIssuesByCategory(issues: CategorizedIssue[], category: IssueCategory): CategorizedIssue[] {
+function getIssuesByCategory(issues: CategorizedIssue[], category: IssueCategory): CategorizedIssue[] {
     return issues.filter(issue => issue.category === category);
 }
 
 /**
  * Helper to filter issues by severity
  */
-export function getIssuesBySeverity(issues: CategorizedIssue[], severity: IssueSeverity): CategorizedIssue[] {
+function getIssuesBySeverity(issues: CategorizedIssue[], severity: IssueSeverity): CategorizedIssue[] {
     return issues.filter(issue => issue.severity === severity);
 }
 
 /**
  * Helper to categorize a string issue based on keywords (migration helper)
  */
-export function categorizeIssue(message: string, defaultCategory = IssueCategory.GENERAL): CategorizedIssue {
+function categorizeIssue(message: string, defaultCategory = IssueCategory.GENERAL): CategorizedIssue {
     const lowerMessage = message.toLowerCase();
 
     // Determine category from keywords

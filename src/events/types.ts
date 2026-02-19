@@ -244,7 +244,7 @@ export interface SetupStageEvent {
 /**
  * Prerequisite installation stage events
  */
-export type PrereqInstallStage =
+type PrereqInstallStage =
     | 'detecting'     // Detecting package managers
     | 'checking'      // Checking prerequisite status
     | 'installing'    // Running install command
@@ -368,43 +368,43 @@ export type UiEvent =
 // Event Type Guards
 // ============================================================================
 
-export function isTokenEvent(event: UiEvent): event is TokenEvent {
+function isTokenEvent(event: UiEvent): event is TokenEvent {
     return event.type === 'token';
 }
 
-export function isStatusEvent(event: UiEvent): event is StatusEvent {
+function isStatusEvent(event: UiEvent): event is StatusEvent {
     return event.type === 'status';
 }
 
-export function isToolEvent(event: UiEvent): event is ToolCallEvent | ToolResultEvent {
+function isToolEvent(event: UiEvent): event is ToolCallEvent | ToolResultEvent {
     return event.type === 'tool_call' || event.type === 'tool_result';
 }
 
-export function isApprovalEvent(event: UiEvent): event is ApprovalRequestEvent | ApprovalResponseEvent {
+function isApprovalEvent(event: UiEvent): event is ApprovalRequestEvent | ApprovalResponseEvent {
     return event.type === 'approval_request' || event.type === 'approval_response';
 }
 
-export function isErrorEvent(event: UiEvent): event is ErrorEvent {
+function isErrorEvent(event: UiEvent): event is ErrorEvent {
     return event.type === 'error';
 }
 
-export function isTimeoutEvent(event: UiEvent): event is TimeoutEvent {
+function isTimeoutEvent(event: UiEvent): event is TimeoutEvent {
     return event.type === 'timeout';
 }
 
-export function isWaveformEvent(event: UiEvent): event is WaveformLoadedEvent | WaveformAnalysisEvent {
+function isWaveformEvent(event: UiEvent): event is WaveformLoadedEvent | WaveformAnalysisEvent {
     return event.type === 'waveform_loaded' || event.type === 'waveform_analysis';
 }
 
-export function isSimEvent(event: UiEvent): event is SimStageEvent | SimProgressEvent {
+function isSimEvent(event: UiEvent): event is SimStageEvent | SimProgressEvent {
     return event.type === 'sim_stage' || event.type === 'sim_progress';
 }
 
-export function isSetupEvent(event: UiEvent): event is SetupStageEvent {
+function isSetupEvent(event: UiEvent): event is SetupStageEvent {
     return event.type === 'setup_stage';
 }
 
-export function isPrereqInstallEvent(event: UiEvent): event is PrereqInstallStageEvent {
+function isPrereqInstallEvent(event: UiEvent): event is PrereqInstallStageEvent {
     return event.type === 'prereq_install_stage';
 }
 

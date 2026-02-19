@@ -9,14 +9,14 @@ import chalk from 'chalk';
 // Types
 // ============================================================================
 
-export interface BlockOptions {
+interface BlockOptions {
     title: string;
     showTimer?: boolean;
     collapsible?: boolean;
     maxHeight?: number;
 }
 
-export interface BlockRendererOptions {
+interface BlockRendererOptions {
     width?: number;
     unicode?: boolean;
     output?: (line: string) => void;
@@ -37,7 +37,7 @@ interface BlockGlyphs {
 // Block Class
 // ============================================================================
 
-export class Block {
+class Block {
     private lines: string[] = [];
     private startTime: number;
     private endTime?: number;

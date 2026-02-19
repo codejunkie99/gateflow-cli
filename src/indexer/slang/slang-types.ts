@@ -44,7 +44,7 @@ export interface SlangDesignRoot {
 /**
  * Base interface for all slang symbols.
  */
-export interface SlangSymbolBase {
+interface SlangSymbolBase {
   /** Symbol kind (Module, Package, Class, etc.) */
   kind: string;
 
@@ -396,7 +396,7 @@ export interface SlangTypeInfo {
 /**
  * Array dimension.
  */
-export interface SlangArrayDimension {
+interface SlangArrayDimension {
   kind: 'fixed' | 'dynamic' | 'associative' | 'queue';
   size?: number;
   left?: number;
@@ -406,7 +406,7 @@ export interface SlangArrayDimension {
 /**
  * Field info for struct types.
  */
-export interface SlangFieldInfo {
+interface SlangFieldInfo {
   name: string;
   type: SlangTypeInfo;
   offset?: number;

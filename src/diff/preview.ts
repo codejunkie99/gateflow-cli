@@ -10,7 +10,7 @@ import type { DiffStats } from './engine.js';
 // Types
 // ============================================================================
 
-export interface DiffPreviewOptions {
+interface DiffPreviewOptions {
     maxLines?: number;
     showLineNumbers?: boolean;
     contextLines?: number;
@@ -22,7 +22,7 @@ export interface DiffPreviewOptions {
 // Diff Preview Renderer
 // ============================================================================
 
-export class DiffPreview {
+class DiffPreview {
     private options: Required<DiffPreviewOptions>;
 
     constructor(options?: DiffPreviewOptions) {
@@ -200,7 +200,7 @@ export class DiffPreview {
 /**
  * Format a diff for terminal with default options
  */
-export function formatDiff(
+function formatDiff(
     path: string,
     diff: string,
     stats: DiffStats
@@ -212,7 +212,7 @@ export function formatDiff(
 /**
  * Format a compact diff summary
  */
-export function formatDiffSummary(
+function formatDiffSummary(
     path: string,
     stats: DiffStats
 ): string {
@@ -239,7 +239,7 @@ export function colorizeDiff(diff: string): string {
 /**
  * Parse hunk header to get line numbers
  */
-export function parseHunkHeader(header: string): {
+function parseHunkHeader(header: string): {
     oldStart: number;
     oldCount: number;
     newStart: number;

@@ -4,5 +4,5 @@
  */
 
 export { DiffEngine } from './engine.js';
-export { colorizeDiff } from './preview.js';
+;
 

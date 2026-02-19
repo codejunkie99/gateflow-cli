@@ -531,7 +531,7 @@ let globalStore: WaveformStore | null = null;
 /**
  * Get global waveform store instance
  */
-export function getGlobalWaveformStore(): WaveformStore {
+function getGlobalWaveformStore(): WaveformStore {
     if (!globalStore) {
         globalStore = new WaveformStore();
     }
@@ -541,7 +541,7 @@ export function getGlobalWaveformStore(): WaveformStore {
 /**
  * Reset global store
  */
-export function resetGlobalWaveformStore(): void {
+function resetGlobalWaveformStore(): void {
     if (globalStore) {
         globalStore.close();
     }

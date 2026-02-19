@@ -9,7 +9,7 @@ import { GateFlowErrorCode, createGateFlowError } from '../error/types.js';
 // Circuit State
 // ============================================================================
 
-export enum CircuitState {
+enum CircuitState {
     /** Circuit is closed - requests flow normally */
     CLOSED = 'closed',
     /** Circuit is open - requests fail immediately */
@@ -22,7 +22,7 @@ export enum CircuitState {
 // Configuration
 // ============================================================================
 
-export interface CircuitBreakerConfig {
+interface CircuitBreakerConfig {
     /** Number of failures before opening the circuit */
     failureThreshold: number;
     /** Number of successes in half-open state to close the circuit */
@@ -39,7 +39,7 @@ export interface CircuitBreakerConfig {
     onTrip?: (name: string) => void;
 }
 
-export interface CircuitBreakerStats {
+interface CircuitBreakerStats {
     state: CircuitState;
     failures: number;
     successes: number;
@@ -271,7 +271,7 @@ export class CircuitBreaker {
 // Circuit Breaker Registry
 // ============================================================================
 
-export class CircuitBreakerRegistry {
+class CircuitBreakerRegistry {
     private breakers = new Map<string, CircuitBreaker>();
 
     /**
@@ -323,10 +323,10 @@ export class CircuitBreakerRegistry {
 // ============================================================================
 
 /** Global circuit breaker registry */
-export const circuitRegistry = new CircuitBreakerRegistry();
+const circuitRegistry = new CircuitBreakerRegistry();
 
 /** Circuit breaker for Verilator operations */
-export const verilatorBreaker = new CircuitBreaker('verilator', {
+const verilatorBreaker = new CircuitBreaker('verilator', {
     failureThreshold: 3,
     successThreshold: 2,
     timeout: 60000,
@@ -334,7 +334,7 @@ export const verilatorBreaker = new CircuitBreaker('verilator', {
 });
 
 /** Circuit breaker for file system operations */
-export const fileSystemBreaker = new CircuitBreaker('filesystem', {
+const fileSystemBreaker = new CircuitBreaker('filesystem', {
     failureThreshold: 5,
     successThreshold: 1,
     timeout: 10000,
@@ -342,7 +342,7 @@ export const fileSystemBreaker = new CircuitBreaker('filesystem', {
 });
 
 /** Circuit breaker for API calls */
-export const apiBreaker = new CircuitBreaker('api', {
+const apiBreaker = new CircuitBreaker('api', {
     failureThreshold: 3,
     successThreshold: 2,
     timeout: 30000,
@@ -356,7 +356,7 @@ export const apiBreaker = new CircuitBreaker('api', {
 /**
  * Create a circuit-broken version of a function
  */
-export function withCircuitBreaker<TArgs extends unknown[], TResult>(
+function withCircuitBreaker<TArgs extends unknown[], TResult>(
     fn: (...args: TArgs) => Promise<TResult>,
     breaker: CircuitBreaker
 ): (...args: TArgs) => Promise<TResult> {
@@ -366,7 +366,7 @@ export function withCircuitBreaker<TArgs extends unknown[], TResult>(
 /**
  * Decorator for adding circuit breaker to class methods
  */
-export function CircuitBroken(breakerName: string, config?: Partial<CircuitBreakerConfig>) {
+function CircuitBroken(breakerName: string, config?: Partial<CircuitBreakerConfig>) {
     return function <T extends (...args: any[]) => Promise<any>>(
         _target: object,
         _propertyKey: string,

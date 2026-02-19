@@ -90,7 +90,7 @@ export type { CSTMapperResult } from './mappers/types.js';
 /**
  * Maps Verible CST to our indexer types.
  */
-export class CSTMapper {
+class CSTMapper {
   /**
    * Map a Verible parse result to our types.
    *

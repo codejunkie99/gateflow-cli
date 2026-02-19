@@ -17,19 +17,19 @@ import chalk from 'chalk';
 import type { EventBus } from '../events/index.js';
 import { getPromptController, type LinePromptOptions } from './prompt-controller.js';
 
-export type ApprovalScope = 'once' | 'session' | 'all';
+type ApprovalScope = 'once' | 'session' | 'all';
 
-export interface InputManagerOptions {
+interface InputManagerOptions {
     /** Whether interactive prompt UI is available (TTY + non-JSON mode). */
     interactive?: boolean;
 }
 
-export interface ApprovalResult {
+interface ApprovalResult {
     approved: boolean;
     scope: ApprovalScope;
 }
 
-export interface PromptOptions {
+interface PromptOptions {
     /** Question to display */
     question: string;
     /** Optional choices to show */

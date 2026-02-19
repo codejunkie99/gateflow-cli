@@ -21,14 +21,14 @@ export interface AgentResilienceConfig {
     maxRetryDelay: number;
 }
 
-export const DEFAULT_AGENT_RESILIENCE: AgentResilienceConfig = {
+const DEFAULT_AGENT_RESILIENCE: AgentResilienceConfig = {
     agentTimeout: 120000,
     maxRetries: 3,
     initialRetryDelay: 2000,
     maxRetryDelay: 30000,
 };
 
-export const AGENT_TIMEOUTS: Record<string, number> = {
+const AGENT_TIMEOUTS: Record<string, number> = {
     understanding: 90000,
     codegen: 120000,
     testbench: 120000,
@@ -36,9 +36,9 @@ export const AGENT_TIMEOUTS: Record<string, number> = {
     refactoring: 120000,
 };
 
-export type AgentErrorType = 'transient' | 'permanent' | 'timeout' | 'circuit_open' | 'rate_limited';
+type AgentErrorType = 'transient' | 'permanent' | 'timeout' | 'circuit_open' | 'rate_limited';
 
-export interface AgentErrorClassification {
+interface AgentErrorClassification {
     type: AgentErrorType;
     retryAfterMs?: number;
 }
@@ -46,7 +46,7 @@ export interface AgentErrorClassification {
 /**
  * Classify an agent error with full details including retry-after
  */
-export function classifyAgentErrorWithRetryAfter(error: unknown): AgentErrorClassification {
+function classifyAgentErrorWithRetryAfter(error: unknown): AgentErrorClassification {
     if (error instanceof CircuitOpenError) {
         return { type: 'circuit_open' };
     }
@@ -110,7 +110,7 @@ export function classifyAgentErrorWithRetryAfter(error: unknown): AgentErrorClas
     return { type: 'transient', retryAfterMs };
 }
 
-export function isRetryableAgentError(error: unknown): boolean {
+function isRetryableAgentError(error: unknown): boolean {
     const { type } = classifyAgentErrorWithRetryAfter(error);
     return type === 'transient' || type === 'timeout' || type === 'rate_limited';
 }

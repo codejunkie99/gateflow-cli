@@ -69,7 +69,7 @@ const COLORS = {
 // Types
 // ============================================================================
 
-export interface ViewerOptions {
+interface ViewerOptions {
     valueFormat?: ValueFormat;
     bus?: EventBus;
     /** Use ASCII-only characters for terminals without Unicode */

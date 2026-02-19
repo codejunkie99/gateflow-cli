@@ -364,7 +364,7 @@ let defaultBackend: SlangBackend | undefined;
  *
  * @returns Default backend instance
  */
-export function getSlangBackend(): SlangBackend {
+function getSlangBackend(): SlangBackend {
   if (!defaultBackend) {
     defaultBackend = new SlangBackend();
   }
@@ -386,7 +386,7 @@ export function getSlangBackend(): SlangBackend {
  * }
  * ```
  */
-export async function analyzeWithSlang(
+async function analyzeWithSlang(
   recipe: Recipe,
   options: SlangBackendOptions = {}
 ): Promise<SlangBackendResult> {
@@ -409,4 +409,4 @@ export async function canUseSlang(): Promise<boolean> {
 // ============================================================================
 
 export type { SlangDiagnostic } from './slang-types.js';
-export type { SlangMappingResult } from './slang-mapper.js';
+;

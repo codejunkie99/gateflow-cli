@@ -58,7 +58,7 @@ export const REMOVED_STRUCTURAL_TYPES = ['module_info', 'dependency', 'project_c
 /**
  * Type guard to check if a type string is a valid learned KnowledgeType
  */
-export function isLearnedKnowledgeType(type: string): type is KnowledgeType {
+function isLearnedKnowledgeType(type: string): type is KnowledgeType {
     const learnedTypes: string[] = [
         'code_pattern',
         'lint_fix',

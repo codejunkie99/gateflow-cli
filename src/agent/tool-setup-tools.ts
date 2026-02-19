@@ -21,9 +21,9 @@ import type { SetupStage, Prerequisite } from '../events/types.js';
 // Zod Schemas (Tool Definitions)
 // ============================================================================
 
-export const checkSystemSchema = z.object({});
+const checkSystemSchema = z.object({});
 
-export const checkPrerequisitesSchema = z.object({});
+const checkPrerequisitesSchema = z.object({});
 
 export const checkToolStatusSchema = z.object({
   tool: z.enum(['slang', 'verible', 'both']).describe('Which tool(s) to check'),
@@ -72,7 +72,7 @@ export const askUserSchema = z.object({
   default: z.string().optional().describe('Default option if user just presses enter'),
 });
 
-export const detectPackageManagersSchema = z.object({});
+const detectPackageManagersSchema = z.object({});
 
 export const installPrerequisiteSchema = z.object({
   prerequisite: z.enum(['git', 'cmake', 'compiler']).describe('Which prerequisite to install'),
@@ -87,12 +87,12 @@ export const openInstallUrlSchema = z.object({
 // Types
 // ============================================================================
 
-export type PackageManager =
+type PackageManager =
   | 'winget' | 'chocolatey' | 'scoop'  // Windows
   | 'brew'                              // macOS
   | 'apt' | 'dnf' | 'yum' | 'pacman';   // Linux
 
-export interface PackageManagerInfo {
+interface PackageManagerInfo {
   name: PackageManager;
   available: boolean;
   version?: string;

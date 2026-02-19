@@ -104,7 +104,7 @@ export class AsyncMutex {
 /**
  * Read-Write lock allowing multiple readers or single writer
  */
-export class ReadWriteLock {
+class ReadWriteLock {
     private readers = 0;
     private writer = false;
     private writerQueue: Array<() => void> = [];
@@ -205,7 +205,7 @@ export class ReadWriteLock {
 /**
  * Counting semaphore for limiting concurrent operations
  */
-export class Semaphore {
+class Semaphore {
     private permits: number;
     private waiting: Array<() => void> = [];
 
@@ -285,7 +285,7 @@ export class Semaphore {
 /**
  * Registry for named mutexes to coordinate access to shared resources
  */
-export class MutexRegistry {
+class MutexRegistry {
     private mutexes = new Map<string, AsyncMutex>();
 
     /**
@@ -335,13 +335,13 @@ export class MutexRegistry {
 // ============================================================================
 
 /** Global mutex registry */
-export const mutexRegistry = new MutexRegistry();
+const mutexRegistry = new MutexRegistry();
 
 /** Semaphore for limiting concurrent tool executions */
-export const toolExecutionSemaphore = new Semaphore(10);
+const toolExecutionSemaphore = new Semaphore(10);
 
 /** Semaphore for limiting concurrent API requests */
-export const apiRequestSemaphore = new Semaphore(5);
+const apiRequestSemaphore = new Semaphore(5);
 
 /** Semaphore for limiting concurrent file operations */
-export const fileOperationSemaphore = new Semaphore(20);
+const fileOperationSemaphore = new Semaphore(20);

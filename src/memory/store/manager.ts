@@ -453,10 +453,10 @@ export class MemoryManager {
 // Re-export types for convenience
 export type {
     ProjectMemory,
-    ConversationSummary,
+    
     MemoryConfig,
-    ChatHistoryFile,
-    RelevantMessage,
-    ArchivedSession,
-    SummarizationResult
+    
+    
+    
+    
 } from './memory.types.js';

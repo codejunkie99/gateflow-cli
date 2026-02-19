@@ -25,7 +25,7 @@ const execFileAsync = promisify(execFile);
 /**
  * Reference to a tool output file (Pattern 1)
  */
-export interface ToolOutputRef {
+interface ToolOutputRef {
     /** Absolute path to the output file */
     path: string;
     /** Tool name that generated this output */
@@ -49,7 +49,7 @@ export interface ToolOutputRef {
 /**
  * Grep result structure
  */
-export interface GrepResult {
+interface GrepResult {
     /** File path where match was found */
     file: string;
     /** Line number (1-indexed) */
@@ -65,7 +65,7 @@ export interface GrepResult {
 /**
  * Chat history entry for JSONL file (Pattern 2)
  */
-export interface HistoryEntry {
+interface HistoryEntry {
     turn: number;
     role: 'user' | 'assistant' | 'system';
     content: string;
@@ -76,7 +76,7 @@ export interface HistoryEntry {
 /**
  * Search result from history
  */
-export interface HistorySearchResult {
+interface HistorySearchResult {
     sessionId: string;
     turn: number;
     role: string;
@@ -89,7 +89,7 @@ export interface HistorySearchResult {
 /**
  * Context index entry
  */
-export interface ContextIndexEntry {
+interface ContextIndexEntry {
     id: number;
     type: 'tool_output' | 'history' | 'terminal';
     tool?: string;
@@ -103,7 +103,7 @@ export interface ContextIndexEntry {
 /**
  * Full context index for a session
  */
-export interface ContextIndex {
+interface ContextIndex {
     sessionId: string;
     projectId: string;
     entries: ContextIndexEntry[];
@@ -113,7 +113,7 @@ export interface ContextIndex {
 /**
  * Configuration for DynamicContextManager
  */
-export interface DynamicContextConfig {
+interface DynamicContextConfig {
     /** Base directory for all context files */
     baseDir: string;
     /** Project identifier */
@@ -802,7 +802,7 @@ let globalDynamicContextManager: DynamicContextManager | null = null;
 /**
  * Get the global DynamicContextManager instance
  */
-export function getDynamicContextManager(): DynamicContextManager {
+function getDynamicContextManager(): DynamicContextManager {
     if (!globalDynamicContextManager) {
         globalDynamicContextManager = new DynamicContextManager();
     }
@@ -822,6 +822,6 @@ export function createDynamicContextManager(
 /**
  * Set the global DynamicContextManager instance
  */
-export function setGlobalDynamicContextManager(manager: DynamicContextManager): void {
+function setGlobalDynamicContextManager(manager: DynamicContextManager): void {
     globalDynamicContextManager = manager;
 }

@@ -28,7 +28,7 @@ import type { Declaration, Location, DeclarationKind } from '../indexer/types/in
 /**
  * A chunk of a file with semantic boundaries
  */
-export interface FileChunk {
+interface FileChunk {
     /** Chunk index (0-based) */
     index: number;
 
@@ -63,7 +63,7 @@ export interface FileChunk {
 /**
  * Type of code construct that defines chunk boundaries
  */
-export type ChunkType =
+type ChunkType =
     | 'module'
     | 'interface'
     | 'package'
@@ -80,7 +80,7 @@ export type ChunkType =
 /**
  * Configuration for chunking behavior
  */
-export interface FileChunkerConfig {
+interface FileChunkerConfig {
     /** Target tokens per chunk (default: 500) */
     targetTokens: number;
 
@@ -104,7 +104,7 @@ export interface FileChunkerConfig {
  * Interface for indexer integration
  * Allows FileChunker to use the project indexer for accurate AST boundaries
  */
-export interface IndexerProvider {
+interface IndexerProvider {
     /**
      * Get declarations from a file
      * Returns declarations with their locations (start/end lines)
@@ -120,7 +120,7 @@ export interface IndexerProvider {
 /**
  * Chunk index for a file
  */
-export interface ChunkIndex {
+interface ChunkIndex {
     /** Absolute path to the source file */
     filePath: string;
 
@@ -146,7 +146,7 @@ export interface ChunkIndex {
 /**
  * Result of chunk selection
  */
-export interface ChunkSelection {
+interface ChunkSelection {
     /** Selected chunks */
     chunks: FileChunk[];
 
@@ -164,7 +164,7 @@ export interface ChunkSelection {
 // Default Configuration
 // ============================================================================
 
-export const DEFAULT_CHUNKER_CONFIG: FileChunkerConfig = {
+const DEFAULT_CHUNKER_CONFIG: FileChunkerConfig = {
     targetTokens: 500,
     maxTokens: 1000,
     overlapLines: 5,
@@ -1043,7 +1043,7 @@ let globalFileChunker: FileChunker | null = null;
 /**
  * Get the global FileChunker instance
  */
-export function getFileChunker(): FileChunker {
+function getFileChunker(): FileChunker {
     if (!globalFileChunker) {
         globalFileChunker = new FileChunker();
     }
@@ -1063,6 +1063,6 @@ export function createFileChunker(
 /**
  * Set the global FileChunker instance
  */
-export function setGlobalFileChunker(chunker: FileChunker): void {
+function setGlobalFileChunker(chunker: FileChunker): void {
     globalFileChunker = chunker;
 }

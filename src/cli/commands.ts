@@ -86,7 +86,7 @@ export interface GlobalOptions {
     model?: string;
 }
 
-export interface CommandContext {
+interface CommandContext {
     bus: EventBus;
     policy: PolicyEngine;
     tools: ReturnType<typeof createTools>;
@@ -120,7 +120,7 @@ let currentContext: CommandContext | null = null;
 /**
  * Set the current context for shutdown handling
  */
-export function setCurrentContext(ctx: CommandContext): void {
+function setCurrentContext(ctx: CommandContext): void {
     currentContext = ctx;
 }
 

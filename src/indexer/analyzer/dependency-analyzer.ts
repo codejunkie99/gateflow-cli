@@ -21,7 +21,7 @@ import type { FileDependency, FileRecord } from '../types/index.js';
 /**
  * Represents a dependency cycle.
  */
-export interface DependencyCycle {
+interface DependencyCycle {
   /** Files in the cycle (in order) */
   files: string[];
   /** Dependencies forming the cycle */
@@ -31,7 +31,7 @@ export interface DependencyCycle {
 /**
  * Statistics about dependencies.
  */
-export interface DependencyStats {
+interface DependencyStats {
   /** Total number of dependencies */
   totalDependencies: number;
   /** Number of files with dependencies */
@@ -519,7 +519,7 @@ export class DependencyGraph {
  * @param dependencies - Optional initial dependencies
  * @returns New DependencyGraph instance
  */
-export function createDependencyGraph(dependencies?: FileDependency[]): DependencyGraph {
+function createDependencyGraph(dependencies?: FileDependency[]): DependencyGraph {
   const graph = new DependencyGraph();
   if (dependencies) {
     graph.addEdges(dependencies);
@@ -537,7 +537,7 @@ export function createDependencyGraph(dependencies?: FileDependency[]): Dependen
  * @param cycle - Dependency cycle
  * @returns Formatted string
  */
-export function formatCycle(cycle: DependencyCycle): string {
+function formatCycle(cycle: DependencyCycle): string {
   return cycle.files.join(' -> ');
 }
 
@@ -550,7 +550,7 @@ export function formatCycle(cycle: DependencyCycle): string {
  * @param changedFile - File that changed
  * @returns Set of affected file paths (including the changed file)
  */
-export function getAffectedFiles(
+function getAffectedFiles(
   graph: DependencyGraph,
   changedFile: string
 ): Set<string> {

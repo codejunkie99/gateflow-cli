@@ -112,7 +112,7 @@ export interface ExtractionResult {
  * @deprecated Structural extraction has been removed. This type is kept
  * for backwards compatibility but should not be used.
  */
-export type ExtractableKnowledgeType = never;
+type ExtractableKnowledgeType = never;
 
 /**
  * Declaration kinds that are extracted as module_info
@@ -120,12 +120,12 @@ export type ExtractableKnowledgeType = never;
  * @deprecated Structural extraction has been removed. This type is kept
  * for backwards compatibility but should not be used.
  */
-export type ExtractableDeclarationKind = never;
+type ExtractableDeclarationKind = never;
 
 /**
  * Validate extraction options at runtime
  */
-export function validateExtractionOptions(
+function validateExtractionOptions(
     options: Partial<ExtractionOptions>
 ): ExtractionOptions {
     if (!options.projectId) {

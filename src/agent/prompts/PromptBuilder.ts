@@ -3,7 +3,7 @@
  * Composable prompt system replacing monolithic strings
  */
 
-export interface PromptComponent {
+interface PromptComponent {
     type: 'base' | 'role' | 'constraint' | 'task' | 'format' | 'context' | 'example';
     content: string;
     priority?: number;        // Ordering (lower = earlier in prompt, 0 is valid)
@@ -11,7 +11,7 @@ export interface PromptComponent {
     condition?: () => boolean;
 }
 
-export interface PromptOptions {
+interface PromptOptions {
     includeThinkingInstructions?: boolean;
     includeCodeExamples?: boolean;
     maxLength?: number;

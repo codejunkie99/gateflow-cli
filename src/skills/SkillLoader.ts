@@ -452,6 +452,6 @@ export function getSkillLoader(projectRoot?: string, config?: Partial<SkillConfi
 /**
  * Reset the singleton (for testing)
  */
-export function resetSkillLoader(): void {
+function resetSkillLoader(): void {
     loaderInstance = null;
 }

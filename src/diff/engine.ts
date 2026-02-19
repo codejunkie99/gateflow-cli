@@ -57,7 +57,7 @@ export interface DiffStats {
     chunks: number;
 }
 
-export interface PatchOperation {
+interface PatchOperation {
     path: string;
     originalContent: string;
     newContent: string;
@@ -65,7 +65,7 @@ export interface PatchOperation {
     stats: DiffStats;
 }
 
-export interface ApplyResult {
+interface ApplyResult {
     success: boolean;
     path: string;
     method: 'git' | 'direct' | 'patch-lib';
@@ -73,7 +73,7 @@ export interface ApplyResult {
     revertable: boolean;
 }
 
-export interface ParsedHunk {
+interface ParsedHunk {
     oldStart: number;
     oldLines: number;
     newStart: number;

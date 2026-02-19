@@ -9,7 +9,7 @@ import { fileURLToPath } from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-export interface GateFlowConfig {
+interface GateFlowConfig {
     LLM?: {
         knowledgeEnabled?: boolean;
         knowledgeModel?: string;
@@ -65,7 +65,7 @@ const DEFAULT_CONFIG: GateFlowConfig = {
     }
 };
 
-export class ConfigManager {
+class ConfigManager {
     private config: GateFlowConfig = DEFAULT_CONFIG;
     private configPath: string | null = null;
 

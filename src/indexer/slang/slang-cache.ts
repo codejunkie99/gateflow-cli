@@ -26,7 +26,7 @@ import type { SlangMappingResult } from './slang-mapper.js';
 /**
  * Cache entry containing parsed results and metadata.
  */
-export interface CacheEntry {
+interface CacheEntry {
   /** Hash of the recipe that produced this result */
   recipeHash: string;
 
@@ -578,7 +578,7 @@ export class SlangCache {
 /**
  * Default cache instance (in-memory only).
  */
-export const slangCache = new SlangCache();
+const slangCache = new SlangCache();
 
 /**
  * Create a persistent cache instance.

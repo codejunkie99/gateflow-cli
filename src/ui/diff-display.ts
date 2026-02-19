@@ -9,20 +9,20 @@ import chalk from 'chalk';
 // Types
 // ============================================================================
 
-export interface DiffLine {
+interface DiffLine {
     type: 'context' | 'add' | 'remove' | 'header';
     lineNumber?: number;
     newLineNumber?: number;
     content: string;
 }
 
-export interface DiffStats {
+interface DiffStats {
     additions: number;
     deletions: number;
     changes: number;
 }
 
-export interface DiffDisplayOptions {
+interface DiffDisplayOptions {
     width?: number;
     unicode?: boolean;
 }

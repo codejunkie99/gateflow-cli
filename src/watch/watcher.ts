@@ -13,7 +13,7 @@ import type { Verilator } from '../verification/index.js';
 // Types
 // ============================================================================
 
-export interface WatchConfig {
+interface WatchConfig {
     /** Patterns to watch */
     patterns: string[];
     /** Patterns to ignore */
@@ -28,17 +28,17 @@ export interface WatchConfig {
     pollInterval: number;
 }
 
-export type WatchAction = 'lint' | 'index' | 'compile';
+type WatchAction = 'lint' | 'index' | 'compile';
 
 /**
  * Callback invoked after index is updated for knowledge store synchronization
  */
-export type OnKnowledgeUpdate = (
+type OnKnowledgeUpdate = (
     filepath: string,
     changeType: 'add' | 'change' | 'unlink'
 ) => Promise<void>;
 
-export interface WatchState {
+interface WatchState {
     watching: boolean;
     patterns: string[];
     fileCount: number;

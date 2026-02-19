@@ -13,7 +13,7 @@
 
 // Core renderer (Ink by default)
 export * from './ink/renderer.js';
-export type { Renderer, RendererOptions } from './ink/renderer.js';
+export type { Renderer,  } from './ink/renderer.js';
 
 // Enhanced UI components
 export * from './tool-tree.js';

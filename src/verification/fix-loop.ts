@@ -14,7 +14,7 @@ import { getSystemPrompt } from "../agent/prompts.js";
 // Types
 // ============================================================================
 
-export interface FixLoopConfig {
+interface FixLoopConfig {
   /** Maximum fix attempts */
   maxAttempts: number;
   /** Maximum identical fixes before giving up */
@@ -25,14 +25,14 @@ export interface FixLoopConfig {
   requireApproval: boolean;
 }
 
-export interface FixAttempt {
+interface FixAttempt {
   errorSignature: string;
   fix: string;
   success: boolean;
   timestamp: number;
 }
 
-export interface FixLoopResult {
+interface FixLoopResult {
   success: boolean;
   initialErrors: LintError[];
   finalErrors: LintError[];

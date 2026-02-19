@@ -8,7 +8,7 @@ import type { StepResult } from 'ai';
 import type { EventBus } from '../../events/index.js';
 import type { ThoughtCategory, ThoughtEvent } from '../../events/types.js';
 
-export interface ReasoningStep {
+interface ReasoningStep {
     stepNumber: number;
     type: ThoughtCategory;
     thought: string;

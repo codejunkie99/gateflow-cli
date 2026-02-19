@@ -339,7 +339,7 @@ export interface ClassData {
 }
 
 /** Data for program declarations */
-export interface ProgramData {
+interface ProgramData {
   kind: 'program';
   // Programs have no extra data
 }
@@ -359,7 +359,7 @@ export interface ProgramData {
  * endconfig
  * ```
  */
-export interface ConfigData {
+interface ConfigData {
   kind: 'config';
   /** Design statement specifying the top module */
   designStatement?: string;
@@ -374,7 +374,7 @@ export interface ConfigData {
  *
  * Maps a cell (module) to a specific implementation.
  */
-export interface ConfigCellUse {
+interface ConfigCellUse {
   /** Cell/module name to configure */
   cellName: string;
   /** Library to use */
@@ -404,7 +404,7 @@ export interface TaskData {
 // Types ----------------------------------------------------------------------
 
 /** Data for typedef declarations */
-export interface TypedefData {
+interface TypedefData {
   kind: 'typedef';
   /** The underlying type - e.g., "logic [7:0]", "my_struct" */
   underlyingType: string;
@@ -454,7 +454,7 @@ export interface PortData {
 }
 
 /** Data for parameter declarations */
-export interface ParameterData {
+interface ParameterData {
   kind: 'parameter';
   /** Parameter type */
   paramType: string;
@@ -463,7 +463,7 @@ export interface ParameterData {
 }
 
 /** Data for localparam declarations */
-export interface LocalparamData {
+interface LocalparamData {
   kind: 'localparam';
   /** Parameter type */
   paramType: string;
@@ -483,7 +483,7 @@ export interface SignalData {
 // Interface ------------------------------------------------------------------
 
 /** Data for modport declarations */
-export interface ModportData {
+interface ModportData {
   kind: 'modport';
   /** Ports in the modport */
   ports: ModportPort[];
@@ -492,13 +492,13 @@ export interface ModportData {
 // Assertion ------------------------------------------------------------------
 
 /** Data for sequence declarations */
-export interface SequenceData {
+interface SequenceData {
   kind: 'sequence';
   // Sequences are complex - we just note they exist
 }
 
 /** Data for property declarations */
-export interface PropertyData {
+interface PropertyData {
   kind: 'property';
   // Properties are complex - we just note they exist
 }
@@ -506,13 +506,13 @@ export interface PropertyData {
 // Verification ---------------------------------------------------------------
 
 /** Data for covergroup declarations */
-export interface CovergroupData {
+interface CovergroupData {
   kind: 'covergroup';
   // Covergroups are complex - we just note they exist
 }
 
 /** Data for constraint declarations */
-export interface ConstraintData {
+interface ConstraintData {
   kind: 'constraint';
   // Constraints are complex - we just note they exist
 }
@@ -520,7 +520,7 @@ export interface ConstraintData {
 // Timing ---------------------------------------------------------------------
 
 /** Data for clocking block declarations */
-export interface ClockingData {
+interface ClockingData {
   kind: 'clocking';
   /** Clock event - e.g., "posedge clk" */
   clockEvent: string;
@@ -529,7 +529,7 @@ export interface ClockingData {
 }
 
 /** Data for checker declarations */
-export interface CheckerData {
+interface CheckerData {
   kind: 'checker';
   /** Checker ports */
   ports: ArgInfo[];
@@ -538,7 +538,7 @@ export interface CheckerData {
 // Procedural -----------------------------------------------------------------
 
 /** Data for generate blocks */
-export interface GenerateBlockData {
+interface GenerateBlockData {
   kind: 'generate_block';
   /** Type of generate */
   generateType: 'for' | 'if' | 'case';
@@ -547,7 +547,7 @@ export interface GenerateBlockData {
 }
 
 /** Data for always blocks */
-export interface AlwaysBlockData {
+interface AlwaysBlockData {
   kind: 'always_block';
   /** Type of always block */
   blockType: 'always' | 'always_ff' | 'always_comb' | 'always_latch';
@@ -556,7 +556,7 @@ export interface AlwaysBlockData {
 }
 
 /** Data for initial blocks */
-export interface InitialBlockData {
+interface InitialBlockData {
   kind: 'initial_block';
   // Initial blocks have no extra data
 }
@@ -640,7 +640,7 @@ export interface FieldInfo {
  * ];
  * ```
  */
-export interface ModportPort {
+interface ModportPort {
   /** Port name */
   name: string;
   /** Port direction in this modport */
@@ -660,7 +660,7 @@ export interface ModportPort {
  * };
  * ```
  */
-export interface ClockingSignal {
+interface ClockingSignal {
   /** Signal name */
   name: string;
   /** Direction in clocking block */

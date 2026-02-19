@@ -42,7 +42,7 @@ export interface CapabilityCache {
 /**
  * OpenRouter API model response.
  */
-export interface OpenRouterModel {
+interface OpenRouterModel {
     id: string;
     name: string;
     supported_parameters?: string[];
@@ -56,7 +56,7 @@ export interface OpenRouterModel {
 /**
  * OpenRouter API response.
  */
-export interface OpenRouterModelsResponse {
+interface OpenRouterModelsResponse {
     data: OpenRouterModel[];
 }
 

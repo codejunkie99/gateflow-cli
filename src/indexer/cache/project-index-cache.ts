@@ -28,7 +28,7 @@ import type { ResolvedProject, Declaration, Reference, Instance, Directive, Hier
 /**
  * Minimal file metadata for quick invalidation checks.
  */
-export interface FileMetadata {
+interface FileMetadata {
   path: string;
   hash: string;
   lastModified: number;
@@ -38,7 +38,7 @@ export interface FileMetadata {
 /**
  * Cache entry for the project index.
  */
-export interface ProjectIndexCacheEntry {
+interface ProjectIndexCacheEntry {
   /** When this entry was created */
   timestamp: number;
 
@@ -70,7 +70,7 @@ export interface ProjectIndexCacheEntry {
 /**
  * Serializable version of ResolvedProject (without functions, circular refs).
  */
-export interface SerializedResolvedProject {
+interface SerializedResolvedProject {
   /** File records (without lineOffsets) */
   files: Omit<FileRecord, 'lineOffsets'>[];
 
@@ -107,7 +107,7 @@ export interface SerializedResolvedProject {
 /**
  * Result from invalidation check.
  */
-export interface InvalidationResult {
+interface InvalidationResult {
   /** Whether any invalidation occurred */
   isValid: boolean;
 
@@ -130,7 +130,7 @@ export interface InvalidationResult {
 /**
  * Cache options.
  */
-export interface ProjectIndexCacheOptions {
+interface ProjectIndexCacheOptions {
   /** Enable disk persistence (default: true) */
   persistent?: boolean;
 
@@ -150,7 +150,7 @@ export interface ProjectIndexCacheOptions {
 /**
  * Cache statistics.
  */
-export interface ProjectIndexCacheStats {
+interface ProjectIndexCacheStats {
   /** Number of cache hits */
   hits: number;
 
@@ -745,7 +745,7 @@ export function getProjectIndexCache(): ProjectIndexCache {
 /**
  * Create a project index cache with custom options.
  */
-export function createProjectIndexCache(
+function createProjectIndexCache(
   options?: ProjectIndexCacheOptions
 ): ProjectIndexCache {
   return new ProjectIndexCache(options);

@@ -23,7 +23,7 @@ import { createModelWithVariant, generateStructured } from '../model-provider.js
 /**
  * Result from a workflow step
  */
-export interface StepResult<T = unknown> {
+interface StepResult<T = unknown> {
     /** Output data from the step */
     output: T;
     /** Whether the step succeeded */
@@ -64,7 +64,7 @@ export interface EvaluationResult {
 /**
  * Configuration for the evaluator-optimizer pattern
  */
-export interface EvaluatorOptimizerConfig<T> {
+interface EvaluatorOptimizerConfig<T> {
     /** Maximum iterations before giving up */
     maxIterations: number;
     /** Minimum quality score to accept (0-10) */
@@ -80,7 +80,7 @@ export interface EvaluatorOptimizerConfig<T> {
 /**
  * Route classification result
  */
-export interface RouteClassification<T extends string> {
+interface RouteClassification<T extends string> {
     /** Selected route */
     route: T;
     /** Confidence in the classification (0-1) */
@@ -92,7 +92,7 @@ export interface RouteClassification<T extends string> {
 /**
  * Route handler configuration
  */
-export interface RouteHandler<TInput, TOutput> {
+interface RouteHandler<TInput, TOutput> {
     /** Handle the routed input */
     handle: (input: TInput) => Promise<TOutput>;
     /** Optional system prompt for this route */
@@ -175,7 +175,7 @@ export async function executeChain<T>(
  *   }
  * );
  */
-export async function generateWithQualityCheck<TQuality extends Record<string, unknown>>(
+async function generateWithQualityCheck<TQuality extends Record<string, unknown>>(
     prompt: string,
     config: {
         model?: string;
@@ -441,7 +441,7 @@ export async function evaluatorOptimizer<T>(
  *   { maxIterations: 3, qualityThreshold: 8 }
  * );
  */
-export async function translateWithFeedback(
+async function translateWithFeedback(
     text: string,
     targetLanguage: string,
     config?: {
@@ -570,7 +570,7 @@ Provide an improved translation.`,
  *   }
  * );
  */
-export async function routeByClassification<
+async function routeByClassification<
     TRoutes extends readonly string[],
     TInput,
     TOutput
@@ -635,7 +635,7 @@ export async function routeByClassification<
  *   }
  * );
  */
-export async function routeByComplexity(
+async function routeByComplexity(
     prompt: string,
     config: {
         classifierModel?: string;

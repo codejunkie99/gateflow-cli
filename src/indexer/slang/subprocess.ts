@@ -42,7 +42,7 @@ export interface SlangExecOptions {
 /**
  * Arguments for building slang command line.
  */
-export interface SlangCommandArgs {
+interface SlangCommandArgs {
   /** Files to compile (absolute paths, in order) */
   files: string[];
 
@@ -103,7 +103,7 @@ const DEFAULT_TIMEOUT = 60000; // 60 seconds
  * // Results in: ['--ast-json', '-', '--ast-json-source-info', '-DDEBUG', '-DWIDTH=32', '-I/path/to/include', '--top', 'top', '/path/to/file1.sv', '/path/to/file2.sv']
  * ```
  */
-export function buildSlangArgs(args: SlangCommandArgs): string[] {
+function buildSlangArgs(args: SlangCommandArgs): string[] {
   const cmdArgs: string[] = [
     // JSON output to stdout
     '--ast-json',
@@ -149,7 +149,7 @@ export function buildSlangArgs(args: SlangCommandArgs): string[] {
  * @param options - Additional options
  * @returns Command arguments structure
  */
-export function recipeToSlangArgs(recipe: Recipe, options?: SlangExecOptions): SlangCommandArgs {
+function recipeToSlangArgs(recipe: Recipe, options?: SlangExecOptions): SlangCommandArgs {
   return {
     files: recipe.files,
     includePaths: recipe.includePaths,
@@ -270,7 +270,7 @@ export async function runSlangForRecipe(
  * @param options - Execution options
  * @returns Parse result with AST and diagnostics
  */
-export async function runSlang(
+async function runSlang(
   cmdArgs: SlangCommandArgs,
   options: SlangExecOptions = {}
 ): Promise<SlangParseResult> {
@@ -475,7 +475,7 @@ function parseStderrDiagnostics(stderr: string): SlangDiagnostic[] {
  *
  * @returns true if slang can be run
  */
-export async function canRunSlang(): Promise<boolean> {
+async function canRunSlang(): Promise<boolean> {
   try {
     await findSlangBinary();
     return true;

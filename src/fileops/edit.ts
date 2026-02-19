@@ -14,7 +14,7 @@ import { requestApprovalSync, shouldAutoApprove, isApproved } from './approval.j
 // Types
 // ============================================================================
 
-export interface EditLinesResult {
+interface EditLinesResult {
     success: boolean;
     path: string;
     diff?: string;
@@ -26,7 +26,7 @@ export interface EditLinesResult {
     applied?: boolean;
 }
 
-export interface SearchReplaceResult {
+interface SearchReplaceResult {
     success: boolean;
     path: string;
     replacements: number;
@@ -39,7 +39,7 @@ export interface SearchReplaceResult {
     applied?: boolean;
 }
 
-export interface EditOperation {
+interface EditOperation {
     startLine: number;
     endLine: number;
     newContent: string;

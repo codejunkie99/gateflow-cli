@@ -21,7 +21,7 @@ import type { Directive } from '../types/index.js';
 /**
  * Represents a macro definition extracted from a `define directive.
  */
-export interface MacroDefinition {
+interface MacroDefinition {
   /** Macro name */
   name: string;
   /** File where the macro is defined */
@@ -238,7 +238,7 @@ export class MacroIndex {
  * @param directives - Optional initial directives to add
  * @returns New MacroIndex instance
  */
-export function createMacroIndex(directives?: Directive[]): MacroIndex {
+function createMacroIndex(directives?: Directive[]): MacroIndex {
   const index = new MacroIndex();
   if (directives) {
     index.addAll(directives);

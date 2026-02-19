@@ -15,7 +15,7 @@ export {
   visitProgramDeclaration,
   visitCheckerDeclaration,
   visitConfigDeclaration,
-  type VisitChildrenFn,
+  
 } from './design-units.js';
 
 // Functions and tasks
@@ -30,14 +30,14 @@ export { visitTypedefDeclaration } from './typedefs.js';
 
 // Enums
 export {
-  visitEnumType,
+  
   processEnumTypedef,
 } from './enums.js';
 
 // Structs and Unions
 export {
-  visitStructType,
-  visitUnionType,
+  
+  
   processStructTypedef,
   processUnionTypedef,
 } from './structs.js';

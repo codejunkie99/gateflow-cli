@@ -420,7 +420,7 @@ export class DeclarationIndex {
 /**
  * Statistics about the declaration index.
  */
-export interface DeclarationIndexStats {
+interface DeclarationIndexStats {
   totalDeclarations: number;
   uniqueNames: number;
   fileCount: number;
@@ -462,6 +462,6 @@ function isPrefix(prefix: string[], arr: string[]): boolean {
  *
  * @returns New DeclarationIndex instance
  */
-export function createDeclarationIndex(): DeclarationIndex {
+function createDeclarationIndex(): DeclarationIndex {
   return new DeclarationIndex();
 }

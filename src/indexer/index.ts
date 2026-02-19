@@ -63,7 +63,7 @@ export interface InterfaceInfo {
     modports: string[];
 }
 
-export interface FileParseResult {
+interface FileParseResult {
     file: string;
     modules: ModuleInfo[];
     packages: PackageInfo[];
@@ -140,10 +140,4 @@ export interface GraphNode {
 export * from './verible/index.js';
 
 // New understander with Verible support
-export {
-  FileUnderstander,
-  createFileUnderstander,
-  understandFiles,
-  type FileUnderstanderOptions,
-  type UnderstandFilesResult,
-} from './understander/index.js';
+;

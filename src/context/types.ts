@@ -122,7 +122,7 @@ export interface ToolMatch {
 /**
  * Reference to an archived chat history file
  */
-export interface ChatHistoryFile {
+interface ChatHistoryFile {
     /** Session ID */
     sessionId: string;
     /** Range of turns archived */
@@ -138,7 +138,7 @@ export interface ChatHistoryFile {
 /**
  * Result from searching archived history
  */
-export interface RelevantMessage {
+interface RelevantMessage {
     /** Turn number in the original conversation */
     turnNumber: number;
     /** Role (user or assistant) */
@@ -229,7 +229,7 @@ export const DEFAULT_CONTEXT_CONFIG: ContextConfig = {
  * Reference to archived history given to agent during summarization
  * Implements Cursor's "give the agent a reference to the history file" pattern
  */
-export interface HistoryFileReference {
+interface HistoryFileReference {
     /** Path to the archived history file */
     filePath: string;
 
@@ -255,7 +255,7 @@ export interface HistoryFileReference {
 /**
  * Result of triggering summarization
  */
-export interface SummarizationResult {
+interface SummarizationResult {
     /** Whether summarization occurred */
     triggered: boolean;
 

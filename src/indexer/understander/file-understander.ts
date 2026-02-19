@@ -52,6 +52,7 @@ import {
   getFileResultCache,
   type FileResultCacheOptions,
 } from '../cache/index.js';
+import { parseSystemVerilogBasic } from '../fallback/index.js';
 
 /**
  * Result from Slang parsing with errors included.
@@ -70,7 +71,7 @@ interface SlangParseResult {
 /**
  * Options for FileUnderstander.
  */
-export interface FileUnderstanderOptions {
+interface FileUnderstanderOptions {
   /**
    * Include lint results when using Verible.
    */
@@ -95,6 +96,22 @@ export interface FileUnderstanderOptions {
    * Custom cache instance (uses default if not provided).
    */
   cache?: FileResultCache;
+
+  /**
+   * Parser backend selection.
+   *
+   * - 'auto' (default): try Slang + Verible; fall back to basic parser if both unavailable.
+   * - 'fallback': use basic parser only (no external binaries; deterministic tests).
+   */
+  parserBackend?: 'auto' | 'fallback';
+
+  /**
+   * Whether to auto-download external tools (Verible) when missing.
+   *
+   * Default: true (matches previous behavior).
+   * Note: ignored when parserBackend is 'fallback'.
+   */
+  autoDownloadTools?: boolean;
 }
 
 // ============================================================================
@@ -136,7 +153,11 @@ export class FileUnderstander {
   private slangAvailable = false;
 
   constructor(options: FileUnderstanderOptions = {}) {
-    this.options = options;
+    this.options = {
+      parserBackend: 'auto',
+      autoDownloadTools: true,
+      ...options,
+    };
 
     // Initialize cache (default: enabled)
     this.cache = options.caching !== false
@@ -202,30 +223,29 @@ export class FileUnderstander {
    */
   private async parseAndMerge(filePath: string): Promise<FileUnderstanderResult> {
     const parseStart = Date.now();
-    const veribleAvailable = await this.isVeribleAvailable(true);
+    const forceFallback = this.options.parserBackend === 'fallback';
+    const veribleAutoDownload = !forceFallback && this.options.autoDownloadTools !== false;
+    const veribleAvailable = forceFallback ? false : await this.isVeribleAvailable(veribleAutoDownload);
 
-    // Run parsers in parallel, skip Verible if unavailable
-    const [slangResult, veribleResult] = await Promise.allSettled([
-      this.parseWithSlang(filePath),
-      veribleAvailable ? this.parseWithVerible(filePath) : Promise.resolve(null),
-    ]);
+    // Run parsers in parallel, skip if forced fallback
+    const [slangResult, veribleResult] = forceFallback
+      ? ([
+          { status: 'fulfilled', value: null },
+          { status: 'fulfilled', value: null },
+        ] as const)
+      : await Promise.allSettled([
+          this.parseWithSlang(filePath),
+          veribleAvailable ? this.parseWithVerible(filePath) : Promise.resolve(null),
+        ]);
 
     // Extract results
     const slang = slangResult.status === 'fulfilled' ? slangResult.value : null;
     const verible = veribleResult.status === 'fulfilled' ? veribleResult.value : null;
 
-    if (!slang && !verible) {
-      const error = veribleResult.status === 'rejected' ? veribleResult.reason : 'Unknown error';
-      throw new Error(
-        `Parsing failed: Slang and Verible unavailable or failed.\n` +
-        `Verible error: ${error}\n` +
-        'Install Verible: https://github.com/chipsalliance/verible/releases\n' +
-        'Or use your package manager: brew install verible'
-      );
-    }
-
-    // Build file record (fallback to reader if Verible unavailable)
-    const fileRecord = verible?.file ?? (await readSourceFile(filePath)).file;
+    // Build file record (+ content) (fallback to reader if Verible unavailable)
+    const sourceRead = verible?.file ? null : await readSourceFile(filePath);
+    const fileRecord = verible?.file ?? sourceRead!.file;
+    const sourceContent = sourceRead?.content;
 
     const parseErrors: ParseError[] = [];
     if (verible?.errors?.length) {
@@ -235,26 +255,52 @@ export class FileUnderstander {
       parseErrors.push(...slang.errors);
     }
 
-    if (!verible) {
-      const veribleFailure = veribleResult.status === 'rejected' ? veribleResult.reason : null;
-      const baseMessage = veribleAvailable
-        ? 'Verible parsing failed; directives will be skipped.'
-        : 'Verible not available after auto-download attempt; directives will be skipped.';
+    // Fallback parse if needed:
+    // - forced fallback mode
+    // - no external parser succeeded (slang+verible both null)
+    // - Verible missing/failed and we still want directives
+    const needFallback =
+      forceFallback ||
+      (!slang && !verible) ||
+      (!verible && (slang !== null || !veribleAvailable));
+
+    const fallback = needFallback
+      ? parseSystemVerilogBasic({
+          filePath: fileRecord.path,
+          content: sourceContent ?? (await readFile(filePath, 'utf-8')),
+          lineOffsets: fileRecord.lineOffsets,
+          warningMessage: forceFallback
+            ? 'Fallback parser forced (no Verible/Slang). Results are best-effort.'
+            : (!slang && !verible)
+              ? 'Using fallback parser because Verible/Slang are unavailable. Results are best-effort.'
+              : 'Verible unavailable; directives extracted with fallback parser (limited).',
+        })
+      : null;
+
+    if (!verible && veribleResult.status === 'rejected') {
+      // Preserve the original Verible error for debugging, but keep indexing alive.
+      const veribleFailure = veribleResult.reason instanceof Error ? veribleResult.reason.message : String(veribleResult.reason);
       parseErrors.push({
-        message: `${baseMessage}${veribleFailure ? ` ${veribleFailure}` : ''}`.trim(),
-        location: {
-          file: filePath,
-          line: 1,
-          col: 1,
-        },
+        message: `Verible parsing failed; falling back. ${veribleFailure}`.trim(),
+        location: { file: filePath, line: 1, col: 1 },
+        severity: 'warning',
+      });
+    } else if (!verible && veribleAvailable && !forceFallback) {
+      parseErrors.push({
+        message: 'Verible unavailable; falling back to basic parser for directives (and possibly more).',
+        location: { file: filePath, line: 1, col: 1 },
         severity: 'warning',
       });
     }
 
-    const declarations = slang?.declarations ?? verible?.declarations ?? [];
-    const references = slang?.references ?? verible?.references ?? [];
-    const instances = slang?.instances ?? verible?.instances ?? [];
-    const directives = verible?.directives ?? [];
+    const declarations = slang?.declarations ?? verible?.declarations ?? fallback?.declarations ?? [];
+    const references = slang?.references ?? verible?.references ?? fallback?.references ?? [];
+    const instances = slang?.instances ?? verible?.instances ?? fallback?.instances ?? [];
+    const directives = verible?.directives ?? fallback?.directives ?? [];
+
+    if (fallback?.errors?.length) {
+      parseErrors.push(...fallback.errors);
+    }
 
     // Simple merge: Slang for semantics, Verible for directives
     return {
@@ -430,7 +476,7 @@ export async function understandFiles(
 /**
  * Result from batch file understanding.
  */
-export type UnderstandFilesResult =
+type UnderstandFilesResult =
   | {
       success: true;
       path: string;
@@ -451,6 +497,6 @@ export type UnderstandFilesResult =
  *
  * @returns New FileUnderstander
  */
-export function createFileUnderstander(): FileUnderstander {
+function createFileUnderstander(): FileUnderstander {
   return new FileUnderstander();
 }

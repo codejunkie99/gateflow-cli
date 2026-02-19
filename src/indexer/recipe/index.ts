@@ -73,18 +73,18 @@
 export {
   // Parser class
   FilelistParser,
-  createFilelistParser,
+  
 
   // Convenience function
-  parseFilelist,
+  
 
   // Utilities
-  getCompileOrder,
-  resolveInclude,
-  hasMacro,
-  getMacroValue,
+  
+  
+  
+  
 
   // Types
   type Recipe,
-  type ParseFilelistOptions,
+  
 } from './filelist-parser.js';

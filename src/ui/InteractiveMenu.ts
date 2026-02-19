@@ -71,7 +71,7 @@ export interface MenuResult<T> {
  * Backward-compatible class wrapper.
  * Rendering/input handling are delegated to Ink via PromptController.
  */
-export class InteractiveMenu<T = unknown> {
+class InteractiveMenu<T = unknown> {
     private sections: MenuSection<T>[];
     private options: InteractiveMenuOptions;
 
@@ -98,7 +98,7 @@ export class InteractiveMenu<T = unknown> {
 /**
  * Show a simple selection menu.
  */
-export async function showMenu<T>(
+async function showMenu<T>(
     items: MenuItem<T>[],
     options?: InteractiveMenuOptions
 ): Promise<MenuResult<T>> {

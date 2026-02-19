@@ -41,7 +41,7 @@ export type WorkflowType =
     | 'parallel_analysis'  // Analyze from multiple angles
     | 'simple_generation'; // One-shot generation (no special pattern)
 
-export interface WorkflowSelection {
+interface WorkflowSelection {
     workflow: WorkflowType;
     confidence: number;
     reasoning: string;
@@ -55,7 +55,7 @@ export interface WorkflowSelection {
     };
 }
 
-export interface WorkflowResult {
+interface WorkflowResult {
     workflow: WorkflowType;
     success: boolean;
     output: string;
@@ -595,7 +595,7 @@ async function executeSimpleGeneration(
  *   }
  * );
  */
-export async function routeAndExecuteWorkflow(
+async function routeAndExecuteWorkflow(
     request: string,
     context: WorkflowContext & {
         hasLintErrors?: boolean;

@@ -25,12 +25,12 @@ const execPromise = promisify(exec);
 /**
  * Platform identifier for binary selection.
  */
-export type Platform = 'win32' | 'darwin' | 'linux';
+type Platform = 'win32' | 'darwin' | 'linux';
 
 /**
  * Architecture identifier for binary selection.
  */
-export type Architecture = 'x64' | 'arm64';
+type Architecture = 'x64' | 'arm64';
 
 /**
  * Verible binary names.
@@ -40,7 +40,7 @@ export type VeribleBinary = 'verible-verilog-syntax' | 'verible-verilog-lint' | 
 /**
  * Binary location result.
  */
-export interface BinaryLocation {
+interface BinaryLocation {
   /** Path to the binary */
   path: string;
 
@@ -54,7 +54,7 @@ export interface BinaryLocation {
 /**
  * Download progress callback.
  */
-export type DownloadProgressCallback = (progress: {
+type DownloadProgressCallback = (progress: {
   phase: 'fetching' | 'downloading' | 'extracting' | 'done';
   percent?: number;
   message: string;
@@ -121,7 +121,7 @@ const ARCHIVE_EXTENSION: Record<Platform, string> = {
 /**
  * Manages Verible binary discovery and execution.
  */
-export class VeribleBinaryManager {
+class VeribleBinaryManager {
   private cachedPaths: Map<VeribleBinary, BinaryLocation> = new Map();
   private readonly platform: Platform;
   private readonly arch: Architecture;
@@ -670,6 +670,6 @@ export async function isVeribleAvailable(autoDownload = false): Promise<boolean>
 /**
  * Download Verible binaries (convenience function).
  */
-export async function downloadVerible(onProgress?: DownloadProgressCallback): Promise<string> {
+async function downloadVerible(onProgress?: DownloadProgressCallback): Promise<string> {
   return binaryManager.downloadVerible(onProgress);
 }

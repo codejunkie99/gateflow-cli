@@ -30,7 +30,7 @@ import { createHash } from 'crypto';
 /**
  * Options for Verible adapter.
  */
-export interface VeribleAdapterOptions {
+interface VeribleAdapterOptions {
   /** Timeout for Verible operations in milliseconds */
   timeout?: number;
 
@@ -50,7 +50,7 @@ export interface VeribleAdapterOptions {
 /**
  * Result from parsing a file with Verible.
  */
-export interface VeribleParseFileResult {
+interface VeribleParseFileResult {
   /** File metadata */
   file: FileRecord;
 
@@ -448,14 +448,14 @@ export class VeribleAdapter {
 /**
  * Create a Verible adapter with default options.
  */
-export function createVeribleAdapter(options?: VeribleAdapterOptions): VeribleAdapter {
+function createVeribleAdapter(options?: VeribleAdapterOptions): VeribleAdapter {
   return new VeribleAdapter(options);
 }
 
 /**
  * Parse a single file with Verible (convenience function).
  */
-export async function parseWithVerible(filePath: string): Promise<VeribleParseFileResult> {
+async function parseWithVerible(filePath: string): Promise<VeribleParseFileResult> {
   const adapter = createVeribleAdapter();
   return adapter.parseFile(filePath);
 }
@@ -463,7 +463,7 @@ export async function parseWithVerible(filePath: string): Promise<VeribleParseFi
 /**
  * Format code with Verible (convenience function).
  */
-export async function formatWithVerible(content: string): Promise<string> {
+async function formatWithVerible(content: string): Promise<string> {
   const adapter = createVeribleAdapter();
   return adapter.format(content);
 }
@@ -471,7 +471,7 @@ export async function formatWithVerible(content: string): Promise<string> {
 /**
  * Lint a file with Verible (convenience function).
  */
-export async function lintWithVerible(filePath: string, rules?: string[]): Promise<VeribleLintResult> {
+async function lintWithVerible(filePath: string, rules?: string[]): Promise<VeribleLintResult> {
   const adapter = createVeribleAdapter();
   return adapter.lint(filePath, rules);
 }

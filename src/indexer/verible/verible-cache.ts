@@ -43,7 +43,7 @@ export interface VeribleMappedResult {
 /**
  * Cache entry containing parsed CST and optional mapped results.
  */
-export interface VeribleCacheEntry {
+interface VeribleCacheEntry {
   /** SHA-256 hash of file content */
   contentHash: string;
 
@@ -69,7 +69,7 @@ export interface VeribleCacheEntry {
 /**
  * Cache options.
  */
-export interface VeribleCacheOptions {
+interface VeribleCacheOptions {
   /** Enable disk persistence (default: true) */
   persistent?: boolean;
 
@@ -89,7 +89,7 @@ export interface VeribleCacheOptions {
 /**
  * Cache statistics.
  */
-export interface VeribleCacheStats {
+interface VeribleCacheStats {
   /** Number of entries in memory */
   memoryEntries: number;
 
@@ -485,7 +485,7 @@ export function getVeribleCache(): VeribleCache {
  * @param veribleVersion - Verible version for invalidation
  * @returns Persistent cache instance
  */
-export function createVeriblePersistentCache(
+function createVeriblePersistentCache(
   cacheDir?: string,
   veribleVersion?: string
 ): VeribleCache {

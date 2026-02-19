@@ -14,7 +14,7 @@
 /**
  * Badge types for model recommendations.
  */
-export type ModelBadge =
+type ModelBadge =
     | 'Recommended'  // Best overall choice for GateFlow
     | 'Fast'         // Optimized for speed
     | 'Reasoning'    // Best for complex reasoning tasks
@@ -26,7 +26,7 @@ export type ModelBadge =
 /**
  * Recommended model entry.
  */
-export interface RecommendedModel {
+interface RecommendedModel {
     /** Full model ID (e.g., "anthropic/claude-sonnet-4-20250514") */
     id: string;
     /** Why this model is recommended */
@@ -146,7 +146,7 @@ export function isRecommendedModel(id: string): boolean {
 /**
  * Get all recommended models for a specific badge.
  */
-export function getModelsByBadge(badge: ModelBadge): RecommendedModel[] {
+function getModelsByBadge(badge: ModelBadge): RecommendedModel[] {
     return RECOMMENDED_MODELS.filter(m => m.badge === badge);
 }
 
@@ -155,7 +155,7 @@ export function getModelsByBadge(badge: ModelBadge): RecommendedModel[] {
  *
  * @param availableProviders - Array of provider names with configured API keys
  */
-export function getAvailableRecommendedModels(
+function getAvailableRecommendedModels(
     availableProviders: string[]
 ): RecommendedModel[] {
     return RECOMMENDED_MODELS.filter(model => {
@@ -171,7 +171,7 @@ export function getAvailableRecommendedModels(
  * @param isCurrent - Whether this is the currently selected model
  * @param useColor - Whether to use ANSI colors
  */
-export function formatModelForMenu(
+function formatModelForMenu(
     model: RecommendedModel,
     isCurrent: boolean = false,
     useColor: boolean = true

@@ -90,7 +90,7 @@ function extractEnumValues(
  * - typedef enum { RED, GREEN, BLUE } color_t;
  * - typedef enum logic [1:0] { IDLE, RUN, STOP } state_t;
  */
-export function visitEnumType(
+function visitEnumType(
   enumNode: VeribleNode,
   typedefName: string,
   context: MapperContext

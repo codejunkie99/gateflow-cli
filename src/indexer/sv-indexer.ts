@@ -60,75 +60,37 @@
 // ============================================================================
 
 // Types
-export type {
-  Location,
-  Guard,
-  ParseError,
-  LineOffsets,
-  FileRecord,
-  FileReadResult,
-  Declaration,
-  DeclarationKind,
-  DeclarationData,
-  Reference,
-  ReferenceKind,
-  ReferenceData,
-  Instance,
-  InstanceKind,
-  PortConnection,
-  Directive,
-  DirectiveKind,
-  DirectiveData,
-  FileUnderstanderResult,
-  ParseStats,
-  ResolvedProject,
-  HierarchyNode,
-  FileDependency,
-  SemanticIndex,
-} from './types/index.js';
+;
 
 // Slang (Layer B)
 export {
-  SlangBackend,
-  canUseSlang,
-  analyzeWithSlang,
-  type SlangBackendResult,
+  
+  
+  
+  
   type SlangBackendOptions,
 } from './slang/index.js';
 
 // Merge
-export {
-  mergeIndices,
-  combineFileResults,
-  createQueryAPI,
-  QueryAPI,
-  type MergedIndex,
-  type LayerAResult,
-} from './merge/index.js';
+;
 
 // IDs
-export { locationId, declarationId, isLocationId, isDeclarationId } from './ids/index.js';
+;
 
 // Reader
-export { readFile, readFiles, buildLineIndex, getLineNumber, getLocation } from './reader/index.js';
+;
 
 // Understander
-export { FileUnderstander, understandFiles } from './understander/index.js';
+;
 
 // Recipe
-export { FilelistParser, parseFilelist, type Recipe } from './recipe/index.js';
+;
 
 // Resolver
-export { DeclarationIndex, ProjectResolver } from './resolver/index.js';
+;
 
 // Analyzer
-export {
-  findTopModules,
-  getHierarchyStats,
-  formatHierarchy,
-  DependencyGraph,
-  getAffectedFiles,
-} from './analyzer/index.js';
+;
 
 // ============================================================================
 // Main Indexer Class
@@ -560,7 +522,7 @@ export class SVIndexer {
 /**
  * Result from parsing a file.
  */
-export interface ParseFileResult {
+interface ParseFileResult {
   success: boolean;
   path: string;
   result?: FileUnderstanderResult;
@@ -594,6 +556,6 @@ export interface ParseFileResult {
  * });
  * ```
  */
-export function createSVIndexer(options?: SVIndexerOptions): SVIndexer {
+function createSVIndexer(options?: SVIndexerOptions): SVIndexer {
   return new SVIndexer(options);
 }

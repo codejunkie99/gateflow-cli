@@ -13,7 +13,7 @@
 /**
  * Token usage structure (handles all provider naming conventions).
  */
-export interface TokenUsage {
+interface TokenUsage {
     // Anthropic style
     inputTokens?: number;
     outputTokens?: number;
@@ -31,21 +31,21 @@ export interface TokenUsage {
 /**
  * Get input/prompt tokens from usage (handles all provider naming conventions).
  */
-export function getInputTokens(usage: TokenUsage | undefined | null): number {
+function getInputTokens(usage: TokenUsage | undefined | null): number {
     return usage?.inputTokens ?? usage?.promptTokens ?? usage?.promptTokenCount ?? 0;
 }
 
 /**
  * Get output/completion tokens from usage (handles all provider naming conventions).
  */
-export function getOutputTokens(usage: TokenUsage | undefined | null): number {
+function getOutputTokens(usage: TokenUsage | undefined | null): number {
     return usage?.outputTokens ?? usage?.completionTokens ?? usage?.candidatesTokenCount ?? 0;
 }
 
 /**
  * Get total tokens from usage (calculates if not provided).
  */
-export function getTotalTokens(usage: TokenUsage | undefined | null): number {
+function getTotalTokens(usage: TokenUsage | undefined | null): number {
     if (usage?.totalTokens !== undefined) {
         return usage.totalTokens;
     }

@@ -64,7 +64,7 @@ export async function createPlan(
 /**
  * Parse plan from LLM JSON response (fallback if structured output fails)
  */
-export function parsePlan(llmOutput: string): ExecutionPlan {
+function parsePlan(llmOutput: string): ExecutionPlan {
     try {
         const jsonMatch = llmOutput.match(/\{[\s\S]*\}/);
         if (!jsonMatch) {

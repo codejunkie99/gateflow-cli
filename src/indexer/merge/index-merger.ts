@@ -32,7 +32,7 @@ import { MacroIndex } from '../resolver/macro-index.js';
 /**
  * Layer A result - syntactic parsing from Verible (or Slang fallback).
  */
-export interface LayerAResult {
+interface LayerAResult {
   /** File records */
   files: FileRecord[];
 
@@ -413,7 +413,7 @@ export function combineFileResults(results: FileUnderstanderResult[]): LayerARes
  * @param index - Merged index
  * @returns Hierarchy tree with roots as top-level modules
  */
-export function buildHierarchy(index: MergedIndex): HierarchyNode[] {
+function buildHierarchy(index: MergedIndex): HierarchyNode[] {
   // Build declaration lookup
   const declById = new Map<string, Declaration>();
   for (const decl of index.declarations) {
@@ -499,7 +499,7 @@ export function buildHierarchy(index: MergedIndex): HierarchyNode[] {
  * @param index - Merged index
  * @returns File dependency list
  */
-export function buildDependencies(index: MergedIndex): FileDependency[] {
+function buildDependencies(index: MergedIndex): FileDependency[] {
   const dependencies: FileDependency[] = [];
 
   // Build declaration location lookup

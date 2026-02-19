@@ -240,7 +240,7 @@ export type DirectiveData =
  * `define ASSERT(cond) assert(cond) else $error("Assertion failed")
  * ```
  */
-export interface DefineData {
+interface DefineData {
   kind: 'define';
 
   /** Macro name (e.g., "WIDTH", "MAX") */
@@ -268,7 +268,7 @@ export interface DefineData {
  *
  * `undef removes a previously defined macro.
  */
-export interface UndefData {
+interface UndefData {
   kind: 'undef';
 
   /** Name of macro to undefine */
@@ -288,7 +288,7 @@ export interface UndefData {
  * `include <uvm_macros.svh>
  * ```
  */
-export interface IncludeData {
+interface IncludeData {
   kind: 'include';
 
   /**
@@ -316,7 +316,7 @@ export interface IncludeData {
  *
  * `ifdef includes following code if macro IS defined.
  */
-export interface IfdefData {
+interface IfdefData {
   kind: 'ifdef';
 
   /** Macro name to check */
@@ -328,7 +328,7 @@ export interface IfdefData {
  *
  * `ifndef includes following code if macro is NOT defined.
  */
-export interface IfndefData {
+interface IfndefData {
   kind: 'ifndef';
 
   /** Macro name to check */
@@ -340,7 +340,7 @@ export interface IfndefData {
  *
  * `elsif provides alternative condition in ifdef/ifndef chain.
  */
-export interface ElsifData {
+interface ElsifData {
   kind: 'elsif';
 
   /** Alternative condition to check */
@@ -352,7 +352,7 @@ export interface ElsifData {
  *
  * `else provides default case in ifdef/ifndef chain.
  */
-export interface ElseData {
+interface ElseData {
   kind: 'else';
   // No additional data needed
 }
@@ -362,7 +362,7 @@ export interface ElseData {
  *
  * `endif closes an ifdef/ifndef block.
  */
-export interface EndifData {
+interface EndifData {
   kind: 'endif';
   // No additional data needed
 }
@@ -380,7 +380,7 @@ export interface EndifData {
  * `timescale 100ps/10ps
  * ```
  */
-export interface TimescaleData {
+interface TimescaleData {
   kind: 'timescale';
 
   /** Time unit (e.g., "1ns", "100ps") */
@@ -401,7 +401,7 @@ export interface TimescaleData {
  * `default_nettype wire  // Default behavior
  * ```
  */
-export interface DefaultNettypeData {
+interface DefaultNettypeData {
   kind: 'default_nettype';
 
   /** Net type (e.g., "wire", "none", "tri") */
@@ -419,7 +419,7 @@ export interface DefaultNettypeData {
  * `pragma protect end
  * ```
  */
-export interface PragmaData {
+interface PragmaData {
   kind: 'pragma';
 
   /** Raw pragma text */
@@ -431,7 +431,7 @@ export interface PragmaData {
  *
  * `resetall resets all compiler directives to defaults.
  */
-export interface ResetallData {
+interface ResetallData {
   kind: 'resetall';
   // No additional data needed
 }
@@ -450,7 +450,7 @@ export interface ResetallData {
  * import "DPI-C" pure function real sin(input real x);
  * ```
  */
-export interface DpiImportData {
+interface DpiImportData {
   kind: 'dpi_import';
 
   /** Whether function uses "context" (can call back into SV) */
@@ -479,7 +479,7 @@ export interface DpiImportData {
  * export "DPI-C" function sv_callback;
  * ```
  */
-export interface DpiExportData {
+interface DpiExportData {
   kind: 'dpi_export';
 
   /** Exported function name */
@@ -498,7 +498,7 @@ export interface DpiExportData {
  * `line 100 "original_file.sv" 0
  * ```
  */
-export interface LineData {
+interface LineData {
   kind: 'line';
 
   /** New line number to report */

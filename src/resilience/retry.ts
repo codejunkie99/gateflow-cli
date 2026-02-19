@@ -10,7 +10,7 @@ import { RetryableError, RateLimitError, classifyError } from '../error/classes.
 // Retry Policy Types
 // ============================================================================
 
-export interface RetryPolicy {
+interface RetryPolicy {
     maxAttempts: number;
     initialDelay: number;
     maxDelay: number;
@@ -21,7 +21,7 @@ export interface RetryPolicy {
     timeBudgetMs?: number;
 }
 
-export interface RetryContext {
+interface RetryContext {
     attempt: number;
     totalAttempts: number;
     lastError?: Error;
@@ -29,7 +29,7 @@ export interface RetryContext {
     correlationId?: string;
 }
 
-export interface RetryResult<T> {
+interface RetryResult<T> {
     success: boolean;
     result?: T;
     error?: Error;
@@ -98,7 +98,7 @@ export const RETRY_POLICIES: Record<string, RetryPolicy> = {
 /**
  * Calculate delay for exponential backoff
  */
-export function calculateBackoff(
+function calculateBackoff(
     attempt: number,
     policy: RetryPolicy
 ): number {
@@ -352,7 +352,7 @@ export async function withRetry<T>(
 /**
  * Execute an operation with retry and return detailed result
  */
-export async function withRetryResult<T>(
+async function withRetryResult<T>(
     operation: () => Promise<T>,
     policy: RetryPolicy
 ): Promise<RetryResult<T>> {
@@ -476,7 +476,7 @@ export class RetryPolicyBuilder {
 /**
  * Create a retryable version of a function
  */
-export function retryable<TArgs extends unknown[], TResult>(
+function retryable<TArgs extends unknown[], TResult>(
     fn: (...args: TArgs) => Promise<TResult>,
     policy: RetryPolicy
 ): (...args: TArgs) => Promise<TResult> {
@@ -486,7 +486,7 @@ export function retryable<TArgs extends unknown[], TResult>(
 /**
  * Retry decorator factory for class methods
  */
-export function Retry(policy: RetryPolicy) {
+function Retry(policy: RetryPolicy) {
     return function <T extends (...args: any[]) => Promise<any>>(
         _target: object,
         _propertyKey: string,
