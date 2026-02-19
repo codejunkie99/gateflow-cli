@@ -7,7 +7,7 @@
 // Metric Types
 // ============================================================================
 
-export interface Counter {
+interface Counter {
     /** Increment by 1 */
     inc(labels?: Record<string, string>): void;
     /** Increment by value */
@@ -18,7 +18,7 @@ export interface Counter {
     reset(): void;
 }
 
-export interface Gauge {
+interface Gauge {
     /** Set gauge value */
     set(value: number, labels?: Record<string, string>): void;
     /** Increment gauge */
@@ -29,7 +29,7 @@ export interface Gauge {
     get(labels?: Record<string, string>): number;
 }
 
-export interface Histogram {
+interface Histogram {
     /** Record an observation */
     observe(value: number, labels?: Record<string, string>): void;
     /** Start a timer, returns function to stop and record */
@@ -38,7 +38,7 @@ export interface Histogram {
     get(labels?: Record<string, string>): HistogramData;
 }
 
-export interface HistogramData {
+interface HistogramData {
     count: number;
     sum: number;
     buckets: Map<number, number>;
@@ -249,7 +249,7 @@ class HistogramImpl implements Histogram {
 // Metrics Registry
 // ============================================================================
 
-export class MetricsRegistry {
+class MetricsRegistry {
     private counters = new Map<string, CounterImpl>();
     private gauges = new Map<string, GaugeImpl>();
     private histograms = new Map<string, HistogramImpl>();
@@ -363,7 +363,7 @@ export class MetricsRegistry {
 // Global Registry and Pre-defined Metrics
 // ============================================================================
 
-export const registry = new MetricsRegistry();
+const registry = new MetricsRegistry();
 
 /**
  * Pre-defined metrics for GateFlow
@@ -474,6 +474,6 @@ export const metrics = {
 /**
  * Get the global metrics registry
  */
-export function getMetricsRegistry(): MetricsRegistry {
+function getMetricsRegistry(): MetricsRegistry {
     return registry;
 }

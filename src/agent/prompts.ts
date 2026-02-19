@@ -34,7 +34,7 @@ export type PromptMode =
  * - Only tool names provided in context
  * - Agent must call describe_tool for full details
  */
-export function getMinimalToolSection(enableOptimization: boolean = true): string {
+function getMinimalToolSection(enableOptimization: boolean = true): string {
     if (!enableOptimization) {
         // Return empty - full tool descriptions will be in the SDK tool definitions
         return '';
@@ -83,7 +83,7 @@ If a server needs re-authentication, inform the user. MCP tool definitions are s
 // System Prompt Options
 // ============================================================================
 
-export interface SystemPromptOptions {
+interface SystemPromptOptions {
     /** Enable minimal tool list optimization (default: true) */
     enableToolOptimization?: boolean;
     /** Lint errors for lint_fix mode */

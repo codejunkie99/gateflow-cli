@@ -43,7 +43,7 @@ interface InternalSignal {
 // VCD Provider Configuration
 // ============================================================================
 
-export interface VCDProviderConfig {
+interface VCDProviderConfig {
     /** Maximum signals to parse (default: 10000) */
     maxSignals?: number;
     /** Maximum timestamps to parse (default: unlimited for FST-style, 100000 for full load) */

@@ -23,7 +23,7 @@ import type { ModelConfig, ProviderInfo } from './model-provider.js';
  * NOTE: Pricing is normalized to per-1M tokens on ingest for consistency
  * with filesystem cache format. Original API returns per-token pricing.
  */
-export interface OpenRouterModel {
+interface OpenRouterModel {
     id: string;
     name: string;
     context_length: number;
@@ -61,7 +61,7 @@ export interface OpenRouterModel {
     created?: number;
 }
 
-export interface OpenRouterModelsResponse {
+interface OpenRouterModelsResponse {
     data: OpenRouterModel[];
 }
 
@@ -296,7 +296,7 @@ function getFallbackModels(): Map<string, OpenRouterModel> {
 /**
  * Get model metadata by ID.
  */
-export function getOpenRouterModel(modelId: string): OpenRouterModel | undefined {
+function getOpenRouterModel(modelId: string): OpenRouterModel | undefined {
     return cachedModels?.get(modelId);
 }
 
@@ -304,14 +304,14 @@ export function getOpenRouterModel(modelId: string): OpenRouterModel | undefined
  * Extract provider name from model ID.
  * e.g., "anthropic/claude-sonnet-4" → "anthropic"
  */
-export function getProviderFromId(modelId: string): string {
+function getProviderFromId(modelId: string): string {
     return modelId.split('/')[0] || 'unknown';
 }
 
 /**
  * Get models grouped by provider.
  */
-export function getModelsByProvider(): Map<string, OpenRouterModel[]> {
+function getModelsByProvider(): Map<string, OpenRouterModel[]> {
     const grouped = new Map<string, OpenRouterModel[]>();
 
     if (!cachedModels) {
@@ -340,7 +340,7 @@ export function getAllModelIds(): string[] {
  * @param model - The model to check
  * @param param - Parameter name (e.g., "tools", "tool_choice", "stream")
  */
-export function modelSupportsParameter(model: OpenRouterModel, param: string): boolean {
+function modelSupportsParameter(model: OpenRouterModel, param: string): boolean {
     return model.supported_parameters?.includes(param) ?? false;
 }
 
@@ -348,7 +348,7 @@ export function modelSupportsParameter(model: OpenRouterModel, param: string): b
  * Get models with tool support.
  * Checks for "tools" in supported_parameters array.
  */
-export function getModelsSupportingTools(): OpenRouterModel[] {
+function getModelsSupportingTools(): OpenRouterModel[] {
     if (!cachedModels) return [];
 
     return Array.from(cachedModels.values()).filter(model =>
@@ -360,7 +360,7 @@ export function getModelsSupportingTools(): OpenRouterModel[] {
  * Get models with structured output support.
  * Checks for "structured_outputs" or "response_format" in supported_parameters.
  */
-export function getModelsSupportingStructuredOutput(): OpenRouterModel[] {
+function getModelsSupportingStructuredOutput(): OpenRouterModel[] {
     if (!cachedModels) return [];
 
     return Array.from(cachedModels.values()).filter(model =>
@@ -388,7 +388,7 @@ export function getModelPricing(modelId: string): { prompt: string; completion: 
 /**
  * Clear model cache (useful for testing).
  */
-export function clearCache(): void {
+function clearCache(): void {
     cachedModels = null;
     lastFetchTime = null;
 }
@@ -474,7 +474,7 @@ const DIRECT_PROVIDER_PRICING: Record<string, { input: number; output: number }>
  * @param outputTokens - Number of output/completion tokens
  * @returns Cost in USD, or null if model not found
  */
-export function calculateCost(
+function calculateCost(
     modelId: string,
     inputTokens: number,
     outputTokens: number
@@ -573,7 +573,7 @@ export function getCostPerMillion(modelId: string): { input: number; output: num
  * @param modelId - The model ID
  * @returns Object with input/output cost per 1M tokens, or null if not found
  */
-export async function getCostPerMillionAsync(modelId: string): Promise<{ input: number; output: number } | null> {
+async function getCostPerMillionAsync(modelId: string): Promise<{ input: number; output: number } | null> {
     // Ensure cache is populated
     if (!cachedModels) {
         try {
@@ -590,7 +590,7 @@ export async function getCostPerMillionAsync(modelId: string): Promise<{ input: 
  * Call this at startup to have pricing available synchronously later.
  * No API key required - OpenRouter pricing is public.
  */
-export async function ensurePricingLoaded(): Promise<void> {
+async function ensurePricingLoaded(): Promise<void> {
     if (cachedModels) return;
     try {
         await fetchOpenRouterModels();
@@ -606,7 +606,7 @@ export async function ensurePricingLoaded(): Promise<void> {
  * @param modelIds - Array of model IDs to compare
  * @param outputWeight - Weight for output tokens (default: 3, assuming 1:3 input:output ratio)
  */
-export function sortModelsByCost(
+function sortModelsByCost(
     modelIds: string[],
     outputWeight: number = 3
 ): string[] {
@@ -630,7 +630,7 @@ export function sortModelsByCost(
  * @param modelIds - Array of model IDs to check
  * @returns The cheapest tool-supporting model ID, or null if none found
  */
-export function getCheapestToolModel(modelIds?: string[]): string | null {
+function getCheapestToolModel(modelIds?: string[]): string | null {
     const ids = modelIds || (cachedModels ? Array.from(cachedModels.keys()) : []);
     const toolModels = ids.filter(id => {
         const model = cachedModels?.get(id);
@@ -703,7 +703,7 @@ export function getModelCapabilities(modelId: string): ModelCapabilities | null 
  * @param modelId - The model ID to check
  * @returns True if model supports both capabilities
  */
-export function isModelCompatible(modelId: string): boolean {
+function isModelCompatible(modelId: string): boolean {
     const caps = getModelCapabilities(modelId);
     return caps !== null && caps.tools && caps.structuredOutputs;
 }

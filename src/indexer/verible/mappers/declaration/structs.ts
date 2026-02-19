@@ -51,7 +51,7 @@ function extractFields(node: VeribleNode): FieldInfo[] {
 /**
  * Visit a struct type within a typedef declaration.
  */
-export function visitStructType(
+function visitStructType(
   structNode: VeribleNode,
   typedefName: string,
   context: MapperContext
@@ -80,7 +80,7 @@ export function visitStructType(
 /**
  * Visit a union type within a typedef declaration.
  */
-export function visitUnionType(
+function visitUnionType(
   unionNode: VeribleNode,
   typedefName: string,
   context: MapperContext

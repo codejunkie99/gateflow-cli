@@ -71,7 +71,7 @@ export interface GateFlowError {
     correlationId?: string;
 }
 
-export interface AggregatedError {
+interface AggregatedError {
     errors: GateFlowError[];
     summary: string;
     partialSuccess: boolean;
@@ -83,7 +83,7 @@ export interface AggregatedError {
 // Tool Result Types
 // ============================================================================
 
-export type ToolResult<T> =
+type ToolResult<T> =
     | { success: true; data: T }
     | { success: false; error: GateFlowError };
 
@@ -130,7 +130,7 @@ export function createGateFlowError(
     };
 }
 
-export function createToolError(
+function createToolError(
     code: GateFlowErrorCode,
     message: string,
     toolName: string,
@@ -141,7 +141,7 @@ export function createToolError(
     });
 }
 
-export function createAPIError(
+function createAPIError(
     code: GateFlowErrorCode,
     message: string,
     status?: number,
@@ -156,11 +156,11 @@ export function createAPIError(
 // Error Classification
 // ============================================================================
 
-export function isRetryableCode(code: GateFlowErrorCode): boolean {
+function isRetryableCode(code: GateFlowErrorCode): boolean {
     return RETRYABLE_CODES.has(code);
 }
 
-export function isFatalCode(code: GateFlowErrorCode): boolean {
+function isFatalCode(code: GateFlowErrorCode): boolean {
     return FATAL_CODES.has(code);
 }
 
@@ -168,7 +168,7 @@ export function isRetryableError(error: GateFlowError): boolean {
     return error.retryable;
 }
 
-export function isGateFlowError(error: unknown): error is GateFlowError {
+function isGateFlowError(error: unknown): error is GateFlowError {
     if (!error || typeof error !== 'object') return false;
     const err = error as Record<string, unknown>;
     return typeof err.code === 'number'
@@ -176,7 +176,7 @@ export function isGateFlowError(error: unknown): error is GateFlowError {
         && typeof err.retryable === 'boolean';
 }
 
-export function getErrorCategory(code: GateFlowErrorCode): string {
+function getErrorCategory(code: GateFlowErrorCode): string {
     if (code >= 1000 && code < 2000) return 'tool';
     if (code >= 2000 && code < 3000) return 'file';
     if (code >= 3000 && code < 4000) return 'api';
@@ -191,7 +191,7 @@ export function getErrorCategory(code: GateFlowErrorCode): string {
 // Error Aggregation
 // ============================================================================
 
-export function aggregateErrors(
+function aggregateErrors(
     errors: GateFlowError[],
     successful: string[] = [],
     failed: string[] = []
@@ -214,7 +214,7 @@ export function aggregateErrors(
 // Error Serialization
 // ============================================================================
 
-export function serializeError(error: GateFlowError): string {
+function serializeError(error: GateFlowError): string {
     return JSON.stringify({
         code: error.code,
         message: error.message,
@@ -226,7 +226,7 @@ export function serializeError(error: GateFlowError): string {
     });
 }
 
-export function deserializeError(json: string): GateFlowError | null {
+function deserializeError(json: string): GateFlowError | null {
     try {
         const parsed = JSON.parse(json);
         if (typeof parsed.code === 'number' && typeof parsed.message === 'string') {

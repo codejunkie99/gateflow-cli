@@ -150,7 +150,7 @@ export function isLocationId(id: string): boolean {
  * extractLocationHash('invalid');               // null
  * ```
  */
-export function extractLocationHash(id: string): string | null {
+function extractLocationHash(id: string): string | null {
   if (!isLocationId(id)) {
     return null;
   }

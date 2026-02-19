@@ -64,7 +64,7 @@ export type PrepareStepFn = (context: StepContext) => Promise<StepSettings> | St
  * Phase configuration for phased execution.
  * Use LanguageModel objects for model overrides to avoid AI Gateway fallback.
  */
-export interface Phase {
+interface Phase {
     /** Phase name */
     name: string;
     /** Step range [start, end) */
@@ -118,7 +118,7 @@ export function contextWindowManager(config: {
  * Configuration for dynamic model selection.
  * Accepts LanguageModel objects to avoid AI Gateway fallback.
  */
-export interface DynamicModelSelectorConfig {
+interface DynamicModelSelectorConfig {
     /** Default model to use for simple tasks */
     defaultModel: LanguageModel;
     /** Model to use for complex tasks (errors, long context) */
@@ -227,7 +227,7 @@ export function phasedExecution(phases: Phase[]): PrepareStepFn {
 /**
  * Budget configuration for prepareStep handlers.
  */
-export interface BudgetConfig {
+interface BudgetConfig {
     maxInputTokens: number;
     maxOutputTokens: number;
     onBudgetExceeded: 'stop' | 'summarize' | 'trim';
@@ -310,7 +310,7 @@ export function budgetAwareExecution(config: BudgetConfig): PrepareStepFn {
 /**
  * Budget controller configuration.
  */
-export interface BudgetControllerConfig {
+interface BudgetControllerConfig {
     /** Maximum input tokens before stopping */
     maxInputTokens: number;
     /** Maximum output tokens before stopping */
@@ -320,7 +320,7 @@ export interface BudgetControllerConfig {
 /**
  * Budget controller return type - bundles prepareStep and stopWhen together.
  */
-export interface BudgetController {
+interface BudgetController {
     /** PrepareStep function (currently a no-op, reserved for future budget-aware features) */
     prepareStep: PrepareStepFn;
     /** StopWhen condition that stops when budget is exceeded */
@@ -349,7 +349,7 @@ export interface BudgetController {
  *   stopWhen: stopWhenAny(maxSteps(25), budget.stopWhen)
  * });
  */
-export function createBudgetController(config: BudgetControllerConfig): BudgetController {
+function createBudgetController(config: BudgetControllerConfig): BudgetController {
     const { maxInputTokens, maxOutputTokens } = config;
 
     // PrepareStep is a no-op for 'stop' mode - all logic is in stopWhen
@@ -415,7 +415,7 @@ export function combinePrepareSteps(...fns: PrepareStepFn[]): PrepareStepFn {
  * Configuration for continuation warning injection.
  * All step values are 1-indexed (human-readable step counts).
  */
-export interface ContinuationWarningConfig {
+interface ContinuationWarningConfig {
     /** Step number to start showing warning, 1-indexed (default: 20) */
     warningStep?: number;
     /** Step number to show critical warning, 1-indexed (default: 23) */
@@ -479,4 +479,4 @@ export function continuationWarning(config: ContinuationWarningConfig = {}): Pre
 }
 
 // Re-export stepCountIs for convenience
-export { stepCountIs };
+;

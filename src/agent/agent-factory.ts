@@ -31,7 +31,7 @@ import { getAllModelCapabilities, type ModelCapabilities as OpenRouterCapabiliti
 /**
  * Extended Tool type with optional execute for needsApproval pattern
  */
-export interface ApprovalAwareTool {
+interface ApprovalAwareTool {
     description: string;
     inputSchema: ToolSpec['parameters'];
     /**
@@ -299,7 +299,7 @@ export function toolNeedsApproval(toolName: string, autoApprove: boolean = false
  *
  * @returns Array of tool names that need approval
  */
-export function getToolsRequiringApproval(): string[] {
+function getToolsRequiringApproval(): string[] {
     return Object.entries(TOOL_APPROVAL_CONFIG)
         .filter(([_, needsApproval]) => needsApproval)
         .map(([name]) => name);
@@ -310,7 +310,7 @@ export function getToolsRequiringApproval(): string[] {
  *
  * @returns Array of tool names that don't need approval
  */
-export function getAutoApprovedTools(): string[] {
+function getAutoApprovedTools(): string[] {
     return Object.entries(TOOL_APPROVAL_CONFIG)
         .filter(([_, needsApproval]) => !needsApproval)
         .map(([name]) => name);

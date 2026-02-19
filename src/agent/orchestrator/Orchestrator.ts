@@ -73,7 +73,7 @@ export interface OrchestratorResult {
     tasksSucceeded: number;
 }
 
-export interface OrchestratorConfig {
+interface OrchestratorConfig {
     indexer?: SVIndexerAdapter;
     memoryService?: MemoryService;
     dependencyFailurePolicy?: DependencyFailurePolicy;
@@ -116,7 +116,7 @@ interface ExecutionContext {
 /**
  * Structured abort reason for debugging and UX.
  */
-export interface AbortReason {
+interface AbortReason {
     type: 'user' | 'timeout' | 'dependency_failed' | 'task_failed' | 'unknown';
     taskId?: string;
     message?: string;

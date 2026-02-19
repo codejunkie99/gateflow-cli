@@ -64,12 +64,12 @@
 export {
   // Main class
   FileUnderstander,
-  createFileUnderstander,
+  
 
   // Batch processing
   understandFiles,
-  type UnderstandFilesResult,
+  
 
   // Options and types
-  type FileUnderstanderOptions,
+  
 } from './file-understander.js';

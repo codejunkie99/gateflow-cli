@@ -52,7 +52,7 @@ function useTerminalSize(): { columns: number; rows: number } {
 }
 
 function useStoreState(store: InkStore) {
-    const [state, setState] = useState(store.getState());
+    const [state, setState] = useState(() => store.getState());
     React.useEffect(() => {
         const unsubscribe = store.subscribe(() => setState(store.getState()));
         return unsubscribe;
@@ -61,7 +61,7 @@ function useStoreState(store: InkStore) {
 }
 
 function usePromptState(controller: PromptController) {
-    const [state, setState] = useState(controller.getState());
+    const [state, setState] = useState(() => controller.getState());
     React.useEffect(() => {
         const unsubscribe = controller.subscribe(() => setState(controller.getState()));
         return unsubscribe;
@@ -284,7 +284,7 @@ function LinePrompt({ request, controller }: { request: PromptRequest; controlle
                     flexShrink={0}
                 >
                     {lines.map((line, idx) => (
-                        <Text key={`line-${idx}`} wrap="truncate">
+                        <Text key={startIndex + idx} wrap="truncate">
                             {showPrompt && idx === 0 ? <Text color="cyan">{prompt}</Text> : null}
                             {line}
                             {idx === lines.length - 1 ? <Text color="gray">▌</Text> : null}
@@ -325,8 +325,6 @@ function LinePrompt({ request, controller }: { request: PromptRequest; controlle
 }
 
 function TextPrompt({ request, controller }: { request: PromptRequest; controller: PromptController }) {
-    if (request.kind !== 'text') return null;
-    const payload = request.payload;
     const [value, setValue] = useState('');
     const [error, setError] = useState<string | null>(null);
 
@@ -336,10 +334,14 @@ function TextPrompt({ request, controller }: { request: PromptRequest; controlle
     }, [request.id]);
 
     useInput((_input, key) => {
+        if (request.kind !== 'text') return;
         if (key.escape) {
             controller.cancel();
         }
     });
+
+    if (request.kind !== 'text') return null;
+    const payload = request.payload;
 
     const handleSubmit = (val: string) => {
         if (payload.validate) {
@@ -377,11 +379,13 @@ function MenuPrompt<T>({
     request: PromptRequest;
     controller: PromptController;
 }) {
-    if (request.kind !== 'menu') return null;
-    const payload = request.payload as { sections: MenuSection<T>[]; options?: any };
-    const options = payload.options ?? {};
+    const isMenu = request.kind === 'menu';
+    const payload = isMenu ? (request.payload as { sections: MenuSection<T>[]; options?: any }) : null;
+    const options = payload?.options ?? {};
     const searchable = options.searchable ?? false;
     const maxVisibleItems = options.maxVisibleItems ?? 10;
+    const sections = payload?.sections;
+
     const [searchQuery, setSearchQuery] = useState('');
     const [selectedIndex, setSelectedIndex] = useState(0);
     const [scrollOffset, setScrollOffset] = useState(0);
@@ -393,13 +397,14 @@ function MenuPrompt<T>({
     }, [request.id]);
 
     const flatItems = useMemo(() => {
+        if (!sections) return [];
         const items: {
             item: MenuItem<T>;
             sectionIndex: number;
             sectionTitle: string;
             sectionHeaderColor?: (text: string) => string;
         }[] = [];
-        payload.sections.forEach((section, sectionIndex) => {
+        sections.forEach((section, sectionIndex) => {
             section.items.forEach(item => {
                 items.push({
                     item,
@@ -410,7 +415,7 @@ function MenuPrompt<T>({
             });
         });
         return items;
-    }, [payload.sections]);
+    }, [sections]);
 
     const filteredItems = useMemo(() => {
         if (!searchable || !searchQuery) return flatItems;
@@ -483,6 +488,7 @@ function MenuPrompt<T>({
     };
 
     useInput((input, key) => {
+        if (!isMenu) return;
         if (key.escape) {
             controller.cancel();
             return;
@@ -531,6 +537,8 @@ function MenuPrompt<T>({
             }
         }
     });
+
+    if (!isMenu) return null;
 
     const title = options.title ? String(options.title) : '';
     const help = options.showHelp !== false

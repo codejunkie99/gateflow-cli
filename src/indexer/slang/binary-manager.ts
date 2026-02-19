@@ -26,17 +26,17 @@ const execPromise = promisify(exec);
 /**
  * Platform identifier for binary selection.
  */
-export type Platform = 'win32' | 'darwin' | 'linux';
+type Platform = 'win32' | 'darwin' | 'linux';
 
 /**
  * Architecture identifier for binary selection.
  */
-export type Architecture = 'x64' | 'arm64';
+type Architecture = 'x64' | 'arm64';
 
 /**
  * Binary location result.
  */
-export interface BinaryLocation {
+interface BinaryLocation {
   /** Path to the binary */
   path: string;
 
@@ -50,7 +50,7 @@ export interface BinaryLocation {
 /**
  * Download progress callback.
  */
-export type DownloadProgressCallback = (progress: {
+type DownloadProgressCallback = (progress: {
   phase: 'fetching' | 'downloading' | 'extracting' | 'done';
   percent?: number;
   message: string;
@@ -130,7 +130,7 @@ const ARCHIVE_EXTENSION: Record<Platform, string> = {
 /**
  * Manages slang binary discovery and execution.
  */
-export class SlangBinaryManager {
+class SlangBinaryManager {
   private cachedPath?: BinaryLocation;
   private readonly platform: Platform;
   private readonly arch: Architecture;
@@ -693,7 +693,7 @@ export async function isSlangAvailable(): Promise<boolean> {
 /**
  * Download slang binaries (convenience function).
  */
-export async function downloadSlang(onProgress?: DownloadProgressCallback): Promise<string> {
+async function downloadSlang(onProgress?: DownloadProgressCallback): Promise<string> {
   return slangBinaryManager.downloadSlang(onProgress);
 }
 

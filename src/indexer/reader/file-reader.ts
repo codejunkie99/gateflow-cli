@@ -126,7 +126,7 @@ export async function readFile(filePath: string): Promise<FileReadResult> {
  * }
  * ```
  */
-export async function readFiles(
+async function readFiles(
   filePaths: string[],
   concurrency = 10
 ): Promise<ReadFilesResult[]> {
@@ -169,7 +169,7 @@ export async function readFiles(
 /**
  * Result from batch file reading.
  */
-export type ReadFilesResult =
+type ReadFilesResult =
   | {
       success: true;
       path: string;
@@ -207,7 +207,7 @@ export type ReadFilesResult =
  * }
  * ```
  */
-export async function checkFileChanged(
+async function checkFileChanged(
   filePath: string,
   existingRecord: FileRecord
 ): Promise<FileChangeResult> {
@@ -251,7 +251,7 @@ export async function checkFileChanged(
 /**
  * Result from checking if file changed.
  */
-export interface FileChangeResult {
+interface FileChangeResult {
   changed: boolean;
   reason: 'mtime' | 'size' | 'hash' | 'deleted' | 'unchanged';
   newMtime?: number;
@@ -270,7 +270,7 @@ export interface FileChangeResult {
  * @param existingHash - Previously computed hash
  * @returns True if content hash changed
  */
-export async function checkHashChanged(
+async function checkHashChanged(
   filePath: string,
   existingHash: string
 ): Promise<boolean> {
@@ -353,7 +353,7 @@ function generateFileId(filePath: string, contentHash: string): string {
  * @param filePath - Path to check
  * @returns True if file exists and is readable
  */
-export async function fileExists(filePath: string): Promise<boolean> {
+async function fileExists(filePath: string): Promise<boolean> {
   try {
     await fs.access(filePath, fs.constants.R_OK);
     return true;
@@ -368,7 +368,7 @@ export async function fileExists(filePath: string): Promise<boolean> {
  * @param filePath - Path to check
  * @returns True if file has .sv, .svh, .v, or .vh extension
  */
-export function isSystemVerilogFile(filePath: string): boolean {
+function isSystemVerilogFile(filePath: string): boolean {
   const ext = path.extname(filePath).toLowerCase();
   return ['.sv', '.svh', '.v', '.vh'].includes(ext);
 }
@@ -379,7 +379,7 @@ export function isSystemVerilogFile(filePath: string): boolean {
  * @param filePath - Path to check
  * @returns True if file has .f extension
  */
-export function isFilelistFile(filePath: string): boolean {
+function isFilelistFile(filePath: string): boolean {
   const ext = path.extname(filePath).toLowerCase();
   return ext === '.f';
 }

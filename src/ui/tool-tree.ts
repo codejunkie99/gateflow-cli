@@ -9,7 +9,7 @@ import chalk from 'chalk';
 // Types
 // ============================================================================
 
-export interface ToolCallNode {
+interface ToolCallNode {
     tool: string;
     args: string;
     startTime: number;
@@ -20,7 +20,7 @@ export interface ToolCallNode {
     };
 }
 
-export interface ToolTreeOptions {
+interface ToolTreeOptions {
     unicode?: boolean;
 }
 

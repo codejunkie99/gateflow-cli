@@ -13,7 +13,7 @@ import { GateFlowErrorCode } from './types.js';
  * Base error class for all GateFlow API errors
  * Following Anthropic SDK error class pattern
  */
-export class GateFlowAPIError extends Error {
+class GateFlowAPIError extends Error {
     public readonly code: GateFlowErrorCode;
     public readonly timestamp: number;
 
@@ -75,7 +75,7 @@ export class RateLimitError extends GateFlowAPIError {
 /**
  * Authentication failed (HTTP 401)
  */
-export class AuthenticationError extends GateFlowAPIError {
+class AuthenticationError extends GateFlowAPIError {
     constructor(message: string, requestId?: string) {
         super(401, message, GateFlowErrorCode.API_AUTHENTICATION, undefined, requestId);
         this.name = 'AuthenticationError';
@@ -85,7 +85,7 @@ export class AuthenticationError extends GateFlowAPIError {
 /**
  * Permission denied (HTTP 403)
  */
-export class PermissionDeniedError extends GateFlowAPIError {
+class PermissionDeniedError extends GateFlowAPIError {
     constructor(message: string, requestId?: string) {
         super(403, message, GateFlowErrorCode.TOOL_PERMISSION_DENIED, undefined, requestId);
         this.name = 'PermissionDeniedError';
@@ -95,7 +95,7 @@ export class PermissionDeniedError extends GateFlowAPIError {
 /**
  * Bad request (HTTP 400)
  */
-export class BadRequestError extends GateFlowAPIError {
+class BadRequestError extends GateFlowAPIError {
     constructor(message: string, code?: GateFlowErrorCode, requestId?: string) {
         super(400, message, code ?? GateFlowErrorCode.TOOL_INVALID_ARGS, undefined, requestId);
         this.name = 'BadRequestError';
@@ -105,7 +105,7 @@ export class BadRequestError extends GateFlowAPIError {
 /**
  * Context length exceeded (HTTP 400 with specific error)
  */
-export class ContextLengthExceededError extends GateFlowAPIError {
+class ContextLengthExceededError extends GateFlowAPIError {
     constructor(
         message: string,
         public readonly tokenCount?: number,
@@ -120,7 +120,7 @@ export class ContextLengthExceededError extends GateFlowAPIError {
 /**
  * API timeout (HTTP 408)
  */
-export class APITimeoutError extends GateFlowAPIError {
+class APITimeoutError extends GateFlowAPIError {
     constructor(message: string, public readonly timeoutMs?: number, requestId?: string) {
         super(408, message, GateFlowErrorCode.API_TIMEOUT, undefined, requestId);
         this.name = 'APITimeoutError';
@@ -130,7 +130,7 @@ export class APITimeoutError extends GateFlowAPIError {
 /**
  * Internal server error (HTTP 5xx)
  */
-export class InternalServerError extends GateFlowAPIError {
+class InternalServerError extends GateFlowAPIError {
     constructor(message: string, status: number = 500, requestId?: string) {
         super(status, message, GateFlowErrorCode.API_INVALID_RESPONSE, undefined, requestId);
         this.name = 'InternalServerError';
@@ -140,7 +140,7 @@ export class InternalServerError extends GateFlowAPIError {
 /**
  * API connection failed
  */
-export class APIConnectionError extends GateFlowAPIError {
+class APIConnectionError extends GateFlowAPIError {
     constructor(message: string, public readonly cause?: Error) {
         super(0, message, GateFlowErrorCode.API_CONNECTION_FAILED);
         this.name = 'APIConnectionError';
@@ -193,7 +193,7 @@ export class RetryableError extends Error {
 /**
  * Fatal error that should not be retried
  */
-export class FatalError extends Error {
+class FatalError extends Error {
     public readonly timestamp: number;
 
     constructor(message: string, public readonly cause?: Error) {
@@ -214,7 +214,7 @@ export class FatalError extends Error {
 /**
  * Tool execution failed
  */
-export class ToolExecutionError extends Error {
+class ToolExecutionError extends Error {
     public readonly code: GateFlowErrorCode;
     public readonly timestamp: number;
 
@@ -256,7 +256,7 @@ export class ToolTimeoutError extends ToolExecutionError {
 /**
  * Tool not found error
  */
-export class ToolNotFoundError extends Error {
+class ToolNotFoundError extends Error {
     public readonly code = GateFlowErrorCode.TOOL_NOT_FOUND;
     public readonly timestamp: number;
 
@@ -274,7 +274,7 @@ export class ToolNotFoundError extends Error {
 /**
  * Invalid tool input error
  */
-export class InvalidToolInputError extends Error {
+class InvalidToolInputError extends Error {
     public readonly code = GateFlowErrorCode.TOOL_INVALID_ARGS;
     public readonly timestamp: number;
 
@@ -297,27 +297,27 @@ export class InvalidToolInputError extends Error {
 // Type Guards
 // ============================================================================
 
-export function isGateFlowAPIError(error: unknown): error is GateFlowAPIError {
+function isGateFlowAPIError(error: unknown): error is GateFlowAPIError {
     return error instanceof GateFlowAPIError;
 }
 
-export function isRateLimitError(error: unknown): error is RateLimitError {
+function isRateLimitError(error: unknown): error is RateLimitError {
     return error instanceof RateLimitError;
 }
 
-export function isAuthenticationError(error: unknown): error is AuthenticationError {
+function isAuthenticationError(error: unknown): error is AuthenticationError {
     return error instanceof AuthenticationError;
 }
 
-export function isRetryableError(error: unknown): error is RetryableError {
+function isRetryableError(error: unknown): error is RetryableError {
     return error instanceof RetryableError;
 }
 
-export function isFatalError(error: unknown): error is FatalError {
+function isFatalError(error: unknown): error is FatalError {
     return error instanceof FatalError;
 }
 
-export function isToolExecutionError(error: unknown): error is ToolExecutionError {
+function isToolExecutionError(error: unknown): error is ToolExecutionError {
     return error instanceof ToolExecutionError;
 }
 
@@ -357,7 +357,7 @@ export function classifyError(error: unknown): 'retryable' | 'fatal' | 'unknown'
 /**
  * Wrap an unknown error in the appropriate error class
  */
-export function wrapError(error: unknown, context?: string): Error {
+function wrapError(error: unknown, context?: string): Error {
     if (error instanceof Error) {
         return error;
     }

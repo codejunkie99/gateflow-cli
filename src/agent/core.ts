@@ -76,7 +76,7 @@ import { AsyncMutex } from '../concurrency/index.js';
 // Types
 // ============================================================================
 
-export interface AgentConfig {
+interface AgentConfig {
     model: string;
     modelConfig?: ModelConfigWithVariant;
     /**
@@ -98,7 +98,7 @@ export interface AgentConfig {
     continuationPartialResultsMaxChars?: number;
 }
 
-export interface AgentSession {
+interface AgentSession {
     messages: ModelMessage[];
     turnCount: number;
     toolCallCount: number;
@@ -139,7 +139,7 @@ type WorkflowOutcome =
 /**
  * AI SDK 6: Type-safe call options for context injection
  */
-export interface AgentCallOptions {
+interface AgentCallOptions {
     /** Session ID for memory/context management */
     sessionId?: string;
     /** User ID for personalization */
@@ -158,7 +158,7 @@ export interface AgentCallOptions {
     };
 }
 
-export interface RunOptions {
+interface RunOptions {
     onToolCall?: (name: string, args: unknown) => void;
     onToolResult?: (name: string, result: unknown) => void;
     signal?: AbortSignal;
@@ -180,7 +180,7 @@ export interface RunOptions {
  * Checkpoint data from request_continuation tool.
  * Contains progress information for multi-segment execution.
  */
-export interface ContinuationCheckpoint {
+interface ContinuationCheckpoint {
     /** Tasks completed in this segment */
     completedTasks: string[];
     /** Tasks remaining to be done */
@@ -201,7 +201,7 @@ export interface ContinuationCheckpoint {
  * Options for runWithContinuation method.
  * Extends RunOptions with continuation-specific configuration.
  */
-export interface ContinuationOptions extends RunOptions {
+interface ContinuationOptions extends RunOptions {
     /** Maximum number of segments (default: 5, = 125 total steps). Ignored if dynamicSegments is true. */
     maxSegments?: number;
     /**

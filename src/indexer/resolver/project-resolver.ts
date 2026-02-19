@@ -717,6 +717,6 @@ export class ProjectResolver {
  * @param recipe - Optional recipe for include resolution
  * @returns New ProjectResolver instance
  */
-export function createProjectResolver(recipe?: Recipe): ProjectResolver {
+function createProjectResolver(recipe?: Recipe): ProjectResolver {
   return new ProjectResolver(recipe);
 }

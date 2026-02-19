@@ -26,7 +26,7 @@ import type { MergedIndex } from './index-merger.js';
 /**
  * Result from a "go to definition" query.
  */
-export interface DefinitionResult {
+interface DefinitionResult {
   /** Whether a definition was found */
   found: boolean;
 
@@ -40,7 +40,7 @@ export interface DefinitionResult {
 /**
  * Result from a "find all references" query.
  */
-export interface ReferencesResult {
+interface ReferencesResult {
   /** References found (resolved to this declaration) */
   references: Reference[];
 
@@ -60,7 +60,7 @@ export interface ReferencesResult {
 /**
  * Hover information for a symbol.
  */
-export interface HoverInfo {
+interface HoverInfo {
   /** Symbol kind */
   kind: DeclarationKind | 'reference' | 'instance';
 
@@ -83,7 +83,7 @@ export interface HoverInfo {
 /**
  * Symbol match from search.
  */
-export interface SymbolMatch {
+interface SymbolMatch {
   /** The declaration */
   declaration: Declaration;
 
@@ -97,7 +97,7 @@ export interface SymbolMatch {
 /**
  * Query interface for the merged index.
  */
-export interface IndexQuery {
+interface IndexQuery {
   /** Go to definition from a location */
   goToDefinition(file: string, line: number, col: number): DefinitionResult;
 
@@ -141,7 +141,7 @@ export interface IndexQuery {
 /**
  * Options for symbol search.
  */
-export interface SearchOptions {
+interface SearchOptions {
   /** Maximum results to return */
   limit?: number;
 
@@ -183,7 +183,7 @@ export interface SearchOptions {
  * }
  * ```
  */
-export class QueryAPI implements IndexQuery {
+class QueryAPI implements IndexQuery {
   private readonly index: MergedIndex;
 
   // Lookup tables built on construction
@@ -749,6 +749,6 @@ function locationKey(loc: Location): string {
  * @param index - Merged index
  * @returns Query API instance
  */
-export function createQueryAPI(index: MergedIndex): QueryAPI {
+function createQueryAPI(index: MergedIndex): QueryAPI {
   return new QueryAPI(index);
 }

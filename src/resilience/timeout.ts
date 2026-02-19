@@ -9,7 +9,7 @@ import { ToolTimeoutError } from '../error/classes.js';
 // Tool Categories and Timeouts
 // ============================================================================
 
-export type ToolCategory =
+type ToolCategory =
     | 'file'
     | 'edit'
     | 'search'
@@ -21,7 +21,7 @@ export type ToolCategory =
     | 'mcp'
     | 'setup';
 
-export interface TimeoutConfig {
+interface TimeoutConfig {
     default: number;
     byCategory: Record<ToolCategory, number>;
 }
@@ -29,7 +29,7 @@ export interface TimeoutConfig {
 /**
  * Default tool timeouts by category (in milliseconds)
  */
-export const TOOL_TIMEOUTS: TimeoutConfig = {
+const TOOL_TIMEOUTS: TimeoutConfig = {
     default: 30000, // 30 seconds
     byCategory: {
         file: 10000,           // 10s - File read/write operations
@@ -103,7 +103,7 @@ const TOOL_CATEGORIES: Record<string, ToolCategory> = {
 /**
  * Get timeout for a specific tool
  */
-export function getToolTimeout(toolName: string, config?: Partial<TimeoutConfig>): number {
+function getToolTimeout(toolName: string, config?: Partial<TimeoutConfig>): number {
     const category = TOOL_CATEGORIES[toolName];
     const timeouts = { ...TOOL_TIMEOUTS, ...config };
 
@@ -118,7 +118,7 @@ export function getToolTimeout(toolName: string, config?: Partial<TimeoutConfig>
  * Execute an operation with a timeout
  * @throws ToolTimeoutError if operation times out
  */
-export async function withTimeout<T>(
+async function withTimeout<T>(
     operation: () => Promise<T>,
     timeoutMs: number,
     operationName: string
@@ -217,7 +217,7 @@ export async function withAbortableTimeout<T>(
 /**
  * Create a timeout wrapper for a tool executor
  */
-export function createTimeoutWrapper<TArgs, TResult>(
+function createTimeoutWrapper<TArgs, TResult>(
     toolName: string,
     executor: (args: TArgs) => Promise<TResult>,
     timeoutOverride?: number
@@ -233,7 +233,7 @@ export function createTimeoutWrapper<TArgs, TResult>(
 // Timeout Configuration Builder
 // ============================================================================
 
-export class TimeoutConfigBuilder {
+class TimeoutConfigBuilder {
     private config: TimeoutConfig = { ...TOOL_TIMEOUTS };
 
     /**

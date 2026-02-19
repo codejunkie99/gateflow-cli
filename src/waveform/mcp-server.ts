@@ -15,7 +15,7 @@ import {
 import * as path from 'path';
 import { WaveformStore, type SignalMetadata, type EdgeType } from './store/index.js';
 
-export class WaveformMCPServer {
+class WaveformMCPServer {
     private server: Server;
     private store: WaveformStore;
 

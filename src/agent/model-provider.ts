@@ -32,7 +32,7 @@ import {
 import { modelCapabilities } from "./model-capabilities/index.js";
 
 // Re-export variant types and functions for convenience
-export type { VariantName, ModelConfigWithVariant, ModelVariantOptions };
+export type { VariantName, ModelConfigWithVariant,  };
 export { getVariantProviderOptions };
 
 // ============================================================================
@@ -67,7 +67,7 @@ export interface ProviderInfo {
  * Providers that support only `json_object` (no strict `json_schema` validation).
  * GateFlow requires strict schema validation for structured output workflows.
  */
-export const STRICT_SCHEMA_UNSUPPORTED_PROVIDERS: ReadonlySet<ProviderName> =
+const STRICT_SCHEMA_UNSUPPORTED_PROVIDERS: ReadonlySet<ProviderName> =
   new Set<ProviderName>(["deepseek", "zhipu"]);
 
 /**
@@ -271,7 +271,7 @@ export const PROVIDERS: Record<ProviderName, ProviderInfo> = {
  * - DeepSeek: Uses "sk-" prefix + 32 lowercase alphanumeric chars
  * - Zhipu: Two-part format with dot separator
  */
-export const API_KEY_PATTERNS: Record<
+const API_KEY_PATTERNS: Record<
   ProviderName,
   { regex: RegExp; description: string; example: string }
 > = {
@@ -343,7 +343,7 @@ export const API_KEY_PATTERNS: Record<
  * @param apiKey - API key to validate
  * @returns Validation result with details
  */
-export function validateKeyFormat(
+function validateKeyFormat(
   provider: ProviderName,
   apiKey: string,
 ): { valid: boolean; error?: string; hint?: string } {
@@ -555,7 +555,7 @@ export function createModel(
 /**
  * Error thrown when model string parsing fails.
  */
-export class ModelParseError extends Error {
+class ModelParseError extends Error {
   constructor(
     message: string,
     public readonly spec: string,
@@ -665,7 +665,7 @@ export function parseModelString(spec: string): ModelConfigWithVariant {
  * @param config - Model configuration to validate
  * @returns Validation result with error message if invalid
  */
-export function validateModelConfig(config: ModelConfig): {
+function validateModelConfig(config: ModelConfig): {
   valid: boolean;
   error?: string;
 } {
@@ -728,7 +728,7 @@ export function detectAvailableProviders(): ProviderName[] {
  * Priority: anthropic > openai > google > deepseek > zhipu > mistral > openrouter > ollama
  * @returns Default provider name, or null if none configured
  */
-export function getDefaultProvider(): ProviderName | null {
+function getDefaultProvider(): ProviderName | null {
   const available = detectAvailableProviders();
   return available.length > 0 ? available[0] : null;
 }
@@ -745,7 +745,7 @@ export function hasAnyProvider(): boolean {
  * Get the default model config based on available providers.
  * @returns ModelConfig for the first available provider, or Anthropic default
  */
-export function getDefaultModelConfig(): ModelConfig {
+function getDefaultModelConfig(): ModelConfig {
   const provider = getDefaultProvider();
   if (provider) {
     return {
@@ -772,7 +772,7 @@ export function getDefaultModelConfig(): ModelConfig {
  * @returns LanguageModel instance
  * @deprecated Use createModel({ provider: 'anthropic', model }) instead
  */
-export function createAnthropicClient(model: string): LanguageModel {
+function createAnthropicClient(model: string): LanguageModel {
   return createModel({ provider: "anthropic", model });
 }
 
@@ -785,7 +785,7 @@ export function createAnthropicClient(model: string): LanguageModel {
  * @param config - Model configuration
  * @returns Formatted string like "openai/gpt-4o"
  */
-export function formatModelConfig(config: ModelConfig): string {
+function formatModelConfig(config: ModelConfig): string {
   return `${config.provider}/${config.model}`;
 }
 
@@ -795,7 +795,7 @@ export function formatModelConfig(config: ModelConfig): string {
  * @param config - Model configuration to validate
  * @returns True if model is in the known list
  */
-export function isKnownModel(config: ModelConfig): boolean {
+function isKnownModel(config: ModelConfig): boolean {
   const providerInfo = PROVIDERS[config.provider];
   if (!providerInfo) return false;
   return providerInfo.models.includes(config.model);
@@ -806,7 +806,7 @@ export function isKnownModel(config: ModelConfig): boolean {
  * @param provider - Provider name
  * @returns Array of model names, or empty array if provider unknown
  */
-export function getProviderModels(provider: ProviderName): string[] {
+function getProviderModels(provider: ProviderName): string[] {
   return PROVIDERS[provider]?.models ?? [];
 }
 
@@ -1058,7 +1058,7 @@ type GenerateStructuredCallOptions = Omit<
 /**
  * Options for generateStructured - requires schema and modelId.
  */
-export interface GenerateStructuredOptions<T>
+interface GenerateStructuredOptions<T>
   extends GenerateStructuredCallOptions {
   model: LanguageModel;
   schema: ZodSchema<T>;

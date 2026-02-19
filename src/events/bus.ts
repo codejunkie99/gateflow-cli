@@ -11,10 +11,10 @@ import type { UiEvent, ApprovalResponseEvent, StatusPhase } from './types.js';
 // Event Listener Types
 // ============================================================================
 
-export type EventListener = (event: UiEvent) => void;
-export type EventFilter = (event: UiEvent) => boolean;
+type EventListener = (event: UiEvent) => void;
+type EventFilter = (event: UiEvent) => boolean;
 
-export interface Subscription {
+interface Subscription {
     unsubscribe: () => void;
 }
 
@@ -349,7 +349,7 @@ export function getGlobalEventBus(): EventBus {
     return globalBus;
 }
 
-export function resetGlobalEventBus(): void {
+function resetGlobalEventBus(): void {
     if (globalBus) {
         globalBus.clear();
     }
@@ -364,7 +364,7 @@ export function resetGlobalEventBus(): void {
  * Create a scoped event bus that prefixes all events
  * Useful for nested operations
  */
-export function createScopedBus(
+function createScopedBus(
     parent: EventBus,
     scope: string
 ): {

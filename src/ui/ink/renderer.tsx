@@ -1,7 +1,8 @@
 import React from 'react';
 import chalk from 'chalk';
 import { render } from 'ink';
-import type { EventBus, UiEvent, AgentCompleteEvent } from '../../events/index.js';
+import type { AgentCompleteEvent, UiEvent } from '../../events/types.js';
+import type { EventBus } from '../../events/bus.js';
 import { DiffDisplay } from '../diff-display.js';
 import { colorizeDiff } from '../../diff/preview.js';
 import { ToolTree } from '../tool-tree.js';
@@ -11,7 +12,7 @@ import { getPromptController } from '../prompt-controller.js';
 import { BlockRenderer } from '../block-renderer.js';
 import { getStartupLines, clearStartupLines } from '../startup-messages.js';
 
-export interface RendererOptions {
+interface RendererOptions {
     colors?: boolean;
     unicode?: boolean;
     bufferInterval?: number;
@@ -48,7 +49,7 @@ const LEAVE_ALT_SCREEN = '\x1b[?1049l';
 const CLEAR_SCREEN = '\x1b[2J';
 const CURSOR_HOME = '\x1b[H';
 
-export class InkRenderer {
+class InkRenderer {
     private options: Required<RendererOptions>;
     private subscription: { unsubscribe: () => void } | null = null;
     private tokenBuffer = '';

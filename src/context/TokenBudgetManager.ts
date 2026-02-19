@@ -14,7 +14,7 @@ import { estimateTokensSimple } from '../memory/token-estimator.js';
 // Types
 // ============================================================================
 
-export interface TokenBudget {
+interface TokenBudget {
     /** Total context window size for the model */
     contextWindow: number;
     /** Budget allocation by section */
@@ -23,7 +23,7 @@ export interface TokenBudget {
     usage: BudgetUsage;
 }
 
-export interface BudgetAllocation {
+interface BudgetAllocation {
     /** System prompt allocation (default 20%) */
     system: number;
     /** Conversation history allocation (default 40%) */
@@ -34,7 +34,7 @@ export interface BudgetAllocation {
     reserve: number;
 }
 
-export interface BudgetUsage {
+interface BudgetUsage {
     system: number;
     history: number;
     tools: number;
@@ -47,9 +47,9 @@ export interface BudgetUsage {
 /**
  * Sections that track usage (excludes reserve which is only in allocation)
  */
-export type UsageSection = 'system' | 'history' | 'tools';
+type UsageSection = 'system' | 'history' | 'tools';
 
-export interface TokenCountResult {
+interface TokenCountResult {
     /** Token count */
     tokens: number;
     /** Whether accurate tokenizer was used */
@@ -58,7 +58,7 @@ export interface TokenCountResult {
     timeTaken: number;
 }
 
-export interface BudgetWarning {
+interface BudgetWarning {
     section: keyof BudgetAllocation;
     used: number;
     limit: number;
@@ -66,14 +66,14 @@ export interface BudgetWarning {
     message: string;
 }
 
-export interface ModelConfig {
+interface ModelConfig {
     name: string;
     contextWindow: number;
     /** Default allocations for this model */
     defaultAllocation?: Partial<BudgetAllocation>;
 }
 
-export interface TokenBudgetConfig {
+interface TokenBudgetConfig {
     model?: string;
     customAllocation?: Partial<BudgetAllocation>;
 }
@@ -82,7 +82,7 @@ export interface TokenBudgetConfig {
 // Model Context Window Configurations
 // ============================================================================
 
-export const MODEL_CONFIGS: Record<string, ModelConfig> = {
+const MODEL_CONFIGS: Record<string, ModelConfig> = {
     'claude-sonnet-4-20250514': { name: 'Claude Sonnet 4', contextWindow: 200000 },
     'claude-sonnet-4': { name: 'Claude Sonnet 4', contextWindow: 200000 },
     'claude-haiku-3.5': { name: 'Claude Haiku 3.5', contextWindow: 200000 },
@@ -513,6 +513,6 @@ export function createTokenBudgetManager(
 /**
  * Set the global TokenBudgetManager instance
  */
-export function setGlobalTokenBudgetManager(manager: TokenBudgetManager): void {
+function setGlobalTokenBudgetManager(manager: TokenBudgetManager): void {
     globalTokenBudgetManager = manager;
 }

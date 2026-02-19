@@ -1,23 +1,23 @@
 import type { ToolTree } from '../tool-tree.js';
 
-export interface LogEntry {
+interface LogEntry {
     id: number;
     text: string;
 }
 
-export interface StatusState {
+interface StatusState {
     phase: string;
     label: string;
     symbol?: string;
 }
 
-export interface TokenUsage {
+interface TokenUsage {
     input: number;
     output: number;
     cached: number;
 }
 
-export interface InkState {
+interface InkState {
     logs: LogEntry[];
     stream: string;
     status: StatusState | null;

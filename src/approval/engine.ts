@@ -368,7 +368,7 @@ export function initPolicyEngine(config: Partial<PolicyConfig> & { projectRoot: 
 /**
  * Get global policy engine
  */
-export function getPolicyEngine(): PolicyEngine {
+function getPolicyEngine(): PolicyEngine {
     if (!globalPolicyEngine) {
         throw new Error('Policy engine not initialized. Call initPolicyEngine() first.');
     }
@@ -378,7 +378,7 @@ export function getPolicyEngine(): PolicyEngine {
 /**
  * Check if policy engine is initialized
  */
-export function hasPolicyEngine(): boolean {
+function hasPolicyEngine(): boolean {
     return globalPolicyEngine !== null;
 }
 

@@ -23,5 +23,5 @@ export function createTools(bus: EventBus, policy: PolicyEngine, projectRoot: st
     };
 }
 
-export type Tools = ReturnType<typeof createTools>;
+type Tools = ReturnType<typeof createTools>;
 

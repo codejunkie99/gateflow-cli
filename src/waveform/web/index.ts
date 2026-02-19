@@ -4,11 +4,11 @@
  */
 
 export {
-    WaveformWebviewProvider,
-    createWaveformWebviewProvider,
+    
+    
     startStandaloneServer,
-    type WebviewLike,
-    type WebviewPanelLike,
-    type WebviewProviderOptions,
-    type StandaloneServerOptions,
+    
+    
+    
+    
 } from './webview-provider.js';

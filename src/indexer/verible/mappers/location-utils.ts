@@ -14,7 +14,7 @@ import { findFirstToken } from './ast-utils.js';
 /**
  * Convert byte offset to line/column.
  */
-export function offsetToLineCol(offset: number, lineOffsets: number[]): { line: number; col: number } {
+function offsetToLineCol(offset: number, lineOffsets: number[]): { line: number; col: number } {
   // Binary search for line
   let low = 0;
   let high = lineOffsets.length - 1;

@@ -9,7 +9,7 @@ import { z } from 'zod';
 
 // ============= Run Kinds =============
 
-export type RunKind =
+type RunKind =
     | 'requirements_to_design'   // spec → RTL → TB → sim
     | 'chat_refinement'          // follow-up questions / edits
     | 'lint_or_review'
@@ -18,7 +18,7 @@ export type RunKind =
 
 // ============= Run Stages =============
 
-export type RunStage =
+type RunStage =
     | "idle"
     | "parsing"
     | "planning"
@@ -32,7 +32,7 @@ export type RunStage =
 
 // ============= Thought Categories =============
 
-export type ThoughtCategory =
+type ThoughtCategory =
     | "analyzing"    // Reading/understanding input
     | "planning"     // Deciding what to do
     | "decomposing"  // Breaking into subtasks (NEW)
@@ -86,11 +86,11 @@ export const ComplexityDetectionSchema = z.object({
     reasoning: z.string()
 });
 
-export type ComplexityDetection = z.infer<typeof ComplexityDetectionSchema>;
+type ComplexityDetection = z.infer<typeof ComplexityDetectionSchema>;
 
 // ============= Event Types =============
 
-export type EventKind =
+type EventKind =
     | "status"
     | "thought"
     | "answer_delta"
@@ -104,14 +104,14 @@ export type EventKind =
 
 // ThinkingStepEvent moved to events/types.ts as ThoughtEvent
 
-export interface AgentStartEvent {
+interface AgentStartEvent {
     type: "agent_start";
     agentName: string;        // e.g., "planning", "codegen"
     task: string;
     estimatedDuration?: number;
 }
 
-export interface AgentCompleteEvent {
+interface AgentCompleteEvent {
     type: "agent_complete";
     agentName: string;
     success: boolean;
@@ -121,7 +121,7 @@ export interface AgentCompleteEvent {
     inputTokens?: number;
 }
 
-export interface DelegationEvent {
+interface DelegationEvent {
     type: "delegation";
     from: string;              // Sending agent
     to: string;                // Receiving agent
@@ -136,11 +136,11 @@ export interface DelegationEvent {
  * Adapted for CLI event system
  */
 // Note: EmitFn now uses ThoughtEvent from events/types.ts
-export type EmitFn = (event: Omit<AgentStartEvent | AgentCompleteEvent | DelegationEvent, 'timestamp'>) => void;
+type EmitFn = (event: Omit<AgentStartEvent | AgentCompleteEvent | DelegationEvent, 'timestamp'>) => void;
 
 // ============= Agent Context =============
 
-export interface AgentContext {
+interface AgentContext {
     files: Map<string, string>;
     errors: unknown[];
     plan?: ExecutionPlan;
@@ -150,7 +150,7 @@ export interface AgentContext {
 
 // ============= Agent Result =============
 
-export interface AgentResult {
+interface AgentResult {
     success: boolean;
     output?: string;
     data?: any;
@@ -242,7 +242,7 @@ export interface TaskContext {
     };
 }
 
-export interface TaskArtifact {
+interface TaskArtifact {
     type: 'file' | 'code' | 'analysis' | 'error';
     path?: string;
     content?: string;
@@ -260,12 +260,12 @@ export type DependencyFailurePolicy = 'skip' | 'continue-with-context' | 'abort'
 /**
  * Extended task definition with failure policy
  */
-export interface TaskWithPolicy extends Task {
+interface TaskWithPolicy extends Task {
     dependencyFailurePolicy?: DependencyFailurePolicy;
 }
 
 /**
  * Map of task IDs to their results for dependency resolution
  */
-export type TaskResultMap = Map<string, TaskResult>;
+type TaskResultMap = Map<string, TaskResult>;
 

@@ -215,7 +215,7 @@ export function isDeclarationId(id: string): boolean {
  * extractDeclarationHash('invalid');                 // null
  * ```
  */
-export function extractDeclarationHash(id: string): string | null {
+function extractDeclarationHash(id: string): string | null {
   if (!isDeclarationId(id)) {
     return null;
   }
@@ -240,7 +240,7 @@ export function extractDeclarationHash(id: string): string | null {
  * // { valid: false, type: 'unknown' }
  * ```
  */
-export function identifyIdType(id: string): {
+function identifyIdType(id: string): {
   valid: boolean;
   type: 'declaration' | 'location' | 'unknown';
 } {

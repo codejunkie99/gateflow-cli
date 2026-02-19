@@ -158,7 +158,7 @@ export function getLineNumber(offsets: LineOffsets, byteOffset: number): number 
  * getColumnNumber(offsets, 10);  // 4 (fourth char of line 2)
  * ```
  */
-export function getColumnNumber(offsets: LineOffsets, byteOffset: number): number {
+function getColumnNumber(offsets: LineOffsets, byteOffset: number): number {
   // Handle edge cases
   if (offsets.length === 0 || byteOffset < 0) {
     return 1;
@@ -245,7 +245,7 @@ export function getLocation(
  * getLineOffset(offsets, 4);  // -1 (no line 4)
  * ```
  */
-export function getLineOffset(offsets: LineOffsets, lineNumber: number): number {
+function getLineOffset(offsets: LineOffsets, lineNumber: number): number {
   const index = lineNumber - 1;
 
   if (index < 0 || index >= offsets.length) {
@@ -273,7 +273,7 @@ export function getLineOffset(offsets: LineOffsets, lineNumber: number): number 
  * getLineRange(offsets, 3, content.length);  // { start: 14, end: 20 }
  * ```
  */
-export function getLineRange(
+function getLineRange(
   offsets: LineOffsets,
   lineNumber: number,
   contentLength: number
@@ -309,7 +309,7 @@ export function getLineRange(
  * extractLines(content, offsets, 1, 3);  // "line 1\nline 2\nline 3"
  * ```
  */
-export function extractLines(
+function extractLines(
   content: string,
   offsets: LineOffsets,
   startLine: number,

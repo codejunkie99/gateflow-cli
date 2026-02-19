@@ -30,7 +30,7 @@ import { PromptBuilder } from './prompts/PromptBuilder.js';
 
 export type UIMode = 'planning' | 'execution' | 'review' | 'chat';
 
-export interface UIState {
+interface UIState {
     mode: UIMode;
     context: {
         task?: string;
@@ -41,13 +41,13 @@ export interface UIState {
     };
 }
 
-export interface TransitionRequest {
+interface TransitionRequest {
     targetMode: UIMode;
     reason: string;
     context?: Record<string, unknown>;
 }
 
-export interface UIAgentConfig {
+interface UIAgentConfig {
     model: string;
     /**
      * Optional complex model for dynamic model switching.
@@ -87,7 +87,7 @@ const PlanSchema = z.object({
 // UI Agent Base
 // ============================================================================
 
-export abstract class UIAgent {
+abstract class UIAgent {
     protected model: string;
     /** LanguageModel object for use in prepareStep (avoids AI Gateway fallback) */
     protected languageModel: LanguageModel;
@@ -179,7 +179,7 @@ Only transition if the current mode is not suitable for the task.`
 // Planner Agent
 // ============================================================================
 
-export class PlannerAgent extends UIAgent {
+class PlannerAgent extends UIAgent {
     constructor(config: UIAgentConfig) {
         super(config, 'planning');
     }
@@ -251,7 +251,7 @@ Break it into clear, actionable steps. Each step should be something the Executo
 // Executor Agent
 // ============================================================================
 
-export class ExecutorAgent extends UIAgent {
+class ExecutorAgent extends UIAgent {
     constructor(config: UIAgentConfig) {
         super(config, 'execution');
     }
@@ -349,7 +349,7 @@ After completing all steps or encountering issues, signal to transition to revie
 // Review Agent
 // ============================================================================
 
-export class ReviewAgent extends UIAgent {
+class ReviewAgent extends UIAgent {
     constructor(config: UIAgentConfig) {
         super(config, 'review');
     }

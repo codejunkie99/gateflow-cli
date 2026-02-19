@@ -77,8 +77,8 @@ export {
   SlangBackend,
 
   // Convenience functions
-  getSlangBackend,
-  analyzeWithSlang,
+  
+  
   canUseSlang,
 
   // Types
@@ -92,22 +92,22 @@ export {
 
 export {
   // Class
-  SlangBinaryManager,
+  
 
   // Singleton instance
-  slangBinaryManager,
+  
 
   // Convenience functions
-  findSlangBinary,
-  isSlangAvailable,
-  getSlangVersion,
-  downloadSlang,
+  
+  
+  
+  
 
   // Types
-  type BinaryLocation,
-  type Platform,
-  type Architecture,
-  type DownloadProgressCallback,
+  
+  
+  
+  
 } from './binary-manager.js';
 
 // ============================================================================
@@ -116,16 +116,16 @@ export {
 
 export {
   // Functions
-  buildSlangArgs,
-  recipeToSlangArgs,
-  runSlang,
-  runSlangForRecipe,
+  
+  
+  
+  
   runSlangOnFiles,
-  canRunSlang,
+  
 
   // Types
-  type SlangExecOptions,
-  type SlangCommandArgs,
+  
+  
 } from './subprocess.js';
 
 // ============================================================================
@@ -137,11 +137,11 @@ export {
   mapSlangAst,
 
   // Resolution helpers
-  resolveReferences,
-  resolveInstances,
+  
+  
 
   // Types
-  type SlangMappingResult,
+  
 } from './slang-mapper.js';
 
 // ============================================================================
@@ -150,18 +150,18 @@ export {
 
 export {
   // Class
-  SlangCache,
+  
 
   // Default instance
-  slangCache,
+  
 
   // Factory
-  createPersistentCache,
+  
 
   // Types
-  type CacheEntry,
-  type CacheOptions,
-  type CacheStats,
+  
+  
+  
 } from './slang-cache.js';
 
 // ============================================================================
@@ -170,57 +170,57 @@ export {
 
 export {
   // Core types
-  type SlangCompilation,
-  type SlangDesignRoot,
-  type SlangSymbolBase,
-  type SlangLocation,
+  
+  
+  
+  
 
   // Symbol types
-  type SlangSymbol,
-  type SlangModuleSymbol,
-  type SlangPackageSymbol,
-  type SlangInterfaceSymbol,
-  type SlangClassSymbol,
-  type SlangProgramSymbol,
-  type SlangInstanceSymbol,
-  type SlangPortSymbol,
-  type SlangParameterSymbol,
-  type SlangVariableSymbol,
-  type SlangNetSymbol,
-  type SlangFunctionSymbol,
-  type SlangTaskSymbol,
-  type SlangTypeAliasSymbol,
-  type SlangEnumSymbol,
-  type SlangStructSymbol,
-  type SlangGenericSymbol,
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
 
   // Helper types
-  type SlangParameterValue,
-  type SlangConnection,
-  type SlangTypeInfo,
-  type SlangArrayDimension,
-  type SlangFieldInfo,
-  type SlangArgumentSymbol,
-  type SlangEnumValue,
-  type SlangFieldSymbol,
+  
+  
+  
+  
+  
+  
+  
+  
 
   // Result types
-  type SlangDiagnostic,
-  type SlangParseResult,
+  
+  
 
   // Type guards
-  isModuleDefinition,
-  isInterfaceDefinition,
-  isInstance,
-  isPackage,
-  isClass,
-  isFunction,
-  isTask,
-  isPort,
-  isParameter,
-  isVariable,
-  isNet,
-  isTypeAlias,
-  isEnum,
-  isStructOrUnion,
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
 } from './slang-types.js';

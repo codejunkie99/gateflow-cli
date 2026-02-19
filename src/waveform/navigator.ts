@@ -5,7 +5,7 @@
 
 import type { ViewState, WaveformData, WaveformSignal } from './types.js';
 
-export interface NavigatorOptions {
+interface NavigatorOptions {
     initialZoom?: number;
     minZoom?: number;
     maxZoom?: number;

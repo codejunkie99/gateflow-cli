@@ -90,7 +90,7 @@ export interface LintResult {
     duration: number;
 }
 
-export interface SimulationResult {
+interface SimulationResult {
     success: boolean;
     stdout: string;
     stderr: string;
@@ -99,7 +99,7 @@ export interface SimulationResult {
     duration: number;
 }
 
-export interface VerilatorConfig {
+interface VerilatorConfig {
     /** Path to verilator binary */
     binary: string;
     /** Include paths */

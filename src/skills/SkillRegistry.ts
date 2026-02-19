@@ -416,7 +416,7 @@ let registryInstance: SkillRegistry | null = null;
 /**
  * Get the global SkillRegistry instance
  */
-export function getSkillRegistry(projectRoot?: string, config?: Partial<SkillConfig>): SkillRegistry {
+function getSkillRegistry(projectRoot?: string, config?: Partial<SkillConfig>): SkillRegistry {
     if (!registryInstance && projectRoot) {
         const loader = getSkillLoader(projectRoot, config);
         registryInstance = new SkillRegistry(loader, config);
@@ -430,6 +430,6 @@ export function getSkillRegistry(projectRoot?: string, config?: Partial<SkillCon
 /**
  * Reset the singleton (for testing)
  */
-export function resetSkillRegistry(): void {
+function resetSkillRegistry(): void {
     registryInstance = null;
 }

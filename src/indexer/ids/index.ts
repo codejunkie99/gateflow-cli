@@ -57,7 +57,7 @@ export {
 
   // Utilities
   isLocationId,
-  extractLocationHash,
+  
 } from './location-id.js';
 
 // ============================================================================
@@ -70,6 +70,6 @@ export {
 
   // Utilities
   isDeclarationId,
-  extractDeclarationHash,
-  identifyIdType,
+  
+  
 } from './declaration-id.js';

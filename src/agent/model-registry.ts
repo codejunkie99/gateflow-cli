@@ -27,7 +27,7 @@ import type { ProviderName } from './model-provider.js';
  * with additional metadata fields (vision, streaming, codeExecution) useful for the
  * static model registry. The core fields match model-capabilities/types.ts for consistency.
  */
-export interface ModelCapabilities {
+interface ModelCapabilities {
     /** Supports tool/function calling */
     tools: boolean;
     /** Supports image/vision input */
@@ -45,7 +45,7 @@ export interface ModelCapabilities {
 /**
  * Model pricing per million tokens (USD).
  */
-export interface ModelPricing {
+interface ModelPricing {
     /** Cost per 1M input tokens */
     inputPer1M: number;
     /** Cost per 1M output tokens */
@@ -57,12 +57,12 @@ export interface ModelPricing {
 /**
  * Model status.
  */
-export type ModelStatus = 'stable' | 'beta' | 'preview' | 'deprecated';
+type ModelStatus = 'stable' | 'beta' | 'preview' | 'deprecated';
 
 /**
  * Complete model metadata.
  */
-export interface ModelMetadata {
+interface ModelMetadata {
     /** Unique model identifier (e.g., "claude-sonnet-4-20250514") */
     id: string;
     /** Display name (e.g., "Claude Sonnet 4") */
@@ -92,7 +92,7 @@ export interface ModelMetadata {
 /**
  * Provider metadata.
  */
-export interface ProviderMetadata {
+interface ProviderMetadata {
     /** Provider ID */
     id: ProviderName;
     /** Display name */
@@ -115,7 +115,7 @@ export interface ProviderMetadata {
  * Comprehensive model metadata registry.
  * Updated: January 2026
  */
-export const MODEL_METADATA: ModelMetadata[] = [
+const MODEL_METADATA: ModelMetadata[] = [
     // ========== Anthropic ==========
     {
         id: 'claude-opus-4-5-20251101',
@@ -475,7 +475,7 @@ export const MODEL_METADATA: ModelMetadata[] = [
 /**
  * Provider metadata registry.
  */
-export const PROVIDER_METADATA: ProviderMetadata[] = [
+const PROVIDER_METADATA: ProviderMetadata[] = [
     {
         id: 'anthropic',
         name: 'Anthropic (Claude)',
@@ -551,7 +551,7 @@ export const PROVIDER_METADATA: ProviderMetadata[] = [
  *
  * Provides efficient access to model information with caching.
  */
-export class ModelRegistry {
+class ModelRegistry {
     private modelCache: Map<string, ModelMetadata> = new Map();
     private providerCache: Map<ProviderName, ProviderMetadata> = new Map();
     private initialized = false;
@@ -842,35 +842,35 @@ export const modelRegistry = new ModelRegistry();
 /**
  * Get context window for a model (convenience function).
  */
-export function getContextWindow(modelId: string): number {
+function getContextWindow(modelId: string): number {
     return modelRegistry.getContextWindow(modelId);
 }
 
 /**
  * Get max output tokens for a model (convenience function).
  */
-export function getMaxOutputTokens(modelId: string): number {
+function getMaxOutputTokens(modelId: string): number {
     return modelRegistry.getMaxOutputTokens(modelId);
 }
 
 /**
  * Check if model is deprecated (convenience function).
  */
-export function isModelDeprecated(modelId: string): boolean {
+function isModelDeprecated(modelId: string): boolean {
     return modelRegistry.isDeprecated(modelId);
 }
 
 /**
  * Get deprecation warning if applicable (convenience function).
  */
-export function getDeprecationWarning(modelId: string): string | undefined {
+function getDeprecationWarning(modelId: string): string | undefined {
     return modelRegistry.getDeprecationWarning(modelId);
 }
 
 /**
  * Estimate request cost (convenience function).
  */
-export function estimateCost(
+function estimateCost(
     modelId: string,
     inputTokens: number,
     outputTokens: number
@@ -881,7 +881,7 @@ export function estimateCost(
 /**
  * Check if model has capability (convenience function).
  */
-export function hasCapability(
+function hasCapability(
     modelId: string,
     capability: keyof ModelCapabilities
 ): boolean {

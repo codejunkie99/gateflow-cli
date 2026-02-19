@@ -62,7 +62,7 @@ export interface ModelConfigWithVariant extends ModelConfig {
  * Built-in variant definitions per provider.
  * Maps variant names to provider-specific options.
  */
-export const PROVIDER_VARIANTS: Partial<Record<ProviderName, Partial<Record<VariantName, ModelVariantOptions>>>> = {
+const PROVIDER_VARIANTS: Partial<Record<ProviderName, Partial<Record<VariantName, ModelVariantOptions>>>> = {
     anthropic: {
         minimal: { thinking: { type: 'enabled', budgetTokens: 4096 } },
         low: { thinking: { type: 'enabled', budgetTokens: 8192 } },
@@ -96,7 +96,7 @@ export const PROVIDER_VARIANTS: Partial<Record<ProviderName, Partial<Record<Vari
 /**
  * List of all valid variant names.
  */
-export const VALID_VARIANTS: VariantName[] = [
+const VALID_VARIANTS: VariantName[] = [
     'minimal',
     'low',
     'medium',
@@ -113,7 +113,7 @@ export const VALID_VARIANTS: VariantName[] = [
 /**
  * Check if a string is a valid variant name.
  */
-export function isValidVariant(v: string): v is VariantName {
+function isValidVariant(v: string): v is VariantName {
     return VALID_VARIANTS.includes(v as VariantName);
 }
 
@@ -138,7 +138,7 @@ export function getVariantOptions(
  * @param variant - Variant name
  * @returns True if the variant is defined for the provider
  */
-export function supportsVariant(provider: ProviderName, variant: VariantName): boolean {
+function supportsVariant(provider: ProviderName, variant: VariantName): boolean {
     return PROVIDER_VARIANTS[provider]?.[variant] !== undefined;
 }
 

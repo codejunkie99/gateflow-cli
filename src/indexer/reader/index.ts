@@ -50,18 +50,18 @@
 export {
   // Main read functions
   readFile,
-  readFiles,
-  type ReadFilesResult,
+  
+  
 
   // Change detection
-  checkFileChanged,
-  checkHashChanged,
-  type FileChangeResult,
+  
+  
+  
 
   // File utilities
-  fileExists,
-  isSystemVerilogFile,
-  isFilelistFile,
+  
+  
+  
 } from './file-reader.js';
 
 // ============================================================================
@@ -74,11 +74,11 @@ export {
 
   // Location lookups
   getLineNumber,
-  getColumnNumber,
+  
   getLocation,
 
   // Range utilities
-  getLineOffset,
-  getLineRange,
-  extractLines,
+  
+  
+  
 } from './line-index.js';

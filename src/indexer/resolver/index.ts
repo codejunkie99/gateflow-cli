@@ -73,8 +73,8 @@
 
 export {
   DeclarationIndex,
-  createDeclarationIndex,
-  type DeclarationIndexStats,
+  
+  
 } from './declaration-index.js';
 
 // ============================================================================
@@ -83,15 +83,11 @@ export {
 
 export {
   ProjectResolver,
-  createProjectResolver,
+  
 } from './project-resolver.js';
 
 // ============================================================================
 // Macro Index
 // ============================================================================
 
-export {
-  MacroIndex,
-  createMacroIndex,
-  type MacroDefinition,
-} from './macro-index.js';
+;

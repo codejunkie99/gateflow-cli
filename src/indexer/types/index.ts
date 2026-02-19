@@ -26,7 +26,7 @@
 export type {
   // Core location types
   Location,
-  Guard,
+  
   ParseError,
   LineOffsets,
 } from './location.js';
@@ -48,44 +48,44 @@ export type {
   // Main declaration type
   Declaration,
   DeclarationKind,
-  DeclarationData,
+  
 
   // Individual declaration data types
-  ModuleData,
-  PackageData,
-  InterfaceData,
-  ClassData,
-  ProgramData,
-  ConfigData,
-  FunctionData,
-  TaskData,
-  TypedefData,
-  StructData,
-  UnionData,
-  EnumData,
-  EnumValueData,
-  PortData,
-  ParameterData,
-  LocalparamData,
-  SignalData,
-  ModportData,
-  SequenceData,
-  PropertyData,
-  CovergroupData,
-  ConstraintData,
-  ClockingData,
-  CheckerData,
-  GenerateBlockData,
-  AlwaysBlockData,
-  InitialBlockData,
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
 
   // Helper types
-  ParamInfo,
-  ArgInfo,
-  FieldInfo,
-  ModportPort,
-  ClockingSignal,
-  ConfigCellUse,
+  
+  
+  
+  
+  
+  
 } from './declaration.js';
 
 // ============================================================================
@@ -94,11 +94,11 @@ export type {
 
 export type {
   Reference,
-  ReferenceKind,
-  ReferenceData,
-  ImportReferenceData,
-  PortConnReferenceData,
-  ExtendsReferenceData,
+  
+  
+  
+  
+  
 } from './reference.js';
 
 // ============================================================================
@@ -107,8 +107,8 @@ export type {
 
 export type {
   Instance,
-  InstanceKind,
-  PortConnection,
+  
+  
 } from './instance.js';
 
 // ============================================================================
@@ -117,25 +117,25 @@ export type {
 
 export type {
   Directive,
-  DirectiveKind,
-  DirectiveData,
+  
+  
 
   // Individual directive data types
-  DefineData,
-  UndefData,
-  IncludeData,
-  IfdefData,
-  IfndefData,
-  ElsifData,
-  ElseData,
-  EndifData,
-  TimescaleData,
-  DefaultNettypeData,
-  PragmaData,
-  ResetallData,
-  DpiImportData,
-  DpiExportData,
-  LineData,
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
+  
 } from './directive.js';
 
 // ============================================================================
@@ -144,7 +144,7 @@ export type {
 
 export type {
   FileUnderstanderResult,
-  ParseStats,
+  
   ResolvedProject,
   HierarchyNode,
   FileDependency,

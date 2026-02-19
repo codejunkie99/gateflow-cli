@@ -37,7 +37,7 @@ import type { ResolvedProject } from "../indexer/types/index.js";
 // Types
 // ============================================================================
 
-export interface MemoryServiceConfig {
+interface MemoryServiceConfig {
   /** MemoryManager configuration */
   memory?: Partial<MemoryConfig>;
   /** KnowledgeStore configuration */
@@ -50,7 +50,7 @@ export interface MemoryServiceConfig {
   projectGetter?: () => ResolvedProject | null;
 }
 
-export interface ContextInjection {
+interface ContextInjection {
   /** Project context from MemoryManager */
   memoryContext: string;
   /** Knowledge context from KnowledgeStore */

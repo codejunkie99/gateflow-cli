@@ -468,7 +468,7 @@ let syncInstance: MCPToolSync | null = null;
 /**
  * Get the global MCPToolSync instance
  */
-export function getMCPToolSync(projectRoot?: string, config?: Partial<MCPSyncConfig>): MCPToolSync {
+function getMCPToolSync(projectRoot?: string, config?: Partial<MCPSyncConfig>): MCPToolSync {
     if (!syncInstance && projectRoot) {
         syncInstance = new MCPToolSync(projectRoot, config);
     }
@@ -481,6 +481,6 @@ export function getMCPToolSync(projectRoot?: string, config?: Partial<MCPSyncCon
 /**
  * Reset the singleton (for testing)
  */
-export function resetMCPToolSync(): void {
+function resetMCPToolSync(): void {
     syncInstance = null;
 }

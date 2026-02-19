@@ -6,9 +6,9 @@
 import chalk from 'chalk';
 import { getInputManager } from '../ui/index.js';
 
-export type ApprovalScope = 'once' | 'session' | 'all';
+type ApprovalScope = 'once' | 'session' | 'all';
 
-export interface ApprovalResult {
+interface ApprovalResult {
     approved: boolean;
     scope: ApprovalScope;
 }
@@ -20,7 +20,7 @@ let approveAll = false;
 /**
  * Request approval from the user (async, uses InputManager)
  */
-export async function requestApproval(
+async function requestApproval(
     action: string,
     details: string,
     options?: { diff?: string }
@@ -59,7 +59,7 @@ export function requestApprovalSync(
 /**
  * Auto-approve all operations for this session
  */
-export function setApproveAll(value: boolean): void {
+function setApproveAll(value: boolean): void {
     approveAll = value;
 }
 
@@ -73,7 +73,7 @@ export function isApproved(action: string): boolean {
 /**
  * Clear all session approvals
  */
-export function clearApprovals(): void {
+function clearApprovals(): void {
     sessionApprovals.clear();
     approveAll = false;
 }

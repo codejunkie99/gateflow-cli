@@ -12,7 +12,7 @@ import type { CacheEntry, CacheStats, SignalData, TimeRange } from './types.js';
 /**
  * Configuration for LRU cache
  */
-export interface LRUCacheConfig {
+interface LRUCacheConfig {
     /** Maximum cache size in bytes */
     maxSize: number;
     /** Maximum number of entries */
@@ -25,7 +25,7 @@ export interface LRUCacheConfig {
  * Generic LRU (Least Recently Used) cache
  * Evicts oldest entries when size or count limits are exceeded
  */
-export class LRUCache<T> {
+class LRUCache<T> {
     private cache: Map<string, CacheEntry<T>> = new Map();
     private currentSize: number = 0;
     private hits: number = 0;
@@ -314,7 +314,7 @@ export class SignalDataCache {
 /**
  * Simple cache for file metadata (doesn't need LRU - just stores one)
  */
-export class MetadataCache {
+class MetadataCache {
     private metadata: Map<string, { data: unknown; timestamp: number }> = new Map();
     private ttlMs: number;
 

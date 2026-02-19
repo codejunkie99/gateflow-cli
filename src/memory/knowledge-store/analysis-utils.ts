@@ -126,7 +126,7 @@ export function inferFilePatterns(files: Set<string>): string[] | undefined {
  * Find the longest common directory prefix among paths.
  * Used to derive scope patterns for knowledge items.
  */
-export function findCommonPrefix(paths: string[]): string {
+function findCommonPrefix(paths: string[]): string {
     if (paths.length === 0) return '';
     if (paths.length === 1) return paths[0];
 
@@ -226,7 +226,7 @@ export function analyzeDiff(
  * Detect the predominant naming convention in a list of identifiers.
  * @returns 'snake_case', 'camelCase', or 'mixed'
  */
-export function detectNamingStyle(identifiers: string[]): string {
+function detectNamingStyle(identifiers: string[]): string {
     const sample = identifiers.slice(0, 20);
     let snakeCount = 0;
     let camelCount = 0;

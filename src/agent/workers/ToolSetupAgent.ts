@@ -14,7 +14,7 @@ import { createAgent } from './workerFactory.js';
 /**
  * Create a ToolSetupAgent for configuring Verible and Slang.
  */
-export function createToolSetupAgent(tools: Record<string, Tool>): WorkerProfile {
+function createToolSetupAgent(tools: Record<string, Tool>): WorkerProfile {
   return createAgent({
     name: 'tool_setup',
     role: 'SystemVerilog Tool Setup Specialist',

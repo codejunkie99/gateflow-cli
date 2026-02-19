@@ -60,17 +60,7 @@
 // Hierarchy Analysis
 // ============================================================================
 
-export {
-  findTopModules,
-  getHierarchyStats,
-  findModuleInHierarchy,
-  getPathString,
-  findLeafModules,
-  flattenHierarchy,
-  formatHierarchy,
-  type HierarchyStats,
-  type HierarchyPath,
-} from './hierarchy-builder.js';
+;
 
 // ============================================================================
 // Dependency Analysis
@@ -78,9 +68,9 @@ export {
 
 export {
   DependencyGraph,
-  createDependencyGraph,
-  formatCycle,
-  getAffectedFiles,
-  type DependencyCycle,
-  type DependencyStats,
+  
+  
+  
+  
+  
 } from './dependency-analyzer.js';

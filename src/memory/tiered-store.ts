@@ -29,7 +29,7 @@ export interface TieredStoreConfig {
   enabled: boolean;
 }
 
-export interface ItemMetadata {
+interface ItemMetadata {
   /** Item ID */
   id: string;
   /** Access count in this session */
@@ -42,7 +42,7 @@ export interface ItemMetadata {
   estimatedSize: number;
 }
 
-export interface TieredStoreStats {
+interface TieredStoreStats {
   /** Items in hot tier */
   hotCount: number;
   /** Items in warm tier */
@@ -59,7 +59,7 @@ export interface TieredStoreStats {
 // Constants
 // ============================================================================
 
-export const DEFAULT_TIERED_CONFIG: TieredStoreConfig = {
+const DEFAULT_TIERED_CONFIG: TieredStoreConfig = {
   hotSize: 100,
   warmThreshold: 3,
   coldAgeDays: 30,

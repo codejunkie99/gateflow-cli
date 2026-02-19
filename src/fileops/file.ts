@@ -14,7 +14,7 @@ import { requestApprovalSync, shouldAutoApprove, isApproved } from './approval.j
 // Types
 // ============================================================================
 
-export interface FileReadResult {
+interface FileReadResult {
     success: boolean;
     path: string;
     content?: string;
@@ -22,7 +22,7 @@ export interface FileReadResult {
     error?: string;
 }
 
-export interface FileWriteResult {
+interface FileWriteResult {
     success: boolean;
     path: string;
     bytesWritten?: number;
@@ -30,7 +30,7 @@ export interface FileWriteResult {
     error?: string;
 }
 
-export interface FileListResult {
+interface FileListResult {
     success: boolean;
     directory: string;
     files: FileEntry[];
@@ -38,7 +38,7 @@ export interface FileListResult {
     error?: string;
 }
 
-export interface FileEntry {
+interface FileEntry {
     name: string;
     path: string;
     type: 'file' | 'directory';
@@ -46,7 +46,7 @@ export interface FileEntry {
     modified?: Date;
 }
 
-export interface ProjectScanResult {
+interface ProjectScanResult {
     success: boolean;
     rootPath: string;
     summary: {
@@ -60,14 +60,14 @@ export interface ProjectScanResult {
     error?: string;
 }
 
-export interface ScannedFile {
+interface ScannedFile {
     path: string;
     name: string;
     type: 'module' | 'testbench' | 'package' | 'include' | 'other';
     relativePath: string;
 }
 
-export interface SearchResult {
+interface SearchResult {
     success: boolean;
     pattern: string;
     matches: SearchMatch[];
@@ -75,7 +75,7 @@ export interface SearchResult {
     error?: string;
 }
 
-export interface SearchMatch {
+interface SearchMatch {
     file: string;
     line: number;
     column: number;

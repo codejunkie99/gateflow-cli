@@ -32,7 +32,7 @@ import { getInputManager } from '../../ui/index.js';
 // Types
 // ============================================================================
 
-export interface ToolSetupResult {
+interface ToolSetupResult {
   success: boolean;
   tools: {
     verible?: {
@@ -49,7 +49,7 @@ export interface ToolSetupResult {
   error?: string;
 }
 
-export interface ToolSetupOptions {
+interface ToolSetupOptions {
   /** Whether to run in interactive mode (default: true) */
   interactive?: boolean;
   /** Which tools to set up (default: both) */
@@ -339,4 +339,4 @@ async function requestApproval(bus: EventBus, tool: string, args: Record<string,
 // Exports
 // ============================================================================
 
-export { createToolSetupExecutors, TOOL_DESCRIPTIONS, TOOL_SCHEMAS } from '../../agent/tool-setup-tools.js';
+;

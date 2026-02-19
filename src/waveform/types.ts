@@ -22,7 +22,7 @@ export interface WaveformData {
     rootScope: WaveformScope;
 }
 
-export interface DisplaySignal {
+interface DisplaySignal {
     signal: WaveformSignal;
     fullPath: string;
     currentValue: string;

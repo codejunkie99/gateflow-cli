@@ -16,20 +16,20 @@ import { getGlobalEventBus } from '../../events/index.js';
  * Interface matching VS Code's Webview API
  * This allows the provider to work with any webview implementation
  */
-export interface WebviewLike {
+interface WebviewLike {
     html: string;
     onDidReceiveMessage: (callback: (message: unknown) => void) => { dispose: () => void };
     postMessage: (message: unknown) => Promise<boolean>;
 }
 
-export interface WebviewPanelLike {
+interface WebviewPanelLike {
     webview: WebviewLike;
     onDidDispose: (callback: () => void) => { dispose: () => void };
     reveal: () => void;
     dispose: () => void;
 }
 
-export interface WebviewProviderOptions {
+interface WebviewProviderOptions {
     extensionPath: string;
 }
 
@@ -40,7 +40,7 @@ export interface WebviewProviderOptions {
 /**
  * Provides waveform viewer functionality for VS Code webviews
  */
-export class WaveformWebviewProvider {
+class WaveformWebviewProvider {
     private store: WaveformStore;
     private panel: WebviewPanelLike | null = null;
     private disposables: Array<{ dispose: () => void }> = [];
@@ -318,7 +318,7 @@ export class WaveformWebviewProvider {
  * Create a waveform webview provider
  * This is the main entry point for the VS Code extension
  */
-export function createWaveformWebviewProvider(extensionPath: string): WaveformWebviewProvider {
+function createWaveformWebviewProvider(extensionPath: string): WaveformWebviewProvider {
     return new WaveformWebviewProvider({ extensionPath });
 }
 
@@ -326,7 +326,7 @@ export function createWaveformWebviewProvider(extensionPath: string): WaveformWe
 // Standalone server for testing (optional)
 // ============================================================================
 
-export interface StandaloneServerOptions {
+interface StandaloneServerOptions {
     port?: number;
     vcdPath?: string;
 }

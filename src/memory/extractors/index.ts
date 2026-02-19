@@ -30,7 +30,7 @@ export {
     extractFromIndex,
 
     // Lightweight variant (deprecated, same as extractFromIndex)
-    extractModulesOnly,
+    
 
     // Helper functions
     createExtractionOptions,
@@ -42,11 +42,11 @@ export {
 // ═══════════════════════════════════════════════════════════════════════════
 
 export type {
-    ExtractedCount,
-    ExtractionOptions,
+    
+    
     ExtractionResult,
-    ExtractableKnowledgeType,
-    ExtractableDeclarationKind
+    
+    
 } from './types.js';
 
-export { validateExtractionOptions } from './types.js';
+;

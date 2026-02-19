@@ -9,7 +9,7 @@
 import type { MenuSection, MenuResult, InteractiveMenuOptions } from './InteractiveMenu.js';
 import type { TextInputOptions, TextInputResult } from './InteractiveMenu.js';
 
-export type PromptKind = 'line' | 'menu' | 'text';
+type PromptKind = 'line' | 'menu' | 'text';
 
 export interface LinePromptOptions {
     question: string;
@@ -53,7 +53,7 @@ export type PromptRequest =
         cancelValue: TextInputResult;
     };
 
-export interface PromptState {
+interface PromptState {
     current: PromptRequest | null;
     queueLength: number;
 }
@@ -165,7 +165,7 @@ export class PromptController {
 
 let controller: PromptController | null = null;
 
-export function initPromptController(): PromptController {
+function initPromptController(): PromptController {
     if (!controller) {
         controller = new PromptController();
     }

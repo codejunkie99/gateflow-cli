@@ -7,7 +7,7 @@ import type { Tool } from 'ai';
 import type { WorkerProfile } from '../../types/agent-shared.js';
 import { PromptBuilder } from '../prompts/PromptBuilder.js';
 
-export interface AgentConfig {
+interface AgentConfig {
     name: string;
     role: string;
     expertise: string;

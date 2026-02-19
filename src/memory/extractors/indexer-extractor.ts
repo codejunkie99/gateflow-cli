@@ -66,7 +66,7 @@ export async function extractFromIndex(
  * @deprecated Structural extraction has been removed. This function
  * now just calls extractFromIndex for backwards compatibility.
  */
-export async function extractModulesOnly(
+async function extractModulesOnly(
   project: ResolvedProject,
   store: KnowledgeStore,
   options: ExtractionOptions,
@@ -139,8 +139,4 @@ export function formatExtractionSummary(result: ExtractionResult): string {
 }
 
 // Re-export types for convenience
-export type {
-  ExtractedCount,
-  ExtractionOptions,
-  ExtractionResult,
-} from "./types.js";
+;

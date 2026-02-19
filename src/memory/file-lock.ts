@@ -22,17 +22,17 @@ const TASKLIST_TIMEOUT_MS = 2000;
 // Types
 // ============================================================================
 
-export interface LockInfo {
+interface LockInfo {
     pid: number;
     time: number;
 }
 
-export interface StaleCheckResult {
+interface StaleCheckResult {
     isStale: boolean;
     content: string;
 }
 
-export interface FileLockConfig {
+interface FileLockConfig {
     /** Lock timeout in ms */
     lockTimeout: number;
 }

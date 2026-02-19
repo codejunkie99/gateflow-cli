@@ -239,7 +239,7 @@ export type ReferenceData =
  * { kind: 'import', memberName: '*' }
  * ```
  */
-export interface ImportReferenceData {
+interface ImportReferenceData {
   kind: 'import';
   /**
    * The specific member being imported, or "*" for wildcard.
@@ -265,7 +265,7 @@ export interface ImportReferenceData {
  * // targetName would be 'clock' (the signal being connected)
  * ```
  */
-export interface PortConnReferenceData {
+interface PortConnReferenceData {
   kind: 'port_conn';
   /** Name of the port being connected to */
   portName: string;
@@ -281,7 +281,7 @@ export interface PortConnReferenceData {
  * // targetName would be 'BaseClass'
  * ```
  */
-export interface ExtendsReferenceData {
+interface ExtendsReferenceData {
   kind: 'extends';
   // No extra data needed - targetName has the parent class name
 }
