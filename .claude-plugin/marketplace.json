@@ -1,0 +1,21 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "gateflow-cli",
+  "description": "Claude Code plugins for the GateFlow SystemVerilog development environment.",
+  "owner": {
+    "name": "codejunkie99",
+    "github": "https://github.com/codejunkie99"
+  },
+  "plugins": [
+    {
+      "name": "gateflow",
+      "description": "AI-powered SystemVerilog development toolkit with verification workflows, project mapping, waveform tools, and lint support.",
+      "version": "1.0.0",
+      "author": {
+        "name": "GateFlow Team"
+      },
+      "source": "./packages/claude-plugin",
+      "category": "development"
+    }
+  ]
+}
