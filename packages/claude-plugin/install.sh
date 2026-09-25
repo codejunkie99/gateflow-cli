@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # GateFlow Plugin Installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/your-org/gateflow-cli/main/packages/claude-plugin/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/codejunkie99/gateflow-cli/main/packages/claude-plugin/install.sh | bash
 #
 
 set -e
@@ -97,7 +97,7 @@ if [ -d "$GATEFLOW_CLI_DIR" ]; then
 else
     echo "Cloning GateFlow CLI..."
     mkdir -p "$(dirname "$GATEFLOW_CLI_DIR")"
-    git clone --quiet https://github.com/your-org/gateflow-cli.git "$GATEFLOW_CLI_DIR"
+    git clone --quiet https://github.com/codejunkie99/gateflow-cli.git "$GATEFLOW_CLI_DIR"
     cd "$GATEFLOW_CLI_DIR"
 fi
 
@@ -115,18 +115,6 @@ if [ -d "$PLUGIN_DIR" ]; then
 fi
 
 cp -r "$GATEFLOW_CLI_DIR/packages/claude-plugin" "$PLUGIN_DIR"
-
-# Create environment config
-echo "Configuring plugin..."
-cat > "$PLUGIN_DIR/.env" << EOF
-GATEFLOW_CLI_PATH=$GATEFLOW_CLI_DIR
-EOF
-
-# Update plugin.json with correct path
-if command -v sed &> /dev/null; then
-    sed -i.bak "s|\${GATEFLOW_CLI_PATH}|$GATEFLOW_CLI_DIR|g" "$PLUGIN_DIR/.claude-plugin/plugin.json" 2>/dev/null || true
-    rm -f "$PLUGIN_DIR/.claude-plugin/plugin.json.bak" 2>/dev/null || true
-fi
 
 echo ""
 echo -e "${GREEN}════════════════════════════════════════════════════════════════════${NC}"

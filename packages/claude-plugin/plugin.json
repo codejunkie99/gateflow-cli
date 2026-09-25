@@ -7,7 +7,7 @@
   },
   "homepage": "https://github.com/codejunkie99/gateflow-cli",
   "repository": "https://github.com/codejunkie99/gateflow-cli",
-  "license": "MIT",
+  "license": "BSL-1.1",
   "keywords": [
     "systemverilog", "verilog", "hdl", "verification", "rtl",
     "fpga", "asic", "testbench", "simulation", "waveform", "hardware"
